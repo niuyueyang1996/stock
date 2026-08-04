@@ -231,6 +231,9 @@
         ['ROE', section.roe_static, section.roe, section.fwd_roe, 'pct'],
         ['营收增长', section.revenue_yoy_static, section.revenue_yoy, section.fwd_revenue_yoy, 'pct'],
         ['净利增长', section.profit_yoy_static, section.profit_yoy, section.fwd_profit_yoy, 'pct'],
+        ['PE', section.pe_static, section.pe, section.fwd_pe, 'num'],
+        ['PB', section.pb_static, section.pb, section.fwd_pb, 'num'],
+        ['股息率', section.dv_static, section.dv, section.fwd_dv_ratio, 'pct'],
         ['市销率', section.ps_static, section.ps_ttm, section.ps_fwd, 'num'],
       ];
       body.innerHTML = rows.map(([name, a, b, c, kind]) => {
@@ -250,11 +253,8 @@
         ['盈亏%', fmtPct(pf.pnl_pct), cls(pf.pnl_pct)],
       ];
       const sub = [
-        ['综合PE', fmtNum(pf.pe), null, '亏损股允许参与'],
-        ['综合PB', fmtNum(pf.pb)],
         ['PE分位(1y)', fmtPct(pf.pe_pct)],
         ['PB分位(1y)', fmtPct(pf.pb_pct)],
-        ['综合股息率', fmtPct(pf.dv)],
         ['年化波动率', fmtPct(pf.volatility), null, `样本 ${pf.volatility_sample_days} 交易日`],
       ];
       const card = ([l, v, c, note, noteCls]) =>
@@ -273,6 +273,9 @@
         ['ROE', pf.roe_static, pf.roe_ttm, pf.fwd_roe, 'pct'],
         ['营收增长', pf.revenue_yoy_static, pf.revenue_yoy_ttm, pf.fwd_revenue_yoy, 'pct'],
         ['净利增长', pf.profit_yoy_static, pf.profit_yoy_ttm, pf.fwd_profit_yoy, 'pct'],
+        ['PE', pf.pe_static, pf.pe, pf.fwd_pe, 'num'],
+        ['PB', pf.pb_static, pf.pb, pf.fwd_pb, 'num'],
+        ['股息率', pf.dv_static, pf.dv, pf.fwd_dv_ratio, 'pct'],
         ['市销率', pf.ps_static, pf.ps_ttm, pf.ps_fwd, 'num'],
       ];
       body.innerHTML = rows.map(([name, a, b, c, kind]) => {
@@ -413,9 +416,11 @@
       const pb = d.pb;
       portfolioValuationLine(document.getElementById('peSeriesLine'), { dates, values: pe }, d.cur_pe, {
         title: `组合综合 PE（${seriesPeriod}）`, label: '综合PE', color: '#2563eb',
+        fwdValue: lastPortfolio ? lastPortfolio.portfolio.fwd_pe : undefined,
       });
       portfolioValuationLine(document.getElementById('pbSeriesLine'), { dates, values: pb }, d.cur_pb, {
         title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
+        fwdValue: lastPortfolio ? lastPortfolio.portfolio.fwd_pb : undefined,
       });
     }
 

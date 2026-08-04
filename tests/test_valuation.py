@@ -181,5 +181,7 @@ def test_compute_live_ttm_growth_metrics():
     assert live["ps_static"] == pytest.approx(10_000_000_000 / 1_050_187_000_000, abs=0.005)
     assert live["ps_ttm"] == pytest.approx(10_000_000_000 / 1_052_905_000_000, abs=0.005)
     assert live["ps_fwd"] is not None
+    assert live["pe_static"] == pytest.approx(10_000_000_000 / 137_095_000_000, abs=0.005)
+    assert live["pb_static"] == pytest.approx(10_000_000_000 / 950_000_000_000, abs=0.005)
     assert live["fwd_roe"] is not None
     assert live["fwd_profit_yoy"] == pytest.approx(-4.21)

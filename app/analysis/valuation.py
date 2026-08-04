@@ -167,6 +167,8 @@ def compute_live(code: str, price: float | None = None) -> dict:
     out["ttm_revenue"] = round(ttm_revenue, 0) if ttm_revenue else None
     out["pe"] = round(total_mv / ttm, 2) if ttm and ttm > 0 else None
     out["pb"] = round(total_mv / net_assets, 2) if net_assets and net_assets > 0 else None
+    out["pe_static"] = round(total_mv / net_profit, 2) if net_profit and net_profit > 0 else None
+    out["pb_static"] = round(total_mv / net_assets, 2) if net_assets and net_assets > 0 else None
     out["roe_ttm"] = round(ttm / net_assets * 100, 2) if ttm and net_assets and net_assets > 0 else None
     out["profit_yoy_ttm"] = compute_ttm_growth(series, "net_profit")
     out["revenue_yoy_ttm"] = compute_ttm_growth(revenue_series, "revenue")
@@ -180,6 +182,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     # 股息率 = 去年净利 × 支付率 / 市值
     dividend = net_profit * (payout / 100) if payout is not None else None
     out["dv_ratio"] = round(dividend / total_mv * 100, 2) if dividend is not None else None
+    out["dv_static"] = out["dv_ratio"]
 
     # 前瞻：用去年归母净利 × (1+预期增速) 计算，不再基于 TTM 外推；
     # 预期增速默认取今年已出财报的净利同比，用户可在个股页覆盖。

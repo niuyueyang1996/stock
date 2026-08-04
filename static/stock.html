@@ -239,12 +239,6 @@
         ['现价', fmtNum(q.price), q.pct_chg >= 0 ? 'up' : 'down'],
         ['涨跌幅', signed(q.pct_chg) + '%', cls(q.pct_chg)],
         ['实时市值', mvYi],
-        ['PE(TTM)', fmtNum(pe) + (live.pe_pct != null ? `（分位 ${live.pe_pct}%）` : '')],
-        ['前瞻PE', fmtNum(live.fwd_pe) + (live.fwd_pe_pct != null ? `（分位 ${live.fwd_pe_pct}%）` : '')],
-        ['PB', fmtNum(pb) + (live.pb_pct != null ? `（分位 ${live.pb_pct}%）` : '')],
-        ['前瞻PB', fmtNum(live.fwd_pb) + (live.fwd_pb_pct != null ? `（分位 ${live.fwd_pb_pct}%）` : '')],
-        ['股息率', fmtNum(live.dv_ratio) + '%'],
-        ['前瞻股息率', fmtNum(live.fwd_dv_ratio) + '%'],
       ].map(([l, v, c]) => `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
 
       renderQuantiles(d.quantiles);
@@ -259,6 +253,9 @@
         ['ROE', live.roe_static, live.roe_ttm, live.fwd_roe, 'pct'],
         ['营收增长', live.revenue_yoy_static, live.revenue_yoy_ttm, live.fwd_revenue_yoy, 'pct'],
         ['净利增长', live.profit_yoy_static, live.profit_yoy_ttm, live.fwd_profit_yoy, 'pct'],
+        ['PE', live.pe_static, live.pe, live.fwd_pe, 'num'],
+        ['PB', live.pb_static, live.pb, live.fwd_pb, 'num'],
+        ['股息率', live.dv_static, live.dv_ratio, live.fwd_dv_ratio, 'pct'],
         ['市销率', live.ps_static, live.ps_ttm, live.ps_fwd, 'num'],
       ];
       body.innerHTML = rows.map(([name, a, b, c, kind]) => {

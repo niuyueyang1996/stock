@@ -138,11 +138,8 @@
         ['盈亏%', fmtPct(pf.pnl_pct), cls(pf.pnl_pct)],
       ];
       const sub = [
-        ['综合PE', fmtNum(pf.pe)],
-        ['综合PB', fmtNum(pf.pb)],
         ['PE分位', fmtPct(pf.pe_pct)],
         ['PB分位', fmtPct(pf.pb_pct)],
-        ['综合股息率', fmtPct(pf.dv)],
         ['年化波动率', fmtPct(pf.volatility)],
       ];
       const card = ([l, v, c, note, noteCls]) =>

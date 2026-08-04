@@ -356,6 +356,7 @@ function portfolioValuationLine(el, series, curValue, opts) {
   const values = (series && series.values) || [];
   const lastX = dates.length ? dates.length - 1 : 0;
   const hasCur = curValue !== null && curValue !== undefined;
+  const hasFwd = o.fwdValue !== null && o.fwdValue !== undefined;
   const label = o.label || '综合';
   const color = o.color || '#2563eb';
   const QUANTILES = [10, 30, 50, 70, 90];
@@ -426,6 +427,13 @@ function portfolioValuationLine(el, series, curValue, opts) {
         label: { show: true, formatter: String(curValue), fontSize: 10, color: '#fff' },
       });
     }
+    if (hasFwd) {
+      pointData.push({
+        coord: [lastX, o.fwdValue], value: '前瞻 ' + o.fwdValue,
+        symbol: 'triangle', symbolSize: 26, itemStyle: { color: '#e8590c' },
+        label: { show: true, position: 'top', fontSize: 10, formatter: '前瞻 ' + o.fwdValue, color: '#e8590c' },
+      });
+    }
 
     const lineData = [];
     if (hasCur) {
@@ -433,6 +441,13 @@ function portfolioValuationLine(el, series, curValue, opts) {
         yAxis: curValue, name: label,
         lineStyle: { color: '#e03131', type: 'dashed' },
         label: { formatter: `${label} ${curValue}`, position: 'insideEndTop', fontSize: 11, color: '#e03131' },
+      });
+    }
+    if (hasFwd) {
+      lineData.push({
+        yAxis: o.fwdValue, name: '前瞻',
+        lineStyle: { color: '#e8590c', type: 'dashed' },
+        label: { formatter: '前瞻 ' + o.fwdValue, position: 'insideEndTop', fontSize: 11, color: '#e8590c' },
       });
     }
     currentQs.filter((q) => activeLines.has(q.p)).forEach((q) => {
@@ -482,10 +497,11 @@ function portfolioValuationLine(el, series, curValue, opts) {
     if (!hasCur) return;
     const vis = windowValues();
     const pct = percentileOf(vis, curValue);
+    const fwdText = hasFwd ? ` · 前瞻 ${o.fwdValue}` : '';
     chart.setOption({
       title: {
         text: o.title || '', left: 'center', textStyle: { fontSize: 14 },
-        subtext: `${label} 当前 ${curValue} · 可见窗口分位 ${pct === null ? '样本不足' : pct + '%'}`,
+        subtext: `${label} 当前 ${curValue}${fwdText} · 可见窗口分位 ${pct === null ? '样本不足' : pct + '%'}`,
         subtextStyle: { fontSize: 12, color: '#e8590c' },
       },
     });
