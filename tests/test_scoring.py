@@ -1,5 +1,6 @@
 """评分模型测试：六因子打分、缺失归一化、评级、交易同步落库。"""
 import json
+from datetime import date
 
 import pytest
 
@@ -9,7 +10,7 @@ from app.data.cache import upsert_financials, upsert_quantile, upsert_valuation
 from app.models.db import get_conn
 from app.services import holdings
 
-CALC = "2026-08-04"
+CALC = date.today().isoformat()
 
 
 def _seed_data(code="600000", pe_pct=30.0, pb_pct=50.0, roe=10.0, dv=0.2, main_net_pct=2.0):
@@ -97,7 +98,7 @@ def test_record_trade_rebuilds_daily_score():
     """录交易自动重算当日综合评分（金额加权），撤销后当日无交易则删除。"""
     r1 = holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
     assert r1["daily_score"] is not None
-    saved = scoring.get_daily("2026-08-04")
+    saved = scoring.get_daily(CALC)
     assert saved is not None
     assert saved["trades_count"] == 1
     assert saved["rating"] != "N/A" if saved["total_score"] is not None else True
@@ -109,7 +110,7 @@ def test_record_trade_rebuilds_daily_score():
     assert all({"key", "name", "raw", "score", "weight", "used"} <= set(f.keys()) for f in detail_factors)
     # 撤销交易 → 当日无交易 → 综合分删除
     holdings.delete_trade(r1["trade_id"])
-    assert scoring.get_daily("2026-08-04") is None
+    assert scoring.get_daily(CALC) is None
 
 
 def test_daily_score_amount_weighted():
@@ -118,7 +119,7 @@ def test_daily_score_amount_weighted():
     _seed_data("600519", pe_pct=5.0, pb_pct=5.0)          # 低分位 → 高分（>80）
     r1 = holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
     r2 = holdings.record_trade("600519", "buy", 10, 100, name="贵州茅台")
-    daily = scoring.get_daily("2026-08-04")
+    daily = scoring.get_daily(CALC)
     assert daily["trades_count"] == 2
     s1 = next(d["total_score"] for d in daily["detail"] if d["code"] == "600000")
     s2 = next(d["total_score"] for d in daily["detail"] if d["code"] == "600519")
@@ -128,7 +129,7 @@ def test_daily_score_amount_weighted():
     assert daily["factors"]  # 有聚合因子
     # 修改一笔（价格 10→20，金额翻倍）后综合分重算
     holdings.update_trade(r1["trade_id"], price=20)
-    daily2 = scoring.get_daily("2026-08-04")
+    daily2 = scoring.get_daily(CALC)
     assert daily2["trades_count"] == 2
     assert daily2["net_amount"] == pytest.approx(3000.0)  # 600000@2000 + 600519@1000
     d1 = next(d for d in daily2["detail"] if d["code"] == "600000")

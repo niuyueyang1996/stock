@@ -205,7 +205,7 @@ def test_sync_financials_skips_complete_cache():
 
 
 def test_parse_holdings_excel():
-    """汇总持仓.xlsx 解析：单位成本优先、最新价兜底、跳过非A股。"""
+    """汇总持仓.xlsx 解析：单位成本优先、最新价兜底、港股也纳入。"""
     import io
 
     from openpyxl import Workbook
@@ -222,6 +222,23 @@ def test_parse_holdings_excel():
     buf = io.BytesIO()
     wb.save(buf)
     items, skipped = holdings.parse_holdings_excel(buf.getvalue())
-    assert [i["code"] for i in items] == ["600000", "510300"]
+    assert [i["code"] for i in items] == ["600000", "510300", "06198"]
     assert items[0]["price"] == pytest.approx(9.8)
-    assert skipped and skipped[0]["code"] == "06198"
+    assert skipped == []
+
+
+def test_holdings_auto_tag_etf():
+    """ETF/基金代码自动打 ETF 标签，并在持仓列表标记 is_etf。"""
+    from app.data.base import auto_tag, is_etf_code, is_hk_code
+
+    assert is_etf_code("510300") is True
+    assert is_etf_code("600000") is False
+    assert is_hk_code("06198") is True
+    assert auto_tag("510300", "300ETF") == "ETF"
+    assert auto_tag("06198", "青岛港") == "港股"
+    assert auto_tag("600000") == "个股"
+
+    holdings.record_trade("510300", "buy", 4.6, 100, name="300ETF")
+    h = holdings.get_holdings(active_only=True)[0]
+    assert h["tag"] == "ETF"
+    assert h["is_etf"] is True

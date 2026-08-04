@@ -26,13 +26,38 @@
     <div class="panel" id="growthPanel" style="display:none">
       <div class="row">
         <h2 style="margin:0">预期年同比增速</h2>
+        <span class="muted">净利</span>
         <input type="number" id="growthInput" step="0.01" style="width:120px">
+        <span class="muted">营收</span>
+        <input type="number" id="revenueGrowthInput" step="0.01" style="width:120px">
         <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
         <span class="muted" id="growthMeta"></span>
       </div>
     </div>
 
+    <div class="panel" id="tagPanel" style="display:none">
+      <div class="row">
+        <h2 style="margin:0">标签</h2>
+        <input type="text" id="tagInput" maxlength="20" style="width:140px" placeholder="如：红利/科技/银行">
+        <button class="btn primary" onclick="saveTag()">保存</button>
+        <span class="muted" id="tagMeta"></span>
+      </div>
+    </div>
+
     <div class="cards" id="quoteCards"></div>
+
+    <div class="panel">
+      <h2>盈利与成长 <span class="sub">静态 / TTM / 前瞻 对比</span></h2>
+      <table>
+        <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
+        <tbody id="growthBody"><tr><td colspan="4" class="muted">暂无数据（请先全量刷新）</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>财务指标（最新报告期）</h2>
+      <div class="cards" id="finCards"></div>
+    </div>
 
     <div class="panel">
       <h2>历史分位（实时值 / 前瞻值 的百分位）</h2>
@@ -45,10 +70,8 @@
     <div class="panel">
       <h2>估值历史 <span class="sub">百度源 · 标注实时/前瞻值 · 可拖动缩放切换分位窗口</span></h2>
       <div id="histTabs"></div>
-      <div class="row" style="align-items:stretch">
-        <div class="chart lg" id="peLine" style="flex:1;min-width:300px;height:340px"></div>
-        <div class="chart lg" id="pbLine" style="flex:1;min-width:300px;height:340px"></div>
-      </div>
+      <div class="chart lg" id="peLine" style="height:340px"></div>
+      <div class="chart lg" id="pbLine" style="height:340px"></div>
     </div>
 
     <div class="row" style="align-items:stretch">
@@ -69,10 +92,6 @@
       <div class="empty" style="padding:20px">15分钟资金流暂无可用数据源，功能占位，后续版本接入。</div>
     </div>
 
-    <div class="panel">
-      <h2>财务指标（最新报告期）</h2>
-      <div class="cards" id="finCards"></div>
-    </div>
   </div>
 
   <script src="/static/js/api.js"></script>
@@ -83,6 +102,7 @@
     let currentCode = new URLSearchParams(location.search).get('code') || '';
     let lastQuote = null;
     let lastName = '';
+    let lastLive = {};
 
     // 搜索框
     const sb = stockSearchInput();
@@ -103,10 +123,26 @@
 
     async function saveExpectedGrowth() {
       const v = parseFloat(document.getElementById('growthInput').value);
-      if (Number.isNaN(v)) return toast('请输入有效的预期增速（%）');
+      const rv = parseFloat(document.getElementById('revenueGrowthInput').value);
+      if (Number.isNaN(v) || Number.isNaN(rv)) return toast('请输入有效的净利/营收预期增速（%）');
       try {
-        await api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: v } });
+        await Promise.all([
+          api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: v } }),
+          api('/stocks/' + currentCode + '/expected-revenue-growth', { method: 'PUT', body: { growth: rv } }),
+        ]);
         toast('已保存预期增速');
+        await loadPage();
+      } catch (e) {
+        toast('保存失败：' + e.message, 4000);
+      }
+    }
+
+    async function saveTag() {
+      const tag = document.getElementById('tagInput').value.trim();
+      if (!tag) return toast('请输入标签');
+      try {
+        await api('/stocks/' + currentCode + '/tag', { method: 'PUT', body: { tag } });
+        toast('已保存标签');
         await loadPage();
       } catch (e) {
         toast('保存失败：' + e.message, 4000);
@@ -177,16 +213,25 @@
       staleTip.textContent = q.stale ? '⚠ 缓存无当日数据，展示最近交易日缓存（点击「⚡ 刷新此股」拉取最新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
 
       const live = d.live || {};
+      lastLive = live;
+      renderGrowth(live);
       const growthPanel = document.getElementById('growthPanel');
       if (live.expected_growth != null) {
         growthPanel.style.display = '';
         document.getElementById('growthInput').value = live.expected_growth;
-        document.getElementById('growthMeta').textContent = live.expected_growth_source === 'user'
-          ? '用户自定义'
-          : '默认：今年已出财报净利同比';
+        document.getElementById('revenueGrowthInput').value = live.expected_revenue_growth;
+        const pSrc = live.expected_growth_source === 'user' ? '净利自定义' : '净利默认最新财报';
+        const rSrc = live.expected_revenue_growth_source === 'user' ? '营收自定义' : '营收默认TTM同比';
+        document.getElementById('growthMeta').textContent = `${pSrc} · ${rSrc}`;
       } else {
         growthPanel.style.display = 'none';
       }
+      const tagPanel = document.getElementById('tagPanel');
+      tagPanel.style.display = '';
+      document.getElementById('tagInput').value = d.tag || '';
+      document.getElementById('tagMeta').textContent = d.is_etf
+        ? 'ETF：只计入持仓，不参与个股统计'
+        : '';
       const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
       const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
       const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
@@ -206,6 +251,20 @@
       renderValuationHistory(d);
       renderFlow(d);
       renderFinancials(d.financials);
+    }
+
+    function renderGrowth(live) {
+      const body = document.getElementById('growthBody');
+      const rows = [
+        ['ROE', live.roe_static, live.roe_ttm, live.fwd_roe, 'pct'],
+        ['营收增长', live.revenue_yoy_static, live.revenue_yoy_ttm, live.fwd_revenue_yoy, 'pct'],
+        ['净利增长', live.profit_yoy_static, live.profit_yoy_ttm, live.fwd_profit_yoy, 'pct'],
+        ['市销率', live.ps_static, live.ps_ttm, live.ps_fwd, 'num'],
+      ];
+      body.innerHTML = rows.map(([name, a, b, c, kind]) => {
+        const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
+        return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
+      }).join('');
     }
 
     // 估值历史折线图：周期切换 + 标注实时/前瞻值（拖动缩放分位联动在 charts.js 内）
@@ -299,12 +358,11 @@
       const cards = [
         ['报告期', fin.report_date],
         ['去年归母净利', fmtNum(fin.net_profit / 1e8) + ' 亿'],
-        ['最新净资产', fin.net_assets != null ? fmtNum(fin.net_assets / 1e8) + ' 亿' : '—'],
+        ['最新归母净资产', fin.net_assets != null ? fmtNum(fin.net_assets / 1e8) + ' 亿' : '—'],
+        ['总股本', fin.total_shares != null ? fmtNum(fin.total_shares / 1e8) + ' 亿股' : '—'],
+        ['每股收益(去年)', fin.eps != null ? fmtNum(fin.eps) + ' 元' : '—'],
+        ['每股股息(去年)', fin.dv_per_share != null ? fmtNum(fin.dv_per_share) + ' 元' : '—'],
         ['支付率(去年)', fin.payout_ratio != null ? fmtPct(fin.payout_ratio) : '—'],
-        ['净利同比', fmtPct(fin.profit_yoy)],
-        ['ROE', fmtPct(fin.roe)],
-        ['每股股息', fmtNum(fin.dv_per_share) + ' 元'],
-        ['每股收益', fmtNum(fin.eps) + ' 元'],
       ];
       document.getElementById('finCards').innerHTML = cards.map(([l, v]) =>
         `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div></div>`).join('');

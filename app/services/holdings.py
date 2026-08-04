@@ -6,6 +6,7 @@
 import io
 from datetime import datetime
 
+from app.data.base import auto_tag, is_etf_code, is_hk_code
 from app.models.db import get_conn
 
 # 交易必须字段
@@ -54,11 +55,12 @@ def rebuild(code: str, conn) -> dict:
 
 def _ensure_stock(conn, code: str, name: str | None) -> None:
     if name:
-        mkt = "sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz"
+        mkt = "hk" if is_hk_code(code) else ("sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz")
+        tag = auto_tag(code, name)
         conn.execute(
-            """INSERT INTO stocks(code, name, market) VALUES(?,?,?)
+            """INSERT INTO stocks(code, name, market, tag) VALUES(?,?,?,?)
                ON CONFLICT(code) DO UPDATE SET name=excluded.name""",
-            (code, name, mkt),
+            (code, name, mkt, tag),
         )
 
 
@@ -314,11 +316,30 @@ def get_holdings(active_only: bool = True) -> list[dict]:
     """持仓列表（含股票名称）。"""
     with get_conn() as c:
         sql = (
-            "SELECT h.*, s.name FROM holdings h LEFT JOIN stocks s ON h.code=s.code"
+            "SELECT h.*, s.name, s.tag FROM holdings h LEFT JOIN stocks s ON h.code=s.code"
             + (" WHERE h.status='active'" if active_only else "")
             + " ORDER BY h.quantity DESC"
         )
-        return [dict(r) for r in c.execute(sql).fetchall()]
+        rows = [dict(r) for r in c.execute(sql).fetchall()]
+    for r in rows:
+        r["tag"] = r.get("tag") or auto_tag(r["code"], r.get("name"))
+        r["is_etf"] = is_etf_code(r["code"]) or is_hk_code(r["code"]) or r["tag"] in ("ETF", "港股")
+    return rows
+
+
+def set_tag(code: str, tag: str, name: str | None = None) -> str:
+    """设置/更新个股标签（自动建 stocks 行）。"""
+    tag = (tag or "").strip()
+    if not tag:
+        raise ValueError("标签不能为空")
+    mkt = "hk" if is_hk_code(code) else ("sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO stocks(code, name, market, tag) VALUES(?,?,?,?)
+               ON CONFLICT(code) DO UPDATE SET tag=excluded.tag""",
+            (code, name or code, mkt, tag),
+        )
+    return tag
 
 
 def init_holdings(items: list[dict]) -> list[dict]:

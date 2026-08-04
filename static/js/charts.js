@@ -1,7 +1,7 @@
 /** ECharts 封装。 */
 function initChart(el) {
   if (!window.echarts) return null;
-  const chart = echarts.init(el);
+  const chart = echarts.getInstanceByDom(el) || echarts.init(el);
   window.addEventListener('resize', () => chart.resize());
   return chart;
 }
@@ -16,7 +16,9 @@ function percentileOf(values, target) {
 
 // 当前 dataZoom 可见窗口的索引区间 {start, end}
 function dataZoomWindow(chart, axisLen) {
-  const model = chart.getModel().getComponent('dataZoom');
+  if (!chart || typeof chart.getModel !== 'function') return { start: 0, end: axisLen - 1 };
+  const modelObj = chart.getModel();
+  const model = modelObj && typeof modelObj.getComponent === 'function' ? modelObj.getComponent('dataZoom') : null;
   if (!model) return { start: 0, end: axisLen - 1 };
   const sv = model.option.startValue;
   const ev = model.option.endValue;
@@ -153,7 +155,7 @@ function fundflowBars(el, latest) {
   return chart;
 }
 
-// 估值历史折线（百度序列直接画），标注实时值/前瞻值；dataZoom 拖动时动态算可见窗口分位
+// 估值历史折线（百度序列直接画）：实时/前瞻标注 + 可见窗口 P10/30/50/70/90 分位线 + 最低/最高点
 function valuationLine(el, series, marks, title) {
   const chart = initChart(el);
   if (!chart) return null;
@@ -173,16 +175,124 @@ function valuationLine(el, series, marks, title) {
       color: '#333', backgroundColor: '#fff', padding: [2, 4], borderRadius: 3,
     },
   }));
+  const QUANTILES = [10, 30, 50, 70, 90];
+  let currentQs = [];
+  const activeLines = new Set();
 
-  // 拖动缩放 → 各目标值在可见窗口内的分位，更新标题副文本
-  function windowSub() {
-    if (!targets.length) return;
+  // 分位线控制条：放在图表上方，重绘时清理旧控件
+  const parent = el.parentNode;
+  const ctrlKey = el.id || ('vc-' + Math.random().toString(36).slice(2));
+  if (parent) parent.querySelectorAll('.valuation-quantiles[data-for="' + ctrlKey + '"]').forEach((x) => x.remove());
+  const ctrl = document.createElement('div');
+  ctrl.className = 'valuation-quantiles';
+  ctrl.dataset.for = ctrlKey;
+  if (parent) parent.insertBefore(ctrl, el);
+
+  function windowValues() {
     const win = dataZoomWindow(chart, values.length);
     const vis = [];
     for (let i = win.start; i <= win.end; i++) {
       const v = values[i];
       if (v !== null && v !== undefined) vis.push(v);
     }
+    return vis;
+  }
+
+  function calcQuantiles(vis) {
+    if (!vis.length) return [];
+    const sorted = vis.slice().sort((a, b) => a - b);
+    return QUANTILES.map((p) => ({
+      p,
+      v: sorted[Math.min(sorted.length - 1, Math.floor(p / 100 * sorted.length))],
+    }));
+  }
+
+  function windowMinMax() {
+    const win = dataZoomWindow(chart, values.length);
+    let min = null;
+    let max = null;
+    for (let i = win.start; i <= win.end; i++) {
+      const v = values[i];
+      if (v === null || v === undefined) continue;
+      if (!min || v < min.v) min = { i, v };
+      if (!max || v > max.v) max = { i, v };
+    }
+    return { min, max };
+  }
+
+  function buildSeries() {
+    const { min, max } = windowMinMax();
+    const pointData = points.slice();
+    if (min) {
+      pointData.push({
+        coord: [min.i, min.v], value: '低 ' + fmtNum(min.v),
+        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#2f9e44' },
+        label: {
+          show: true, position: 'bottom', fontSize: 10,
+          formatter: '低 ' + fmtNum(min.v), color: '#2f9e44',
+        },
+      });
+    }
+    if (max) {
+      pointData.push({
+        coord: [max.i, max.v], value: '高 ' + fmtNum(max.v),
+        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#e03131' },
+        label: {
+          show: true, position: 'top', fontSize: 10,
+          formatter: '高 ' + fmtNum(max.v), color: '#e03131',
+        },
+      });
+    }
+    const lineData = currentQs
+      .filter((q) => activeLines.has(q.p))
+      .map((q) => ({ yAxis: q.v, pct: q.p }));
+    return {
+      name: title || '估值', type: 'line', data: values, symbol: 'none', smooth: true,
+      lineStyle: { width: 2, color: '#2563eb' },
+      areaStyle: { opacity: 0.1 },
+      markPoint: { data: pointData },
+      markLine: lineData.length ? {
+        silent: true, symbol: 'none',
+        label: {
+          formatter: (p) => `P${p.data.pct} ${fmtNum(p.data.yAxis)}`,
+          position: 'insideEndTop', fontSize: 10, color: '#1971c2',
+        },
+        lineStyle: { color: '#1971c2', type: 'dashed', width: 1 },
+        data: lineData,
+      } : undefined,
+    };
+  }
+
+  function renderControls() {
+    currentQs = calcQuantiles(windowValues());
+    ctrl.innerHTML = '';
+    const hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.textContent = '分位线：';
+    ctrl.appendChild(hint);
+    currentQs.forEach((q) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'qbtn' + (activeLines.has(q.p) ? ' active' : '');
+      b.textContent = `P${q.p} ${fmtNum(q.v)}`;
+      b.onclick = () => {
+        if (activeLines.has(q.p)) activeLines.delete(q.p);
+        else activeLines.add(q.p);
+        renderControls();
+        applySeries();
+      };
+      ctrl.appendChild(b);
+    });
+  }
+
+  function applySeries() {
+    chart.setOption({ series: [buildSeries()] }, { replaceMerge: ['series'] });
+  }
+
+  // 拖动缩放 → 各目标值在可见窗口内的分位，更新标题副文本
+  function windowSub() {
+    if (!targets.length) return;
+    const vis = windowValues();
     const parts = targets.map((m) => {
       const pct = percentileOf(vis, m.value);
       return `${m.name} 窗口分位 ${pct === null ? '样本不足' : pct + '%'}`;
@@ -196,35 +306,44 @@ function valuationLine(el, series, marks, title) {
     });
   }
 
+  function onZoom() {
+    windowSub();
+    renderControls();
+    applySeries();
+  }
+
+  chart.off('datazoom');
+  chart.on('datazoom', onZoom);
+
   chart.setOption({
     title: { text: title || '', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: {
-      trigger: 'axis',
+      trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
         const p = ps[0];
         if (!p || p.componentType !== 'series') return '';
         return `${p.axisValue}<br>${p.seriesName}：${p.value}`;
       },
     },
-    grid: { left: 55, right: 40, top: 40, bottom: 46 },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
+    grid: { left: 60, right: 50, top: 46, bottom: 46 },
+    xAxis: {
+      type: 'category', data: dates, boundaryGap: false,
+      axisLabel: { fontSize: 10, hideOverlap: true },
+      axisLine: { lineStyle: { color: '#ced4da' } },
+      axisTick: { alignWithLabel: true },
+    },
+    yAxis: {
+      type: 'value', scale: true, axisLabel: { fontSize: 10 },
+      splitLine: { lineStyle: { color: '#f1f3f5', type: 'dashed' } },
+    },
     dataZoom: [
       { type: 'inside', start: 0, end: 100 },
       { type: 'slider', height: 16, bottom: 8, start: 0, end: 100 },
     ],
-    series: [{
-      name: title || '估值',
-      type: 'line', data: values, symbol: 'none', smooth: true,
-      lineStyle: { width: 2, color: '#2563eb' },
-      areaStyle: { opacity: 0.08 },
-      markPoint: { data: points },
-    }],
+    series: [buildSeries()],
   });
-  if (targets.length) {
-    chart.on('datazoom', windowSub);
-    windowSub();
-  }
+  renderControls();
+  if (targets.length) windowSub();
   return chart;
 }
 
@@ -239,20 +358,130 @@ function portfolioValuationLine(el, series, curValue, opts) {
   const hasCur = curValue !== null && curValue !== undefined;
   const label = o.label || '综合';
   const color = o.color || '#2563eb';
+  const QUANTILES = [10, 30, 50, 70, 90];
+  let currentQs = [];
+  const activeLines = new Set();
 
-  function windowPct() {
+  const parent = el.parentNode;
+  const ctrlKey = el.id || ('vc-' + Math.random().toString(36).slice(2));
+  if (parent) parent.querySelectorAll('.valuation-quantiles[data-for="' + ctrlKey + '"]').forEach((x) => x.remove());
+  const ctrl = document.createElement('div');
+  ctrl.className = 'valuation-quantiles';
+  ctrl.dataset.for = ctrlKey;
+  if (parent) parent.insertBefore(ctrl, el);
+
+  function windowValues() {
     const win = dataZoomWindow(chart, values.length);
     const vis = [];
     for (let i = win.start; i <= win.end; i++) {
       const v = values[i];
       if (v !== null && v !== undefined) vis.push(v);
     }
-    return percentileOf(vis, curValue);
+    return vis;
+  }
+
+  function calcQuantiles(vis) {
+    if (!vis.length) return [];
+    const sorted = vis.slice().sort((a, b) => a - b);
+    return QUANTILES.map((p) => ({
+      p,
+      v: sorted[Math.min(sorted.length - 1, Math.floor(p / 100 * sorted.length))],
+    }));
+  }
+
+  function windowMinMax() {
+    const win = dataZoomWindow(chart, values.length);
+    let min = null;
+    let max = null;
+    for (let i = win.start; i <= win.end; i++) {
+      const v = values[i];
+      if (v === null || v === undefined) continue;
+      if (!min || v < min.v) min = { i, v };
+      if (!max || v > max.v) max = { i, v };
+    }
+    return { min, max };
+  }
+
+  function buildSeries() {
+    const { min, max } = windowMinMax();
+    const pointData = [];
+    if (min) {
+      pointData.push({
+        coord: [min.i, min.v], value: '低 ' + fmtNum(min.v),
+        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#2f9e44' },
+        label: { show: true, position: 'bottom', fontSize: 10, formatter: '低 ' + fmtNum(min.v), color: '#2f9e44' },
+      });
+    }
+    if (max) {
+      pointData.push({
+        coord: [max.i, max.v], value: '高 ' + fmtNum(max.v),
+        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#e03131' },
+        label: { show: true, position: 'top', fontSize: 10, formatter: '高 ' + fmtNum(max.v), color: '#e03131' },
+      });
+    }
+    if (hasCur) {
+      pointData.push({
+        coord: [lastX, curValue], value: curValue,
+        symbol: 'pin', symbolSize: 32, itemStyle: { color: '#e03131' },
+        label: { show: true, formatter: String(curValue), fontSize: 10, color: '#fff' },
+      });
+    }
+
+    const lineData = [];
+    if (hasCur) {
+      lineData.push({
+        yAxis: curValue, name: label,
+        lineStyle: { color: '#e03131', type: 'dashed' },
+        label: { formatter: `${label} ${curValue}`, position: 'insideEndTop', fontSize: 11, color: '#e03131' },
+      });
+    }
+    currentQs.filter((q) => activeLines.has(q.p)).forEach((q) => {
+      lineData.push({
+        yAxis: q.v, pct: q.p,
+        lineStyle: { color: '#1971c2', type: 'dashed' },
+        label: { formatter: `P${q.p} ${fmtNum(q.v)}`, position: 'insideEndTop', fontSize: 10, color: '#1971c2' },
+      });
+    });
+
+    return {
+      name: label, type: 'line', data: values, symbol: 'none', smooth: true,
+      lineStyle: { width: 2, color },
+      areaStyle: { opacity: 0.1 },
+      markPoint: { data: pointData },
+      markLine: lineData.length ? { silent: true, symbol: 'none', data: lineData } : undefined,
+    };
+  }
+
+  function renderControls() {
+    currentQs = calcQuantiles(windowValues());
+    ctrl.innerHTML = '';
+    const hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.textContent = '分位线：';
+    ctrl.appendChild(hint);
+    currentQs.forEach((q) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'qbtn' + (activeLines.has(q.p) ? ' active' : '');
+      b.textContent = `P${q.p} ${fmtNum(q.v)}`;
+      b.onclick = () => {
+        if (activeLines.has(q.p)) activeLines.delete(q.p);
+        else activeLines.add(q.p);
+        renderControls();
+        applySeries();
+      };
+      ctrl.appendChild(b);
+    });
+  }
+
+  function applySeries() {
+    chart.setOption({ series: [buildSeries()] }, { replaceMerge: ['series'] });
   }
 
   function renderSub() {
     if (!hasCur) return;
-    const pct = windowPct();
+    const vis = windowValues();
+    const pct = percentileOf(vis, curValue);
     chart.setOption({
       title: {
         text: o.title || '', left: 'center', textStyle: { fontSize: 14 },
@@ -262,47 +491,43 @@ function portfolioValuationLine(el, series, curValue, opts) {
     });
   }
 
+  function onZoom() {
+    renderSub();
+    renderControls();
+    applySeries();
+  }
+
+  chart.off('datazoom');
+  chart.on('datazoom', onZoom);
   chart.setOption({
     title: { text: o.title || '', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: {
-      trigger: 'axis',
+      trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
         const p = ps[0];
         if (!p) return '';
         return `${p.axisValue}<br>${label}：${p.value}`;
       },
     },
-    grid: { left: 55, right: 40, top: 46, bottom: 46 },
-    xAxis: { type: 'category', data: dates, boundaryGap: false, axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
+    grid: { left: 60, right: 50, top: 46, bottom: 46 },
+    xAxis: {
+      type: 'category', data: dates, boundaryGap: false,
+      axisLabel: { fontSize: 10, hideOverlap: true },
+      axisLine: { lineStyle: { color: '#ced4da' } },
+      axisTick: { alignWithLabel: true },
+    },
+    yAxis: {
+      type: 'value', scale: true, axisLabel: { fontSize: 10 },
+      splitLine: { lineStyle: { color: '#f1f3f5', type: 'dashed' } },
+    },
     dataZoom: [
       { type: 'inside', start: 0, end: 100 },
       { type: 'slider', height: 16, bottom: 8, start: 0, end: 100 },
     ],
-    series: [{
-      name: label,
-      type: 'line', data: values, symbol: 'none', smooth: true,
-      lineStyle: { width: 2, color },
-      areaStyle: { opacity: 0.08 },
-      markLine: hasCur ? {
-        silent: true, symbol: 'none',
-        label: { formatter: `${label} ${curValue}`, position: 'insideEndTop', fontSize: 11, color: '#e03131' },
-        lineStyle: { color: '#e03131', type: 'dashed' },
-        data: [{ yAxis: curValue }],
-      } : undefined,
-      markPoint: hasCur ? {
-        data: [{
-          coord: [lastX, curValue], value: curValue,
-          symbol: 'pin', symbolSize: 32, itemStyle: { color: '#e03131' },
-          label: { show: true, formatter: String(curValue), fontSize: 10, color: '#fff' },
-        }],
-      } : undefined,
-    }],
+    series: [buildSeries()],
   });
-  if (hasCur) {
-    chart.on('datazoom', renderSub);
-    renderSub();
-  }
+  renderControls();
+  if (hasCur) renderSub();
   return chart;
 }
 

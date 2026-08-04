@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS stocks (
     code       TEXT PRIMARY KEY,        -- 6位代码
     name       TEXT NOT NULL,
     market     TEXT NOT NULL,           -- sh/sz/bj
-    list_date  TEXT
+    list_date  TEXT,
+    tag        TEXT                     -- 用户标签；缺省按代码/名称自动推断
 );
 
 CREATE TABLE IF NOT EXISTS holdings (
@@ -100,6 +101,10 @@ CREATE TABLE IF NOT EXISTS financial_cache (
     payout_ratio REAL,                  -- 去年股息支付率(%)
     dv_report    TEXT,                  -- 去年分红报告期(如 '2025年报')
     profit_series TEXT,                 -- JSON: 近8期 [{report_date, net_profit, profit_yoy}]
+    revenue_series TEXT,                -- JSON: 近12期 [{report_date, revenue}]
+    roe_annual          REAL,           -- 去年年报 ROE(%)
+    revenue_yoy_annual  REAL,           -- 去年年报营收同比(%)
+    profit_yoy_annual   REAL,           -- 去年年报净利同比(%)
     PRIMARY KEY (code, report_date)
 );
 
@@ -147,6 +152,12 @@ CREATE TABLE IF NOT EXISTS stock_expected_growth (
     growth     REAL NOT NULL,           -- 预期年同比增速(%)
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS stock_expected_revenue_growth (
+    code       TEXT PRIMARY KEY,
+    growth     REAL NOT NULL,           -- 预期营收年同比增速(%)
+    updated_at TEXT
+);
 """
 
 
@@ -173,6 +184,11 @@ def init_db() -> None:
             ("dv_report", "ALTER TABLE financial_cache ADD COLUMN dv_report TEXT"),
             ("profit_series", "ALTER TABLE financial_cache ADD COLUMN profit_series TEXT"),
             ("total_shares", "ALTER TABLE financial_cache ADD COLUMN total_shares REAL"),
+            ("revenue_series", "ALTER TABLE financial_cache ADD COLUMN revenue_series TEXT"),
+            ("roe_annual", "ALTER TABLE financial_cache ADD COLUMN roe_annual REAL"),
+            ("revenue_yoy_annual", "ALTER TABLE financial_cache ADD COLUMN revenue_yoy_annual REAL"),
+            ("profit_yoy_annual", "ALTER TABLE financial_cache ADD COLUMN profit_yoy_annual REAL"),
+            ("tag", "ALTER TABLE stocks ADD COLUMN tag TEXT"),
         ):
             try:
                 conn.execute(_ddl)

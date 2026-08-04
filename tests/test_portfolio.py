@@ -174,4 +174,23 @@ def test_portfolio_dynamic_score():
     assert pf["score_rating"] in ("A", "B", "C", "D")
     factors = {f["key"]: f for f in pf["score_factors"]}
     assert "diversity" in factors
-    assert factors["diversity"]["score"] == pytest.approx(100.0, abs=0.01)
+    assert factors["diversity"]["weight"] == 0.0
+    assert factors["diversity"]["score"] is None  # 权重 0，不参与总分
+
+
+def test_portfolio_excludes_etf_from_stats():
+    """ETF 只计入持仓市值/权重，不参与个股 PE/PB 等统计。"""
+    _seed_holdings([("600000", 100), ("510300", 100)])
+    _seed_fin("600000")
+    from app.analysis.portfolio import compute_portfolio
+
+    p = compute_portfolio()
+    pf = p["portfolio"]
+    etf = next(s for s in p["stocks"] if s["code"] == "510300")
+    assert etf["is_etf"] is True
+    assert pf["pe"] is not None  # 只来自非 ETF 的 600000
+    assert len(p["tag_weights"]) == 2
+    etf_tag = next(t for t in p["tags"] if t["tag"] == "ETF")
+    assert etf_tag["is_etf"] is True
+    assert etf_tag["pe"] is None
+    assert etf_tag["total_value"] > 0

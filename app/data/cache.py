@@ -148,12 +148,14 @@ def upsert_financials(code: str, fin, dv_per_share: float | None = None) -> None
     import json
 
     series_json = json.dumps(fin.profit_series, ensure_ascii=False) if fin.profit_series else None
+    revenue_json = json.dumps(fin.revenue_series, ensure_ascii=False) if fin.revenue_series else None
     with get_conn() as c:
         c.execute(
             """INSERT INTO financial_cache(code, report_date, roe, roa, revenue_yoy, profit_yoy,
                  dv_per_share, net_profit, net_assets, eps, total_shares, payout_ratio,
-                 dv_report, profit_series)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 dv_report, profit_series, revenue_series,
+                 roe_annual, revenue_yoy_annual, profit_yoy_annual)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(code, report_date) DO UPDATE SET
                  roe=excluded.roe, roa=excluded.roa,
                  revenue_yoy=excluded.revenue_yoy, profit_yoy=excluded.profit_yoy,
@@ -161,11 +163,15 @@ def upsert_financials(code: str, fin, dv_per_share: float | None = None) -> None
                  net_assets=excluded.net_assets, eps=excluded.eps,
                  total_shares=excluded.total_shares,
                  payout_ratio=excluded.payout_ratio, dv_report=excluded.dv_report,
-                 profit_series=excluded.profit_series""",
+                 profit_series=excluded.profit_series, revenue_series=excluded.revenue_series,
+                 roe_annual=excluded.roe_annual,
+                 revenue_yoy_annual=excluded.revenue_yoy_annual,
+                 profit_yoy_annual=excluded.profit_yoy_annual""",
             (code, fin.report_date, fin.roe, fin.roa, fin.revenue_yoy, fin.profit_yoy,
              dv_per_share if dv_per_share is not None else fin.dv_per_share,
              fin.net_profit, fin.net_assets, fin.eps, fin.total_shares,
-             fin.payout_ratio, fin.dv_report, series_json),
+             fin.payout_ratio, fin.dv_report, series_json, revenue_json,
+             fin.roe_annual, fin.revenue_yoy_annual, fin.profit_yoy_annual),
         )
 
 
@@ -251,6 +257,29 @@ def get_expected_growth(code: str):
     with get_conn() as c:
         return c.execute(
             "SELECT * FROM stock_expected_growth WHERE code=?", (code,)
+        ).fetchone()
+
+
+def upsert_expected_revenue_growth(code: str, growth: float) -> None:
+    """保存用户自定义预期营收年同比增速(%)。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO stock_expected_revenue_growth(code, growth, updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(code) DO UPDATE SET
+                 growth=excluded.growth, updated_at=excluded.updated_at""",
+            (code, growth, now),
+        )
+
+
+def get_expected_revenue_growth(code: str):
+    """读取用户自定义预期营收增速；未设置返回 None。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM stock_expected_revenue_growth WHERE code=?", (code,)
         ).fetchone()
 
 

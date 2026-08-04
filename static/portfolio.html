@@ -11,40 +11,52 @@
   <nav></nav>
   <div class="container">
     <div class="cards" id="summary"></div>
+    <div class="period-tabs" id="tagTabs" style="justify-content:center"></div>
+    <div class="panel" id="pfGrowthPanel">
+      <h2>盈利与成长（组合） <span class="sub">静态 / TTM / 前瞻</span></h2>
+      <table>
+        <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
+        <tbody id="pfGrowthBody"></tbody>
+      </table>
+    </div>
     <div class="panel" id="scorePanel" style="display:none">
-      <h2>组合动态打分 <span class="sub">分散度 + 界面指标加权，缺失因子自动归一化</span></h2>
+      <h2>组合动态打分 <span class="sub">界面指标加权，缺失因子自动归一化；分散度权重暂为 0</span></h2>
       <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
     </div>
-    <div class="panel">
+    <div class="panel" id="gaugePanel">
       <h2>综合估值分位（1y，市值加权）</h2>
       <div style="display:flex;gap:20px;flex-wrap:wrap">
         <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
         <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" id="seriesPanel">
       <h2>组合综合 PE/PB 序列 <span class="sub">市值加权打包 · 可拖动缩放，分位随可见窗口变化</span></h2>
       <div id="seriesTabs"></div>
-      <div class="row" style="align-items:stretch">
-        <div class="chart lg" id="peSeriesLine" style="flex:1;min-width:300px;height:340px"></div>
-        <div class="chart lg" id="pbSeriesLine" style="flex:1;min-width:300px;height:340px"></div>
-      </div>
+      <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
+      <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
       <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
         暂无组合估值序列（请先「全量刷新」拉取历史序列）。
       </div>
     </div>
-    <div class="row" style="align-items:stretch">
-      <div class="panel grow">
-        <h2>权重分布</h2>
-        <div class="chart sm" id="weightChart"></div>
-      </div>
-      <div class="panel grow">
-        <h2>各持仓 PE 分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
-        <div class="chart sm" id="peBars"></div>
-      </div>
+    <div class="panel" id="chartRow">
+      <h2>权重分布（按标签）</h2>
+      <div class="chart sm" id="weightChart" style="height:340px"></div>
     </div>
-    <div class="panel">
-      <h2>逐股贡献</h2>
+    <div class="panel" id="peBarPanel">
+      <h2>各持仓 PE 分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
+      <div class="chart sm" id="peBars" style="height:420px"></div>
+    </div>
+    <div class="panel" id="tablePanel">
+      <div class="row">
+        <h2 style="margin:0">逐股贡献</h2>
+        <select id="pfSortSel" title="排序">
+          <option value="weight_desc">权重降序</option>
+          <option value="weight_asc">权重升序</option>
+          <option value="tag">按标签</option>
+          <option value="code">按代码</option>
+        </select>
+      </div>
       <div style="overflow-x:auto">
         <table>
           <thead>
@@ -58,6 +70,7 @@
         暂无数据。请先在交易页录入持仓并点「全量刷新」。
       </div>
     </div>
+    <div id="tagView" style="display:none"></div>
   </div>
 
   <script src="/static/js/api.js"></script>
@@ -65,37 +78,207 @@
   <script src="/static/js/charts.js"></script>
   <script>
     initNav('portfolio');
+    let activeTag = '全部';
+    let lastPortfolio = null;
+    let pfGrowthMode = 'ttm';
+    let tagGrowthMode = 'ttm';
+    let pfSortMode = 'weight_desc';
+    let tagSortMode = 'weight_desc';
 
     async function loadPage() {
       try {
         const p = await api('/portfolio');
+        lastPortfolio = p;
+        renderTagTabs(p);
         renderSummary(p);
+        renderPfGrowth(p.portfolio);
         renderScore(p);
         renderGauges(p);
         renderCharts(p);
         renderTable(p);
         renderSeries(p);
+        showView(activeTag);
       } catch (e) {
         document.getElementById('emptyTip').style.display = 'block';
       }
     }
 
+    function renderTagTabs(p) {
+      const wrap = document.getElementById('tagTabs');
+      wrap.innerHTML = '';
+      const tags = ['全部', ...(p.tags || []).map((t) => t.tag)];
+      tags.forEach((tag) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ptab' + (tag === activeTag ? ' active' : '');
+        b.textContent = tag;
+        b.onclick = () => { activeTag = tag; loadPage(); };
+        wrap.appendChild(b);
+      });
+    }
+
+    function showView(tag) {
+      const all = tag === '全部';
+      ['pfGrowthPanel', 'scorePanel', 'gaugePanel', 'seriesPanel', 'chartRow', 'peBarPanel', 'tablePanel'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = all ? '' : 'none';
+      });
+      document.getElementById('summary').style.display = all ? '' : 'none';
+      document.getElementById('tagView').style.display = all ? 'none' : '';
+      if (!all) renderTagView(tag);
+    }
+
+    function renderTagView(tag) {
+      const p = lastPortfolio;
+      const section = (p.tags || []).find((t) => t.tag === tag);
+      if (!section) return;
+      const el = document.getElementById('tagView');
+      el.innerHTML = `
+        <div class="cards" id="tagCards"></div>
+        <div class="panel">
+          <h2>盈利与成长（${tag}） <span class="sub">静态 / TTM / 前瞻</span></h2>
+          <table>
+            <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
+            <tbody id="tagGrowthBody"></tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h2>权重分布（${tag}）</h2>
+          <div class="chart sm" id="tagWeightChart" style="height:340px"></div>
+        </div>
+        <div class="panel">
+          <h2>各持仓 PE 分位（${tag}）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
+          <div class="chart sm" id="tagPeChart" style="height:420px"></div>
+        </div>
+        <div class="panel">
+          <div class="row">
+            <h2 style="margin:0">${tag} 明细</h2>
+            <select id="tagSortSel" title="排序">
+              <option value="weight_desc">权重降序</option>
+              <option value="weight_asc">权重升序</option>
+              <option value="tag">按标签</option>
+              <option value="code">按代码</option>
+            </select>
+          </div>
+          <div style="overflow-x:auto">
+            <table>
+              <thead><tr><th>代码/名称</th><th>权重</th><th>市值</th><th>PE</th><th>PB</th><th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr></thead>
+              <tbody id="tagStockBody"></tbody>
+            </table>
+          </div>
+        </div>`;
+
+      const cards = [
+        ['标签', section.tag],
+        ['持仓数', section.stocks_count],
+        ['总市值', '¥' + fmtNum(section.total_value)],
+        ['总成本', '¥' + fmtNum(section.total_cost)],
+        ['盈亏', fmtNum(section.pnl) + ' 元', cls(section.pnl)],
+        ['盈亏%', fmtPct(section.pnl_pct), cls(section.pnl_pct)],
+        ['组合权重', fmtPct(section.weight)],
+        ['综合PE', fmtNum(section.pe)],
+        ['综合PB', fmtNum(section.pb)],
+        ['股息率', fmtPct(section.dv)],
+        ['ROE', fmtPct(section.roe)],
+        ['净利增长', fmtPct(section.profit_yoy)],
+      ];
+      document.getElementById('tagCards').innerHTML = cards.map(([l, v, c]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
+      renderTagGrowth(section);
+
+      if (section.stocks.length) {
+        weightPie(
+          document.getElementById('tagWeightChart'),
+          section.stocks.map((s) => ({ name: s.name, value: s.value })),
+          '',
+        );
+      }
+      const peItems = section.stocks
+        .filter((s) => s.pe_pct !== null && s.pe_pct !== undefined)
+        .map((s) => ({ name: s.name, value: s.pe_pct }))
+        .sort((a, b) => b.value - a.value);
+      if (peItems.length) quantileBars(document.getElementById('tagPeChart'), peItems, 'PE 分位(1y)');
+
+      const body = document.getElementById('tagStockBody');
+      body.innerHTML = '';
+      sortedStocks(section.stocks, tagSortMode).forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} ${s.is_etf ? '<span class="tag-badge">ETF</span>' : ''}</td>
+          <td>${fmtNum(s.weight)}%</td>
+          <td>${fmtNum(s.value)}</td>
+          <td>${fmtNum(s.pe)}</td>
+          <td>${fmtNum(s.pb)}</td>
+          <td>${fmtNum(s.pe_pct)}%</td>
+          <td>${fmtNum(s.pb_pct)}%</td>
+          <td>${fmtNum(s.dv)}%</td>
+          <td>${fmtNum(s.roe)}%</td>`;
+        body.appendChild(tr);
+      });
+      const sel = document.getElementById('tagSortSel');
+      if (sel) {
+        sel.addEventListener('change', (e) => {
+          tagSortMode = e.target.value;
+          renderTagView(activeTag);
+        });
+      }
+    }
+
+    function renderTagGrowth(section) {
+      const body = document.getElementById('tagGrowthBody');
+      if (!body) return;
+      const rows = [
+        ['ROE', section.roe_static, section.roe, section.fwd_roe, 'pct'],
+        ['营收增长', section.revenue_yoy_static, section.revenue_yoy, section.fwd_revenue_yoy, 'pct'],
+        ['净利增长', section.profit_yoy_static, section.profit_yoy, section.fwd_profit_yoy, 'pct'],
+        ['市销率', section.ps_static, section.ps_ttm, section.ps_fwd, 'num'],
+      ];
+      body.innerHTML = rows.map(([name, a, b, c, kind]) => {
+        const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
+        return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
+      }).join('');
+    }
+
     function renderSummary(p) {
       const pf = p.portfolio;
-      const cards = [
+      const main = [
         ['组合打分', (pf.score == null ? '—' : fmtNum(pf.score)) + (pf.score_rating ? ' ' + pf.score_rating : '')],
-        ['综合PE', fmtNum(pf.pe), '亏损股允许参与'],
+        ['总市值', '¥' + fmtNum(pf.total_value), null,
+          pf.day_pnl != null ? '今日 ' + signed(pf.day_pnl) + ' 元 · ' + signed(pf.day_pnl_pct) + '%' : '', cls(pf.day_pnl)],
+        ['总成本', '¥' + fmtNum(pf.total_cost)],
+        ['总盈亏', fmtNum(pf.pnl) + ' 元', cls(pf.pnl)],
+        ['盈亏%', fmtPct(pf.pnl_pct), cls(pf.pnl_pct)],
+      ];
+      const sub = [
+        ['综合PE', fmtNum(pf.pe), null, '亏损股允许参与'],
         ['综合PB', fmtNum(pf.pb)],
         ['PE分位(1y)', fmtPct(pf.pe_pct)],
         ['PB分位(1y)', fmtPct(pf.pb_pct)],
         ['综合股息率', fmtPct(pf.dv)],
-        ['综合ROE', fmtPct(pf.roe)],
-        ['营收增长', fmtPct(pf.revenue_yoy)],
-        ['净利增长', fmtPct(pf.profit_yoy)],
-        ['年化波动率', fmtPct(pf.volatility), `样本 ${pf.volatility_sample_days} 交易日`],
+        ['年化波动率', fmtPct(pf.volatility), null, `样本 ${pf.volatility_sample_days} 交易日`],
       ];
-      document.getElementById('summary').innerHTML = cards.map(([l, v, sub]) =>
-        `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div><div class="label">${sub || ''}</div></div>`).join('');
+      const card = ([l, v, c, note, noteCls]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div>${note ? `<div class="label ${noteCls || ''}">${note}</div>` : ''}</div>`;
+      document.getElementById('summary').innerHTML = `
+        <div class="panel" style="grid-column:1/-1">
+          <h3 style="margin:0 0 8px">简况</h3>
+          <div class="cards summary-main" style="margin-bottom:8px">${main.map(card).join('')}</div>
+          <div class="cards summary-sub">${sub.map(card).join('')}</div>
+        </div>`;
+    }
+
+    function renderPfGrowth(pf) {
+      const body = document.getElementById('pfGrowthBody');
+      const rows = [
+        ['ROE', pf.roe_static, pf.roe_ttm, pf.fwd_roe, 'pct'],
+        ['营收增长', pf.revenue_yoy_static, pf.revenue_yoy_ttm, pf.fwd_revenue_yoy, 'pct'],
+        ['净利增长', pf.profit_yoy_static, pf.profit_yoy_ttm, pf.fwd_profit_yoy, 'pct'],
+        ['市销率', pf.ps_static, pf.ps_ttm, pf.ps_fwd, 'num'],
+      ];
+      body.innerHTML = rows.map(([name, a, b, c, kind]) => {
+        const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
+        return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
+      }).join('');
     }
 
     function renderScore(p) {
@@ -152,24 +335,38 @@
     }
 
     function renderCharts(p) {
-      if (p.weights.length) weightPie(document.getElementById('weightChart'), p.weights, '');
+      if (p.tag_weights && p.tag_weights.length) {
+        weightPie(
+          document.getElementById('weightChart'),
+          p.tag_weights.map((t) => ({ name: t.tag, value: t.value })),
+          '持仓权重（按标签）',
+        );
+      }
       const items = p.stocks
+        .filter((s) => !s.is_etf)
         .filter((s) => s.pe_pct !== null && s.pe_pct !== undefined)
         .map((s) => ({ name: s.name, value: s.pe_pct }))
         .sort((a, b) => b.value - a.value);
       if (items.length) quantileBars(document.getElementById('peBars'), items, 'PE 分位(1y)');
     }
 
+    function sortedStocks(stocks, mode) {
+      const arr = stocks.slice();
+      if (mode === 'weight_asc') arr.sort((a, b) => a.weight - b.weight);
+      else if (mode === 'tag') arr.sort((a, b) => (a.tag || '').localeCompare(b.tag || '') || b.weight - a.weight);
+      else if (mode === 'code') arr.sort((a, b) => a.code.localeCompare(b.code));
+      else arr.sort((a, b) => b.weight - a.weight);
+      return arr;
+    }
+
     function renderTable(p) {
       const body = document.getElementById('stockBody');
       body.innerHTML = '';
-      p.weights.forEach((w) => {
-        const s = p.stocks.find((x) => x.code === w.code);
-        if (!s) return;
+      sortedStocks(p.stocks, pfSortMode).forEach((s) => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name}</td>
-          <td>${fmtNum(w.weight)}%</td>
+          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge">${s.tag || ''}</span></td>
+          <td>${fmtNum(s.weight)}%</td>
           <td>${fmtNum(s.value)}</td>
           <td>${fmtNum(s.pe)}</td>
           <td>${fmtNum(s.pb)}</td>
@@ -179,7 +376,7 @@
           <td>${fmtNum(s.roe)}%</td>`;
         body.appendChild(tr);
       });
-      document.getElementById('emptyTip').style.display = p.weights.length ? 'none' : 'block';
+      document.getElementById('emptyTip').style.display = p.stocks.length ? 'none' : 'block';
     }
 
     // 组合综合 PE/PB 序列折线：周期 tab + dataZoom 拖动分位联动
@@ -211,10 +408,9 @@
     function drawSeries(s) {
       const d = s[seriesPeriod];
       if (!d || !d.dates.length) return;
-      // 后端为降序（最新在前），前端统一为升序显示
-      const dates = d.dates.slice().reverse();
-      const pe = d.pe.slice().reverse();
-      const pb = d.pb.slice().reverse();
+      const dates = d.dates;
+      const pe = d.pe;
+      const pb = d.pb;
       portfolioValuationLine(document.getElementById('peSeriesLine'), { dates, values: pe }, d.cur_pe, {
         title: `组合综合 PE（${seriesPeriod}）`, label: '综合PE', color: '#2563eb',
       });
@@ -222,6 +418,11 @@
         title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
       });
     }
+
+    document.getElementById('pfSortSel').addEventListener('change', (e) => {
+      pfSortMode = e.target.value;
+      if (lastPortfolio) renderTable(lastPortfolio);
+    });
 
     loadPage();
   </script>

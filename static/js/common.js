@@ -160,33 +160,43 @@ async function doRefresh(btn, full, scope = 'global', code) {
 // 股票搜索控件：返回 {code, name}
 function stockSearchInput() {
   const wrap = document.createElement('span');
+  wrap.className = 'stock-autocomplete';
   wrap.innerHTML = `
-    <input type="text" placeholder="输入代码或名称搜索" list="stockList" autocomplete="off" style="width:200px">
-    <datalist id="stockList"></datalist>`;
+    <input type="text" placeholder="输入代码或名称搜索" autocomplete="off" style="width:200px">
+    <div class="stock-sug" style="display:none"></div>`;
   const input = wrap.querySelector('input');
-  const dl = wrap.querySelector('datalist');
+  const sug = wrap.querySelector('.stock-sug');
   let timer = null;
   input.addEventListener('input', () => {
     clearTimeout(timer);
     const q = input.value.trim();
-    if (!q) return;
+    if (!q) { sug.style.display = 'none'; return; }
     timer = setTimeout(async () => {
       try {
         const rows = await api('/stocks/search?q=' + encodeURIComponent(q) + '&limit=10');
-        dl.innerHTML = '';
+        sug.innerHTML = '';
         rows.forEach((r) => {
-          const o = document.createElement('option');
-          o.value = `${r.code} ${r.name}`;
-          dl.appendChild(o);
+          const o = document.createElement('div');
+          o.className = 'stock-sug-item';
+          o.textContent = `${r.code} ${r.name}` + (r.market === 'hk' ? '（港股）' : '');
+          o.onclick = () => {
+            input.value = `${r.code} ${r.name}`;
+            sug.style.display = 'none';
+            input.dispatchEvent(new Event('change'));
+          };
+          sug.appendChild(o);
         });
+        sug.style.display = rows.length ? 'block' : 'none';
       } catch (e) { /* 忽略搜索失败 */ }
     }, 250);
   });
+  input.addEventListener('blur', () => setTimeout(() => { sug.style.display = 'none'; }, 150));
+  input.addEventListener('focus', () => { if (input.value.trim()) input.dispatchEvent(new Event('input')); });
   return wrap;
 }
 
 // 从 "600519 贵州茅台" 解析 {code,name}
 function parseStockChoice(text) {
-  const m = String(text || '').trim().match(/^(\d{6})\s*(.*)$/);
+  const m = String(text || '').trim().match(/^(\d{5,6})\s*(.*)$/);
   return m ? { code: m[1], name: m[2] || null } : null;
 }

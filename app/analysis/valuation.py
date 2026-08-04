@@ -15,6 +15,7 @@ from app.config import QUANTILE_MIN_SAMPLES
 from app.data.base import build_manager
 from app.data.cache import (
     get_expected_growth,
+    get_expected_revenue_growth,
     get_financials,
     get_quantile,
     get_valuation_series,
@@ -72,19 +73,38 @@ def percentile_in_series(code: str, indicator: str, period: str, value: float | 
 
 def compute_ttm(profit_series: list) -> float | None:
     """TTM净利 = 去年年报 + 今年最新累计 - 去年同期累计（单位：元）。"""
-    if not profit_series:
+    return _ttm_at(profit_series, profit_series[0]["report_date"], "net_profit") if profit_series else None
+
+
+def _ttm_at(series: list, report_date: str, key: str = "net_profit") -> float | None:
+    """指定报告期末的 TTM 值 = 去年年报 + 该期累计 - 去年同期累计。"""
+    by_date = {s["report_date"]: s for s in series}
+    latest = by_date.get(report_date)
+    if latest is None:
         return None
-    latest = profit_series[0]  # 最新一期（降序）
-    annual = next((s for s in profit_series if s["report_date"].endswith("1231")), None)
-    latest_net = latest.get("net_profit")
-    annual_net = annual.get("net_profit") if annual else None
-    if latest_net is None or annual_net is None:
+    year = int(report_date[:4])
+    annual = by_date.get(f"{year - 1}1231")
+    same_prev = by_date.get(f"{year - 1}{report_date[4:]}")
+    latest_v = latest.get(key)
+    annual_v = annual.get(key) if annual else None
+    if latest_v is None or annual_v is None:
         return None
-    prev_year = str(int(latest["report_date"][:4]) - 1) + latest["report_date"][4:]
-    same = next((s for s in profit_series if s["report_date"] == prev_year), None)
-    if same and same.get("net_profit") is not None:
-        return annual_net + latest_net - same["net_profit"]
-    return annual_net
+    if same_prev and same_prev.get(key) is not None:
+        return annual_v + latest_v - same_prev[key]
+    return annual_v
+
+
+def compute_ttm_growth(series: list, key: str = "net_profit") -> float | None:
+    """TTM 同比：当前报告期末 TTM / 去年同期 TTM - 1（%）。"""
+    if not series:
+        return None
+    latest_date = series[0]["report_date"]
+    cur = _ttm_at(series, latest_date, key)
+    prev_date = f"{int(latest_date[:4]) - 1}{latest_date[4:]}"
+    prev = _ttm_at(series, prev_date, key)
+    if cur is None or prev is None or prev == 0:
+        return None
+    return round((cur / prev - 1) * 100, 2)
 
 
 def compute_live(code: str, price: float | None = None) -> dict:
@@ -131,10 +151,30 @@ def compute_live(code: str, price: float | None = None) -> dict:
         series = json.loads(fin["profit_series"]) if fin["profit_series"] else []
     except (ValueError, TypeError):
         series = []
+    revenue_series = []
+    try:
+        revenue_series = json.loads(fin["revenue_series"]) if fin["revenue_series"] else []
+    except (ValueError, TypeError):
+        revenue_series = []
     ttm = compute_ttm(series)
+    report_date = series[0]["report_date"] if series else fin["report_date"]
+    ttm_revenue = _ttm_at(revenue_series, report_date, "revenue") if revenue_series else None
+    annual_revenue = next(
+        (s["revenue"] for s in revenue_series if s["report_date"].endswith("1231") and s.get("revenue") is not None),
+        None,
+    )
     out["ttm_net_profit"] = round(ttm, 0) if ttm else None
+    out["ttm_revenue"] = round(ttm_revenue, 0) if ttm_revenue else None
     out["pe"] = round(total_mv / ttm, 2) if ttm and ttm > 0 else None
     out["pb"] = round(total_mv / net_assets, 2) if net_assets and net_assets > 0 else None
+    out["roe_ttm"] = round(ttm / net_assets * 100, 2) if ttm and net_assets and net_assets > 0 else None
+    out["profit_yoy_ttm"] = compute_ttm_growth(series, "net_profit")
+    out["revenue_yoy_ttm"] = compute_ttm_growth(revenue_series, "revenue")
+    out["ps_static"] = round(out["total_mv"] / annual_revenue, 2) if annual_revenue and annual_revenue > 0 else None
+    out["ps_ttm"] = round(out["total_mv"] / ttm_revenue, 2) if ttm_revenue and ttm_revenue > 0 else None
+    out["roe_static"] = fin["roe_annual"] if fin["roe_annual"] is not None else fin["roe"]
+    out["revenue_yoy_static"] = fin["revenue_yoy_annual"] if fin["revenue_yoy_annual"] is not None else fin["revenue_yoy"]
+    out["profit_yoy_static"] = fin["profit_yoy_annual"] if fin["profit_yoy_annual"] is not None else fin["profit_yoy"]
     out["payout_ratio"] = payout
 
     # 股息率 = 去年净利 × 支付率 / 市值
@@ -150,9 +190,18 @@ def compute_live(code: str, price: float | None = None) -> dict:
     else:
         expected_growth = g
         expected_source = "latest_report"
+    revenue_row = get_expected_revenue_growth(code)
+    if revenue_row and revenue_row["growth"] is not None:
+        expected_revenue_growth = float(revenue_row["growth"])
+        expected_revenue_source = "user"
+    else:
+        expected_revenue_growth = out.get("revenue_yoy_ttm") if out.get("revenue_yoy_ttm") is not None else fin["revenue_yoy"]
+        expected_revenue_source = "latest_report"
     out["g"] = round(g, 2) if g is not None else None
     out["expected_growth"] = round(expected_growth, 2) if expected_growth is not None else None
     out["expected_growth_source"] = expected_source
+    out["expected_revenue_growth"] = round(expected_revenue_growth, 2) if expected_revenue_growth is not None else None
+    out["expected_revenue_growth_source"] = expected_revenue_source
     if expected_growth is not None:
         f = 1 + expected_growth / 100
         fwd_net_profit = net_profit * f
@@ -160,8 +209,17 @@ def compute_live(code: str, price: float | None = None) -> dict:
         fwd_net_assets = net_assets * f if net_assets else None
         out["fwd_pb"] = round(out["total_mv"] / fwd_net_assets, 2) if fwd_net_assets and fwd_net_assets > 0 else None
         out["fwd_dv_ratio"] = round(out["dv_ratio"] * f, 2) if out["dv_ratio"] is not None else None
+        out["fwd_roe"] = round(fwd_net_profit / net_assets * 100, 2) if net_assets and net_assets > 0 else None
+        out["fwd_profit_yoy"] = round(expected_growth, 2)
     else:
         out["fwd_pe"] = out["fwd_pb"] = out["fwd_dv_ratio"] = None
+        out["fwd_roe"] = out["fwd_profit_yoy"] = out["fwd_revenue_yoy"] = None
+    out["fwd_revenue_yoy"] = round(expected_revenue_growth, 2) if expected_revenue_growth is not None else None
+    if expected_revenue_growth is not None and annual_revenue:
+        fwd_revenue = annual_revenue * (1 + expected_revenue_growth / 100)
+        out["ps_fwd"] = round(out["total_mv"] / fwd_revenue, 2) if fwd_revenue and fwd_revenue > 0 else None
+    else:
+        out["ps_fwd"] = None
 
     # 分位：实时值/前瞻值 在百度历史序列（剔除末条）中的百分位
     out["pe_pct"] = percentile_in_series(code, "pe", "1y", out["pe"])

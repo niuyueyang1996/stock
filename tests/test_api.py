@@ -107,6 +107,25 @@ def test_expected_growth_crud(client):
     assert r.json()["data"]["growth"] == pytest.approx(-15.0)
 
 
+def test_expected_revenue_growth_crud(client):
+    """预期营收增速独立保存与读取。"""
+    r = client.put("/api/stocks/600000/expected-revenue-growth", json={"growth": 2.5})
+    assert r.status_code == 200
+    assert r.json()["data"]["growth"] == pytest.approx(2.5)
+    r = client.get("/api/stocks/600000/expected-revenue-growth")
+    assert r.json()["data"]["growth"] == pytest.approx(2.5)
+
+
+def test_stock_tag_crud(client):
+    """个股标签可保存并在详情返回。"""
+    r = client.put("/api/stocks/600000/tag", json={"tag": "银行"})
+    assert r.status_code == 200
+    assert r.json()["data"]["tag"] == "银行"
+    r = client.get("/api/stocks/600000")
+    assert r.status_code == 200
+    assert r.json()["data"]["tag"] == "银行"
+
+
 def test_import_excel_holdings(client):
     """一键导入持仓Excel：空仓时成功，非空仓时拒绝。"""
     import io

@@ -52,7 +52,11 @@ class Financials:
     payout_ratio: float | None # 去年股息支付率(%)
     dv_report: str | None      # 去年分红报告期(如 '2025年报')
     profit_series: list | None # 近8期 [{report_date, net_profit, profit_yoy}]
+    revenue_series: list | None = None  # 近12期 [{report_date, revenue}]，用于 TTM 营收
     total_shares: float | None = None  # 总股本(股)，用于实时市值；缺省时本地用净利/EPS兜底
+    roe_annual: float | None = None             # 去年年报 ROE(%)
+    revenue_yoy_annual: float | None = None     # 去年年报营收同比(%)
+    profit_yoy_annual: float | None = None      # 去年年报净利同比(%)
 
 
 @dataclass
@@ -97,6 +101,8 @@ class DataSource:
 
 def to_symbol(code: str) -> str:
     """6位代码 → 新浪前缀（sh/sz/bj）。"""
+    if is_hk_code(code):
+        return f"hk{code}"
     if code.startswith(("60", "68", "90", "50", "51", "56", "58")):
         return f"sh{code}"
     if code.startswith(("00", "30", "39", "15", "16", "20")):
@@ -104,6 +110,25 @@ def to_symbol(code: str) -> str:
     if code.startswith(("43", "82", "83", "87", "92")):
         return f"bj{code}"
     raise ValueError(f"无法识别的股票代码: {code}")
+
+
+def is_etf_code(code: str) -> bool:
+    """场内 ETF/基金代码（沪 50/51/56/58，深 15/16）。"""
+    return code.startswith(("50", "51", "56", "58", "15", "16"))
+
+
+def is_hk_code(code: str) -> bool:
+    """港股代码：5 位数字（如 06198、00700）。"""
+    return len(code) == 5 and code.isdigit()
+
+
+def auto_tag(code: str, name: str | None = None) -> str:
+    """默认标签：港股标 港股，ETF/基金标 ETF，其余标 个股。"""
+    if is_hk_code(code):
+        return "港股"
+    if is_etf_code(code) or (name and any(k in name for k in ("ETF", "LOF", "基金"))):
+        return "ETF"
+    return "个股"
 
 
 class SourceManager:

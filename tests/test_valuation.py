@@ -83,6 +83,18 @@ def test_compute_live_uses_user_expected_growth():
     assert live["fwd_pb"] == pytest.approx(10_000_000_000 / (5_000_000_000 * 0.80), rel=1e-3)
 
 
+def test_compute_live_uses_separate_revenue_growth():
+    """营收预期增速独立于净利预期增速。"""
+    _seed_live()
+    from app.data.cache import upsert_expected_revenue_growth
+
+    upsert_expected_revenue_growth("600000", 3.0)
+    live = valuation.compute_live("600000", price=10.0)
+    assert live["expected_revenue_growth"] == pytest.approx(3.0)
+    assert live["fwd_revenue_yoy"] == pytest.approx(3.0)
+    assert live["fwd_profit_yoy"] == pytest.approx(10.0)  # 净利预期增速仍为默认 10
+
+
 def test_compute_live_no_price_falls_back_to_cache():
     """不传价格时回退最近缓存收盘价。"""
     _seed_live()
@@ -129,3 +141,45 @@ def test_compute_live_uses_cached_total_shares():
     assert live["total_shares"] == pytest.approx(2_000_000_000)
     assert live["total_mv"] == pytest.approx(20_000_000_000)
     assert live["pe"] == pytest.approx(20_000_000_000 / 1_000_000_000, rel=1e-3)
+
+
+def test_compute_live_ttm_growth_metrics():
+    """TTM ROE/营收增长/净利增长用 TTM 口径，不再用单季累计同比。"""
+    from app.data.base import Bar, Financials
+    from app.data.cache import upsert_daily_prices, upsert_financials
+
+    fin = Financials(
+        report_date="20260331", roe=2.1, roa=None, revenue_yoy=1.03, profit_yoy=-4.21,
+        net_profit=137_095_000_000, net_assets=950_000_000_000, eps=10.0,
+        dv_per_share=5.0, payout_ratio=50.0, dv_report="2025年报",
+        profit_series=[
+            {"report_date": "20260331", "net_profit": 29_342_000_000, "profit_yoy": -4.21},
+            {"report_date": "20251231", "net_profit": 137_095_000_000, "profit_yoy": 1.0},
+            {"report_date": "20250331", "net_profit": 30_631_000_000, "profit_yoy": 1.0},
+            {"report_date": "20241231", "net_profit": 138_373_000_000, "profit_yoy": 1.0},
+            {"report_date": "20240331", "net_profit": 29_609_000_000, "profit_yoy": 1.0},
+        ],
+        revenue_series=[
+            {"report_date": "20260331", "revenue": 266_478_000_000},
+            {"report_date": "20251231", "revenue": 1_050_187_000_000},
+            {"report_date": "20250331", "revenue": 263_760_000_000},
+            {"report_date": "20241231", "revenue": 1_040_759_000_000},
+            {"report_date": "20240331", "revenue": 263_707_000_000},
+        ],
+        total_shares=1_000_000_000,
+    )
+    upsert_financials("601318", fin)
+    upsert_daily_prices("601318", [Bar("2026-08-04", 10, 10, 10, 10, 100, 1000)], "mock")
+
+    live = valuation.compute_live("601318", price=10.0)
+    assert live["ttm_net_profit"] == pytest.approx(135_806_000_000, rel=1e-3)
+    assert live["roe_ttm"] == pytest.approx(135_806_000_000 / 950_000_000_000 * 100, rel=1e-3)
+    assert live["profit_yoy_ttm"] == pytest.approx(
+        (135_806_000_000 / 139_395_000_000 - 1) * 100, abs=0.01)
+    assert live["revenue_yoy_ttm"] == pytest.approx(
+        (1_052_905_000_000 / 1_040_812_000_000 - 1) * 100, abs=0.01)
+    assert live["ps_static"] == pytest.approx(10_000_000_000 / 1_050_187_000_000, abs=0.005)
+    assert live["ps_ttm"] == pytest.approx(10_000_000_000 / 1_052_905_000_000, abs=0.005)
+    assert live["ps_fwd"] is not None
+    assert live["fwd_roe"] is not None
+    assert live["fwd_profit_yoy"] == pytest.approx(-4.21)

@@ -7,8 +7,10 @@
 import math
 
 import akshare as ak
+import requests
 
-from app.data.base import Bar, DataSource, Financials, Quote, to_symbol
+from app.config import HTTP_HEADERS, REQUEST_TIMEOUT
+from app.data.base import Bar, DataSource, Financials, Quote, is_hk_code, to_symbol
 
 
 class SinaSource(DataSource):
@@ -17,6 +19,8 @@ class SinaSource(DataSource):
 
     def quote(self, code: str) -> Quote | None:
         """当日分时末根作为最新价；昨收用最近日K倒数第二根。"""
+        if is_hk_code(code):
+            return self._hk_quote(code)
         symbol = to_symbol(code)
         minute = ak.stock_zh_a_minute(symbol=symbol, period="1", adjust="")
         if minute is None or minute.empty:
@@ -47,7 +51,65 @@ class SinaSource(DataSource):
             ts=ts,
         )
 
+    def _hk_quote(self, code: str) -> Quote | None:
+        """港股行情：腾讯接口，财务/估值数据暂缺，按 ETF 口径处理。"""
+        resp = requests.get(
+            f"https://qt.gtimg.cn/q=hk{code}",
+            headers=HTTP_HEADERS,
+            timeout=REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        text = resp.content.decode("gbk", errors="replace")
+        if "=" not in text:
+            return None
+        parts = text.split("=", 1)[1].strip('";').split("~")
+
+        def num(i):
+            try:
+                v = float(parts[i])
+                return v
+            except (IndexError, TypeError, ValueError):
+                return None
+
+        price = num(3)
+        if not price:
+            return None
+        ts = parts[30].replace("/", "-") if len(parts) > 30 else ""
+        return Quote(
+            code=code,
+            name=parts[1] if len(parts) > 1 and parts[1] else code,
+            price=price,
+            pct_chg=round(num(32) or 0.0, 2),
+            prev_close=num(4) or price,
+            open=num(5) or price,
+            high=num(33) or price,
+            low=num(34) or price,
+            volume=num(6) or 0.0,
+            amount=num(37) or 0.0,
+            ts=ts,
+        )
+
     def daily_bars(self, code: str, start: str, end: str) -> list[Bar]:
+        if is_hk_code(code):
+            df = ak.stock_hk_daily(symbol=code, adjust="qfq")
+            if df is None or df.empty:
+                return []
+            bars = []
+            for _, r in df.iterrows():
+                d = str(r["date"])
+                if start <= d <= end:
+                    bars.append(
+                        Bar(
+                            date=d,
+                            open=float(r["open"]),
+                            high=float(r["high"]),
+                            low=float(r["low"]),
+                            close=float(r["close"]),
+                            volume=float(r["volume"]),
+                            amount=float(r["amount"]),
+                        )
+                    )
+            return bars
         symbol = to_symbol(code)
         df = ak.stock_zh_a_daily(symbol=symbol, start_date=start, end_date=end)
         if df is None or df.empty:
@@ -93,14 +155,19 @@ class SinaSource(DataSource):
         annuals = [p for p in periods if str(p).endswith("1231")]
         last_annual = annuals[0] if annuals else None
 
-        # 近8期净利序列（含累计同比）
+        # 近12期净利/营收序列（含累计同比），供 TTM 计算
         profit_series = []
-        for p in periods[:8]:
+        revenue_series = []
+        for p in periods[:12]:
             np_ = cell("归母净利润", p)
             yoy_ = cell("归属母公司净利润增长率", p)
+            rev_ = cell("营业总收入", p)
             profit_series.append(
                 {"report_date": str(p), "net_profit": round(np_, 2) if np_ is not None else None,
                  "profit_yoy": round(yoy_, 2) if yoy_ is not None else None}
+            )
+            revenue_series.append(
+                {"report_date": str(p), "revenue": round(rev_, 2) if rev_ is not None else None}
             )
 
         dv_per_share, dv_report = self.dividend_info(code)
@@ -126,7 +193,11 @@ class SinaSource(DataSource):
             payout_ratio=payout_ratio,
             dv_report=dv_report,
             profit_series=profit_series,
+            revenue_series=revenue_series,
             total_shares=total_shares,
+            roe_annual=cell("净资产收益率(ROE)", last_annual) if last_annual else None,
+            revenue_yoy_annual=cell("营业总收入增长率", last_annual) if last_annual else None,
+            profit_yoy_annual=cell("归属母公司净利润增长率", last_annual) if last_annual else None,
         )
 
     def total_shares(self, code: str) -> float | None:
