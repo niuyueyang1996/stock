@@ -76,7 +76,7 @@ function initNav(active) {
 // 综合评分重建不在刷新项里：由评分页独立触发（/scoring/rebuild）
 const REFRESH_OPTIONS = {
   dynamic: [
-    ['price', '实时价格（当日日K）'],
+    ['price', '实时价格（分钟级）'],
     ['valuation', '当前估值（PE/PB/股息率/市值）'],
   ],
   full: [
@@ -86,7 +86,7 @@ const REFRESH_OPTIONS = {
     ['portfolio', '组合综合序列重算'],
   ],
   stock_dynamic: [
-    ['price', '实时价格（当日日K）'],
+    ['price', '实时价格（分钟级）'],
     ['valuation', '当前估值（PE/PB/股息率/市值）'],
   ],
   stock_full: [

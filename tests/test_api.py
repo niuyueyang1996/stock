@@ -97,6 +97,16 @@ def test_stock_detail(client):
     assert "quantiles" in data and "fundflow_15m" in data
 
 
+def test_expected_growth_crud(client):
+    """预期年同比增速可保存并读取。"""
+    r = client.put("/api/stocks/600000/expected-growth", json={"growth": -15.0})
+    assert r.status_code == 200
+    assert r.json()["data"]["growth"] == pytest.approx(-15.0)
+    r = client.get("/api/stocks/600000/expected-growth")
+    assert r.status_code == 200
+    assert r.json()["data"]["growth"] == pytest.approx(-15.0)
+
+
 def test_scoring_rules(client):
     r = client.get("/api/scoring/rules")
     data = r.json()["data"]

@@ -56,16 +56,31 @@ def test_compute_live_realtime_metrics():
 
 
 def test_compute_live_forward():
-    """前瞻 = 实时×(1+g)：PE/PB 下修、股息率上修，前瞻分位从序列算出。"""
+    """前瞻 = 去年归母净利×(1+预期增速) 口径；默认增速=最新财报同比。"""
     _seed_live()
     live = valuation.compute_live("600000", price=10.0)
     assert live["g"] == pytest.approx(10.0)
-    assert live["fwd_pe"] == pytest.approx(live["pe"] / 1.10, rel=1e-3)
-    assert live["fwd_pb"] == pytest.approx(live["pb"] / 1.10, abs=0.01)
+    assert live["expected_growth"] == pytest.approx(10.0)
+    assert live["expected_growth_source"] == "latest_report"
+    assert live["fwd_pe"] == pytest.approx(10_000_000_000 / (1_000_000_000 * 1.10), rel=1e-3)
+    assert live["fwd_pb"] == pytest.approx(10_000_000_000 / (5_000_000_000 * 1.10), abs=0.01)
     assert live["fwd_dv_ratio"] == pytest.approx(5.0 * 1.10, rel=1e-3)
     # 分位：序列剔除末条后 count(<=value)/n
     assert 0 <= live["pe_pct"] <= 100
-    assert live["fwd_pe_pct"] <= live["pe_pct"]  # 前瞻更低 → 分位更低
+    assert live["fwd_pe_pct"] <= live["pe_pct"]
+
+
+def test_compute_live_uses_user_expected_growth():
+    """用户自定义预期增速优先，前瞻用 去年净利×(1+用户增速)。"""
+    _seed_live()
+    from app.data.cache import upsert_expected_growth
+
+    upsert_expected_growth("600000", -20.0)
+    live = valuation.compute_live("600000", price=10.0)
+    assert live["expected_growth"] == pytest.approx(-20.0)
+    assert live["expected_growth_source"] == "user"
+    assert live["fwd_pe"] == pytest.approx(10_000_000_000 / (1_000_000_000 * 0.80), rel=1e-3)
+    assert live["fwd_pb"] == pytest.approx(10_000_000_000 / (5_000_000_000 * 0.80), rel=1e-3)
 
 
 def test_compute_live_no_price_falls_back_to_cache():

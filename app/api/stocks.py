@@ -8,9 +8,11 @@ from app.analysis.valuation import PERIODS, compute_live, get_quantiles
 from app.data.cache import (
     get_daily_fundflow,
     get_daily_fundflows,
+    get_expected_growth,
     get_financials,
     get_valuation,
     get_valuation_series,
+    upsert_expected_growth,
 )
 from app.services.quote import get_quote
 
@@ -19,6 +21,10 @@ router = APIRouter()
 
 class StockRefreshBody(BaseModel):
     items: list[str] | None = None
+
+
+class ExpectedGrowthBody(BaseModel):
+    growth: float
 
 # 折线图默认展示周期
 DEFAULT_CHART_PERIOD = "3y"
@@ -63,6 +69,27 @@ def search_stocks(q: str, limit: int = 10):
         rows = []
     hits = [r for r in rows if r["code"].startswith(q) or q in r["name"]]
     return {"ok": True, "data": hits[:limit]}
+
+
+@router.get("/stocks/{code}/expected-growth")
+def read_expected_growth(code: str):
+    """读取用户自定义预期年同比增速；未设置返回 None。"""
+    row = get_expected_growth(code)
+    return {
+        "ok": True,
+        "data": {
+            "code": code,
+            "growth": row["growth"] if row else None,
+            "updated_at": row["updated_at"] if row else None,
+        },
+    }
+
+
+@router.put("/stocks/{code}/expected-growth")
+def write_expected_growth(code: str, body: ExpectedGrowthBody):
+    """保存用户自定义预期年同比增速(%，可为负)。"""
+    upsert_expected_growth(code, body.growth)
+    return {"ok": True, "data": {"code": code, "growth": body.growth}}
 
 
 @router.get("/stocks/{code}")

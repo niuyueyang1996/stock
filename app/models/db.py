@@ -141,6 +141,12 @@ CREATE TABLE IF NOT EXISTS trade_calendar (
     trade_date TEXT PRIMARY KEY,
     is_open    INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS stock_expected_growth (
+    code       TEXT PRIMARY KEY,
+    growth     REAL NOT NULL,           -- 预期年同比增速(%)
+    updated_at TEXT
+);
 """
 
 

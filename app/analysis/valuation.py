@@ -1,11 +1,12 @@
 """估值分析：实时 PE/PB/股息率 + 前瞻指标 + 历史分位（百度源，经 akshare）。
 
 口径（用户确认）：
-- 动态数据全部实时计算：实时市值 = 实时股价 × 总股本（总股本 = 去年净利 / 去年EPS，静态慢变量）
+- 动态数据全部实时计算：实时市值 = 实时股价 × 总股本（总股本来自财务缓存/雪球，静态慢变量）
 - 实时 PE = 实时市值 / TTM净利（TTM = 去年年报 + 今年最新累计 - 去年同期累计）
-- 实时 PB = 实时市值 / 最新净资产
+- 实时 PB = 实时市值 / 最新归母净资产
 - 股息率 = 去年净利 × 去年支付率 / 实时市值（支付率 = 去年每股股息 / 去年EPS）
-- 前瞻 PE/PB/股息率 = 实时值 × (1+g)，g = 最新累计净利同比
+- 前瞻 PE = 实时市值 / (去年归母净利 × (1+预期增速))，前瞻 PB = 实时市值 / (归母净资产 × (1+预期增速))
+- 预期增速默认 = 今年已出财报的净利同比，可在个股页覆盖并持久化
 - 百度历史序列仅用于画折线图 + 算分位（实时值/前瞻值在历史序列中的百分位）
 """
 from datetime import datetime
@@ -13,6 +14,7 @@ from datetime import datetime
 from app.config import QUANTILE_MIN_SAMPLES
 from app.data.base import build_manager
 from app.data.cache import (
+    get_expected_growth,
     get_financials,
     get_quantile,
     get_valuation_series,
@@ -139,12 +141,24 @@ def compute_live(code: str, price: float | None = None) -> dict:
     dividend = net_profit * (payout / 100) if payout is not None else None
     out["dv_ratio"] = round(dividend / total_mv * 100, 2) if dividend is not None else None
 
-    # 前瞻（同比增速 g 递推，市值不变假设）
-    if g is not None:
-        f = 1 + g / 100
-        out["g"] = round(g, 2)
-        out["fwd_pe"] = round(out["pe"] / f, 2) if out["pe"] else None
-        out["fwd_pb"] = round(out["pb"] / f, 2) if out["pb"] else None
+    # 前瞻：用去年归母净利 × (1+预期增速) 计算，不再基于 TTM 外推；
+    # 预期增速默认取今年已出财报的净利同比，用户可在个股页覆盖。
+    expected_row = get_expected_growth(code)
+    if expected_row and expected_row["growth"] is not None:
+        expected_growth = float(expected_row["growth"])
+        expected_source = "user"
+    else:
+        expected_growth = g
+        expected_source = "latest_report"
+    out["g"] = round(g, 2) if g is not None else None
+    out["expected_growth"] = round(expected_growth, 2) if expected_growth is not None else None
+    out["expected_growth_source"] = expected_source
+    if expected_growth is not None:
+        f = 1 + expected_growth / 100
+        fwd_net_profit = net_profit * f
+        out["fwd_pe"] = round(out["total_mv"] / fwd_net_profit, 2) if fwd_net_profit and fwd_net_profit > 0 else None
+        fwd_net_assets = net_assets * f if net_assets else None
+        out["fwd_pb"] = round(out["total_mv"] / fwd_net_assets, 2) if fwd_net_assets and fwd_net_assets > 0 else None
         out["fwd_dv_ratio"] = round(out["dv_ratio"] * f, 2) if out["dv_ratio"] is not None else None
     else:
         out["fwd_pe"] = out["fwd_pb"] = out["fwd_dv_ratio"] = None

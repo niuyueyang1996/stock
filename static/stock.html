@@ -15,10 +15,21 @@
         <h2 id="title" style="margin:0">个股详情</h2>
         <span class="grow"></span>
         <div id="searchBox"></div>
+        <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
+        <button class="btn danger" id="sellBtn" onclick="quickTrade('sell')">卖出</button>
         <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 刷新此股</button>
         <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 全量刷新此股</button>
       </div>
       <div id="staleTip" class="muted" style="display:none;margin-top:6px"></div>
+    </div>
+
+    <div class="panel" id="growthPanel" style="display:none">
+      <div class="row">
+        <h2 style="margin:0">预期年同比增速</h2>
+        <input type="number" id="growthInput" step="0.01" style="width:120px">
+        <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
+        <span class="muted" id="growthMeta"></span>
+      </div>
     </div>
 
     <div class="cards" id="quoteCards"></div>
@@ -70,6 +81,8 @@
   <script>
     initNav('stock');
     let currentCode = new URLSearchParams(location.search).get('code') || '';
+    let lastQuote = null;
+    let lastName = '';
 
     // 搜索框
     const sb = stockSearchInput();
@@ -88,6 +101,59 @@
       await doRefresh(btn, full, 'stock', currentCode);
     }
 
+    async function saveExpectedGrowth() {
+      const v = parseFloat(document.getElementById('growthInput').value);
+      if (Number.isNaN(v)) return toast('请输入有效的预期增速（%）');
+      try {
+        await api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: v } });
+        toast('已保存预期增速');
+        await loadPage();
+      } catch (e) {
+        toast('保存失败：' + e.message, 4000);
+      }
+    }
+
+    function quickTrade(side) {
+      if (!currentCode) return toast('请先选择股票');
+      const sideText = side === 'buy' ? '买入' : '卖出';
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.innerHTML = `
+        <div class="modal">
+          <h3>${sideText} ${lastName || currentCode}</h3>
+          <div class="row">
+            <input type="number" id="qtPrice" step="0.001" min="0" value="${lastQuote ? lastQuote.price : ''}" placeholder="成交价" style="width:110px">
+            <input type="number" id="qtQty" step="1" min="0" placeholder="数量" style="width:110px">
+            <input type="number" id="qtFee" step="0.01" min="0" value="0" placeholder="费用" style="width:100px">
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="qtCancel">取消</button>
+            <button class="btn primary" id="qtOk">确认${sideText}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#qtCancel').onclick = close;
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      mask.querySelector('#qtOk').onclick = async () => {
+        const price = parseFloat(mask.querySelector('#qtPrice').value);
+        const quantity = parseFloat(mask.querySelector('#qtQty').value);
+        const fee = parseFloat(mask.querySelector('#qtFee').value) || 0;
+        if (!price || !quantity) return toast('请填写价格与数量');
+        try {
+          await api('/trades', {
+            method: 'POST',
+            body: { code: currentCode, name: lastName || null, side, price, quantity, fee },
+          });
+          toast('已录入' + sideText);
+          close();
+          await loadPage();
+        } catch (e) {
+          toast('录入失败：' + e.message, 4000);
+        }
+      };
+    }
+
     async function loadPage() {
       if (!currentCode) {
         document.getElementById('title').textContent = '请输入股票代码或名称';
@@ -104,11 +170,23 @@
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
       const q = d.quote;
+      lastQuote = q;
+      lastName = d.name;
       const staleTip = document.getElementById('staleTip');
       staleTip.style.display = q.stale ? 'block' : 'none';
       staleTip.textContent = q.stale ? '⚠ 缓存无当日数据，展示最近交易日缓存（点击「⚡ 刷新此股」拉取最新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
 
       const live = d.live || {};
+      const growthPanel = document.getElementById('growthPanel');
+      if (live.expected_growth != null) {
+        growthPanel.style.display = '';
+        document.getElementById('growthInput').value = live.expected_growth;
+        document.getElementById('growthMeta').textContent = live.expected_growth_source === 'user'
+          ? '用户自定义'
+          : '默认：今年已出财报净利同比';
+      } else {
+        growthPanel.style.display = 'none';
+      }
       const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
       const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
       const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;

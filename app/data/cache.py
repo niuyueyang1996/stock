@@ -229,6 +229,31 @@ def get_valuation(code: str, trade_date: str | None = None):
         ).fetchone()
 
 
+# ---------- 预期年同比增速（用户可覆盖） ----------
+
+def upsert_expected_growth(code: str, growth: float) -> None:
+    """保存用户自定义预期年同比增速(%)。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO stock_expected_growth(code, growth, updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(code) DO UPDATE SET
+                 growth=excluded.growth, updated_at=excluded.updated_at""",
+            (code, growth, now),
+        )
+
+
+def get_expected_growth(code: str):
+    """读取用户自定义预期增速；未设置返回 None。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM stock_expected_growth WHERE code=?", (code,)
+        ).fetchone()
+
+
 # ---------- 清仓缓存清理 ----------
 
 def purge_stock_cache(code: str, conn=None) -> int:
