@@ -160,3 +160,18 @@ def test_record_trade_triggers_rebuild():
     with get_conn() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM portfolio_valuation_cache").fetchone()["n"]
     assert n >= 1
+
+
+def test_portfolio_dynamic_score():
+    """组合动态打分：分散度满分、因子加权、总分 0-100。"""
+    _seed_holdings([("A", 100), ("B", 100), ("C", 100)])
+    for code in ("A", "B", "C"):
+        _seed_fin(code)
+    from app.analysis.portfolio import compute_portfolio
+
+    pf = compute_portfolio()["portfolio"]
+    assert pf["score"] is not None and 0 <= pf["score"] <= 100
+    assert pf["score_rating"] in ("A", "B", "C", "D")
+    factors = {f["key"]: f for f in pf["score_factors"]}
+    assert "diversity" in factors
+    assert factors["diversity"]["score"] == pytest.approx(100.0, abs=0.01)

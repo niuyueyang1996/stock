@@ -11,6 +11,10 @@
   <nav></nav>
   <div class="container">
     <div class="cards" id="summary"></div>
+    <div class="panel" id="scorePanel" style="display:none">
+      <h2>组合动态打分 <span class="sub">分散度 + 界面指标加权，缺失因子自动归一化</span></h2>
+      <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
+    </div>
     <div class="panel">
       <h2>综合估值分位（1y，市值加权）</h2>
       <div style="display:flex;gap:20px;flex-wrap:wrap">
@@ -66,6 +70,7 @@
       try {
         const p = await api('/portfolio');
         renderSummary(p);
+        renderScore(p);
         renderGauges(p);
         renderCharts(p);
         renderTable(p);
@@ -78,6 +83,7 @@
     function renderSummary(p) {
       const pf = p.portfolio;
       const cards = [
+        ['组合打分', (pf.score == null ? '—' : fmtNum(pf.score)) + (pf.score_rating ? ' ' + pf.score_rating : '')],
         ['综合PE', fmtNum(pf.pe), '亏损股允许参与'],
         ['综合PB', fmtNum(pf.pb)],
         ['PE分位(1y)', fmtPct(pf.pe_pct)],
@@ -90,6 +96,34 @@
       ];
       document.getElementById('summary').innerHTML = cards.map(([l, v, sub]) =>
         `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div><div class="label">${sub || ''}</div></div>`).join('');
+    }
+
+    function renderScore(p) {
+      const panel = document.getElementById('scorePanel');
+      const factors = p.portfolio.score_factors || [];
+      panel.style.display = factors.length ? '' : 'none';
+      if (!factors.length) return;
+      const chart = initChart(document.getElementById('scoreFactorChart'));
+      if (!chart) return;
+      const pf = p.portfolio;
+      chart.setOption({
+        title: {
+          text: `综合得分 ${pf.score == null ? '—' : pf.score} ${pf.score_rating || ''}`,
+          left: 'center', textStyle: { fontSize: 14 },
+        },
+        tooltip: { trigger: 'axis' },
+        grid: { left: 120, right: 40, top: 44, bottom: 30 },
+        xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}' } },
+        yAxis: { type: 'category', data: factors.map((f) => f.name).reverse(), inverse: true },
+        series: [{
+          type: 'bar', barWidth: 16,
+          data: factors.map((f) => ({
+            value: f.score,
+            itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
+          })),
+          label: { show: true, position: 'right' },
+        }],
+      });
     }
 
     function gauge(el, value, name, color) {

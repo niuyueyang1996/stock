@@ -1,7 +1,7 @@
 """持仓路由：查询 + 批量初始化。"""
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.services import holdings as svc
@@ -20,6 +20,26 @@ class InitItem(BaseModel):
 
 class InitBody(BaseModel):
     items: list[InitItem]
+
+
+@router.post("/holdings/import-excel")
+async def import_holdings_excel(file: UploadFile = File(...)):
+    """一键导入「汇总持仓.xlsx」；仅空仓时允许。"""
+    data = await file.read()
+    try:
+        items, skipped = svc.parse_holdings_excel(data)
+    except Exception as e:  # noqa: BLE001 Excel 结构错误统一转 400
+        raise HTTPException(400, f"Excel 解析失败: {e}")
+    if svc.get_holdings(active_only=True):
+        raise HTTPException(400, "当前非空仓，请先清仓后再一键导入")
+    if not items:
+        raise HTTPException(400, "Excel 中没有可导入的 A 股持仓")
+    try:
+        results = svc.init_holdings(items)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    logger.info("[持仓导入] 一键导入 %d 只，跳过 %d 只", len(results), len(skipped))
+    return {"ok": True, "data": {"imported": results, "skipped": skipped}}
 
 
 @router.get("/holdings")

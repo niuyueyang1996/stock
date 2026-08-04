@@ -9,6 +9,7 @@
 """
 from datetime import date
 
+from app.config import RATING_LEVELS
 from app.analysis.valuation import PERIODS, compute_live
 from app.analysis.volatility import compute_volatility
 from app.data.cache import get_financials, get_latest_quantile, get_valuation
@@ -71,6 +72,70 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float) -> d
         "profit_yoy": fin["profit_yoy"] if fin else None,
         "missing": False,
     }
+
+
+# 组合动态打分权重（分散度 + 界面指标，和为1）
+PORTFOLIO_SCORE_WEIGHTS = {
+    "diversity": 0.20,
+    "pe_pct": 0.15,
+    "pb_pct": 0.15,
+    "dv": 0.15,
+    "roe": 0.15,
+    "profit_yoy": 0.10,
+    "volatility": 0.10,
+}
+
+
+def _clamp_score(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
+    return max(lo, min(hi, v))
+
+
+def _rate_score(total: float | None):
+    if total is None:
+        return "N/A", "数据不足"
+    for threshold, grade, name in RATING_LEVELS:
+        if total >= threshold:
+            return grade, name
+    return "D", "较差"
+
+
+def _portfolio_dynamic_score(stocks, pe_pct, pb_pct, dv, roe, profit_yoy, volatility) -> dict:
+    """分散度 + 界面指标加权打分；缺失因子不参与，按已用权重归一化。"""
+    n = len(stocks)
+    if n == 0:
+        return {"score": None, "rating": "N/A", "rating_name": "数据不足", "factors": []}
+    if n == 1:
+        eff_n = 1.0
+        div_score = 0.0
+    else:
+        hhi = sum((s["weight"] / 100.0) ** 2 for s in stocks)
+        eff_n = 1.0 / hhi if hhi else 0.0
+        min_hhi = 1.0 / n
+        div_score = (1 - (hhi - min_hhi) / (1 - min_hhi)) * 100
+
+    defs = [
+        ("diversity", "分散度", round(eff_n, 1), _clamp_score(div_score)),
+        ("pe_pct", "PE分位(1y)", pe_pct, 100 - pe_pct if pe_pct is not None else None),
+        ("pb_pct", "PB分位(1y)", pb_pct, 100 - pb_pct if pb_pct is not None else None),
+        ("dv", "综合股息率", dv, _clamp_score(dv / 4 * 100) if dv is not None else None),
+        ("roe", "综合ROE", roe, _clamp_score(roe / 15 * 100) if roe is not None else None),
+        ("profit_yoy", "净利增长", profit_yoy, _clamp_score(50 + profit_yoy * 5) if profit_yoy is not None else None),
+        ("volatility", "年化波动率", volatility, _clamp_score(100 - volatility * 2) if volatility is not None else None),
+    ]
+    factors = []
+    used = {}
+    for key, name, raw, score in defs:
+        is_used = score is not None and PORTFOLIO_SCORE_WEIGHTS.get(key, 0) > 0
+        used[key] = is_used
+        factors.append({
+            "key": key, "name": name, "raw": raw,
+            "score": round(score, 1) if is_used else None,
+            "weight": PORTFOLIO_SCORE_WEIGHTS.get(key, 0.0), "used": is_used,
+        })
+    wsum = sum(w for k, w in PORTFOLIO_SCORE_WEIGHTS.items() if used.get(k))
+    total = round(sum(f["score"] * f["weight"] for f in factors if f["used"]) / wsum, 1) if wsum > 0 else None
+    rating, rating_name = _rate_score(total)
+    return {"score": total, "rating": rating, "rating_name": rating_name, "factors": factors}
 
 
 def compute_portfolio() -> dict:
@@ -139,6 +204,7 @@ def compute_portfolio() -> dict:
     vol = compute_volatility(codes, weights)
 
     missing = [{"code": s["code"], "name": s["name"], "reason": s.get("error", "数据缺失")} for s in stocks if s.get("missing")]
+    score = _portfolio_dynamic_score(valid, pe_pct, pb_pct, dv, roe, profit_yoy, vol["annual"])
 
     return {
         "portfolio": {
@@ -158,6 +224,10 @@ def compute_portfolio() -> dict:
             "volatility": vol["annual"],
             "volatility_sample_days": vol["sample_days"],
             "stocks_count": len(stocks),
+            "score": score["score"],
+            "score_rating": score["rating"],
+            "score_rating_name": score["rating_name"],
+            "score_factors": score["factors"],
         },
         "weights": [
             {"code": s["code"], "name": s["name"], "weight": s["weight"], "value": s["value"]}

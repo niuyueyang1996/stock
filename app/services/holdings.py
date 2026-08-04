@@ -3,6 +3,7 @@
 持仓是交易记录的物化视图。任何插入/删除交易后，对受影响股票按时间顺序重放全部交易，
 重算持仓数量与移动加权成本——保证绝对一致，撤销只需删交易再重放。
 """
+import io
 from datetime import datetime
 
 from app.models.db import get_conn
@@ -53,12 +54,83 @@ def rebuild(code: str, conn) -> dict:
 
 def _ensure_stock(conn, code: str, name: str | None) -> None:
     if name:
-        mkt = "sh" if code.startswith(("60", "68", "90")) else "sz"
+        mkt = "sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz"
         conn.execute(
             """INSERT INTO stocks(code, name, market) VALUES(?,?,?)
                ON CONFLICT(code) DO UPDATE SET name=excluded.name""",
             (code, name, mkt),
         )
+
+
+def parse_holdings_excel(data: bytes) -> tuple[list[dict], list[dict]]:
+    """解析「汇总持仓.xlsx」的持仓数据 sheet。
+
+    返回 (可导入项, 跳过明细)；可导入项为 {code, name, price, quantity, fee}，
+    价格优先取「单位成本」，缺省回退「最新价」；仅支持 A 股/场内基金。
+    """
+    from openpyxl import load_workbook
+
+    from app.data.base import to_symbol
+
+    wb = load_workbook(io.BytesIO(data), data_only=True)
+    ws = wb["持仓数据"] if "持仓数据" in wb.sheetnames else wb.worksheets[0]
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return [], []
+    header = [str(c).strip() if c is not None else "" for c in rows[0]]
+
+    def col(name: str):
+        return header.index(name) if name in header else None
+
+    idx = {
+        "code": col("代码"),
+        "name": col("名称"),
+        "qty": col("持有数量"),
+        "cost": col("单位成本"),
+        "price": col("最新价"),
+    }
+    if idx["code"] is None or idx["qty"] is None:
+        raise ValueError("Excel 缺少「代码」或「持有数量」列")
+
+    items, skipped = [], []
+    for row in rows[1:]:
+        code = str(row[idx["code"]]).strip() if row[idx["code"]] is not None else ""
+        name = str(row[idx["name"]]).strip() if idx["name"] is not None and row[idx["name"]] is not None else ""
+        try:
+            qty = float(row[idx["qty"]])
+        except (TypeError, ValueError):
+            qty = 0.0
+        if not code or qty <= 0:
+            continue
+        try:
+            to_symbol(code)
+        except ValueError:
+            skipped.append({"code": code, "name": name, "reason": "非A股/代码格式不支持"})
+            continue
+
+        price = None
+        if idx["cost"] is not None and row[idx["cost"]] is not None:
+            try:
+                price = float(row[idx["cost"]])
+            except (TypeError, ValueError):
+                price = None
+        if not price and idx["price"] is not None and row[idx["price"]] is not None:
+            try:
+                price = float(row[idx["price"]])
+            except (TypeError, ValueError):
+                price = None
+        if not price or price <= 0:
+            skipped.append({"code": code, "name": name, "reason": "无有效价格"})
+            continue
+
+        items.append({
+            "code": code,
+            "name": name or None,
+            "price": round(price, 4),
+            "quantity": float(qty),
+            "fee": 0.0,
+        })
+    return items, skipped
 
 
 def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=None, name=None) -> dict:

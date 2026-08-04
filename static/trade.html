@@ -14,6 +14,8 @@
       <h2 id="formTitle">录入交易</h2>
       <div class="row">
         <div id="searchBox"></div>
+        <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
+        <button class="btn" onclick="document.getElementById('importFile').click()">📥 一键导入持仓Excel</button>
         <select id="side">
           <option value="buy">买入</option>
           <option value="sell">卖出</option>
@@ -28,7 +30,7 @@
         <button class="btn" id="rebuildBtn" onclick="rebuildScores()" title="数据源更新后，重建全部交易日的综合评分">🔁 重建综合评分</button>
       </div>
       <div class="muted" id="formTip" style="margin-top:8px">
-        录入买卖操作自动更新持仓（移动加权成本），并对当日所有交易金额加权综合评分。
+        录入买卖操作自动更新持仓（移动加权成本），并对当日所有交易金额加权综合评分。空仓时可用「📥 一键导入持仓Excel」从汇总持仓.xlsx 恢复持仓。
       </div>
     </div>
 
@@ -137,6 +139,26 @@
         await loadPage();
       } catch (e) {
         toast('失败：' + e.message, 4000);
+      }
+    }
+
+    async function importExcel() {
+      const input = document.getElementById('importFile');
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        const res = await fetch('/api/holdings/import-excel', { method: 'POST', body: fd });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.detail || `HTTP ${res.status}`);
+        const imported = (json.data.imported || []).length;
+        const skipped = (json.data.skipped || []).length;
+        toast(`已导入 ${imported} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''));
+        input.value = '';
+        await loadPage();
+      } catch (e) {
+        toast('导入失败：' + e.message, 4000);
       }
     }
 

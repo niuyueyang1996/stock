@@ -97,9 +97,9 @@ class DataSource:
 
 def to_symbol(code: str) -> str:
     """6位代码 → 新浪前缀（sh/sz/bj）。"""
-    if code.startswith(("60", "68", "90")):
+    if code.startswith(("60", "68", "90", "50", "51", "56", "58")):
         return f"sh{code}"
-    if code.startswith(("00", "30", "39")):
+    if code.startswith(("00", "30", "39", "15", "16", "20")):
         return f"sz{code}"
     if code.startswith(("43", "82", "83", "87", "92")):
         return f"bj{code}"

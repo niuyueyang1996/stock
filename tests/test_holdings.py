@@ -202,3 +202,26 @@ def test_sync_financials_skips_complete_cache():
     ))
     r = sync_financials("600000")
     assert r["reason"] == "cached"
+
+
+def test_parse_holdings_excel():
+    """汇总持仓.xlsx 解析：单位成本优先、最新价兜底、跳过非A股。"""
+    import io
+
+    from openpyxl import Workbook
+
+    from app.services import holdings
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "持仓数据"
+    ws.append(["代码", "名称", "持有数量", "单位成本", "最新价"])
+    ws.append(["600000", "浦发银行", 100, 9.8, 10.0])
+    ws.append(["510300", "300ETF", 8800, 4.715, 4.651])
+    ws.append(["06198", "青岛港", 5000, 6.0, 7.0])
+    buf = io.BytesIO()
+    wb.save(buf)
+    items, skipped = holdings.parse_holdings_excel(buf.getvalue())
+    assert [i["code"] for i in items] == ["600000", "510300"]
+    assert items[0]["price"] == pytest.approx(9.8)
+    assert skipped and skipped[0]["code"] == "06198"

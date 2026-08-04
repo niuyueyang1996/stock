@@ -107,6 +107,36 @@ def test_expected_growth_crud(client):
     assert r.json()["data"]["growth"] == pytest.approx(-15.0)
 
 
+def test_import_excel_holdings(client):
+    """一键导入持仓Excel：空仓时成功，非空仓时拒绝。"""
+    import io
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "持仓数据"
+    ws.append(["代码", "名称", "持有数量", "单位成本", "最新价"])
+    ws.append(["600000", "浦发银行", 100, 10.0, 10.0])
+    buf = io.BytesIO()
+    wb.save(buf)
+    files = {
+        "file": (
+            "持仓.xlsx",
+            buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    }
+    r = client.post("/api/holdings/import-excel", files=files)
+    assert r.status_code == 200
+    assert len(r.json()["data"]["imported"]) == 1
+    assert len(client.get("/api/holdings").json()["data"]) == 1
+
+    r2 = client.post("/api/holdings/import-excel", files=files)
+    assert r2.status_code == 400
+    assert "空仓" in r2.json()["detail"]
+
+
 def test_scoring_rules(client):
     r = client.get("/api/scoring/rules")
     data = r.json()["data"]
