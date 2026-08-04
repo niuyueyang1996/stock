@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>持仓总览 · 自建ETF</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <nav></nav>
+  <div class="container">
+    <div class="cards" id="summary"></div>
+    <div class="panel">
+      <div class="row">
+        <h2 style="margin:0">持仓明细</h2>
+        <span class="sub">数据为缓存值，点右上角刷新按钮更新</span>
+        <span class="grow"></span>
+        <div class="view-toggle" id="viewToggle">
+          <button type="button" class="active" data-view="list">列表</button>
+          <button type="button" data-view="card">卡片</button>
+        </div>
+        <button class="btn danger" id="resetBtn" onclick="resetAll()" title="删除全部交易/持仓/股票/评分及所有缓存（评分权重配置保留）">清空全部数据</button>
+      </div>
+      <div id="listView" style="overflow-x:auto">
+        <table id="holdingsTable">
+          <thead>
+            <tr>
+              <th>代码/名称</th><th>现价</th><th>数量</th><th>成本</th><th>市值</th>
+              <th>盈亏</th><th>盈亏%</th><th>PE(TTM)</th><th>PB</th>
+              <th>PE分位</th><th>PB分位</th><th>股息率</th><th>权重</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="cardView" class="cards" style="display:none;margin-bottom:0"></div>
+      <div class="empty" id="emptyTip" style="display:none">
+        暂无持仓。<a href="/static/trade.html">去交易页录入首笔买入</a>，或点右上角「全量刷新」拉取数据。
+      </div>
+    </div>
+    <div class="panel">
+      <h2>权重分布</h2>
+      <div id="weightChart" class="chart sm"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('index');
+
+    let viewMode = 'list';
+
+    function setupViewToggle() {
+      document.getElementById('viewToggle').querySelectorAll('button').forEach((b) => {
+        b.onclick = () => {
+          document.getElementById('viewToggle').querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          viewMode = b.dataset.view;
+          document.getElementById('listView').style.display = viewMode === 'list' ? '' : 'none';
+          document.getElementById('cardView').style.display = viewMode === 'card' ? 'grid' : 'none';
+        };
+      });
+    }
+
+    // 一键清空全部数据（双重确认，防误触；评分权重配置保留）
+    async function resetAll() {
+      if (!confirm('确定清空全部数据？\n\n将删除：\n· 全部交易流水\n· 持仓与股票信息\n· 全部综合评分\n· 所有缓存（日K/估值/分位/财务/序列/资金流）\n\n此操作不可恢复！\n（评分权重配置与交易日历保留）')) return;
+      if (!confirm('再次确认：真的要清空全部数据吗？')) return;
+      const btn = document.getElementById('resetBtn');
+      btn.disabled = true;
+      try {
+        const r = await api('/data/reset', { method: 'POST', body: { confirm: true } });
+        toast(`已清空 ${r.deleted_rows} 行数据`);
+        await loadPage();
+      } catch (e) {
+        toast('清空失败：' + e.message, 4000);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function renderCards(p) {
+      const wrap = document.getElementById('cardView');
+      wrap.innerHTML = '';
+      p.stocks.forEach((s) => {
+        const card = document.createElement('div');
+        card.className = 'card stock-card';
+        card.innerHTML = `
+          <div class="sc-head">
+            <a class="sc-code" href="/static/stock.html?code=${s.code}">${s.code}</a>
+            <span class="sc-name">${s.name}</span>
+            <span class="sc-w">权重 ${fmtNum(s.weight)}%</span>
+          </div>
+          <div class="sc-grid">
+            <div><span class="k">现价</span><span>${fmtNum(s.price)}</span></div>
+            <div><span class="k">数量</span><span>${fmtNum(s.quantity)}</span></div>
+            <div><span class="k">成本</span><span>${fmtNum(s.avg_cost)}</span></div>
+            <div><span class="k">市值</span><span>${fmtNum(s.value)}</span></div>
+            <div><span class="k">盈亏</span><span class="${cls(s.pnl)}">${signed(s.pnl)}</span></div>
+            <div><span class="k">盈亏%</span><span class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</span></div>
+            <div><span class="k">PE</span><span>${fmtNum(s.pe)}</span></div>
+            <div><span class="k">PB</span><span>${fmtNum(s.pb)}</span></div>
+            <div><span class="k">PE分位</span><span>${fmtNum(s.pe_pct)}%</span></div>
+            <div><span class="k">PB分位</span><span>${fmtNum(s.pb_pct)}%</span></div>
+            <div><span class="k">股息率</span><span>${fmtNum(s.dv)}%</span></div>
+            <div><span class="k">ROE</span><span>${fmtPct(s.roe)}</span></div>
+          </div>`;
+        wrap.appendChild(card);
+      });
+    }
+
+    async function loadPage() {
+      try {
+        const p = await api('/portfolio');
+        renderSummary(p);
+        renderTable(p);
+        renderCards(p);
+        renderChart(p);
+      } catch (e) {
+        document.getElementById('emptyTip').style.display = 'block';
+        document.querySelector('#holdingsTable tbody').innerHTML = '';
+        document.getElementById('cardView').innerHTML = '';
+        document.getElementById('summary').innerHTML = '';
+      }
+    }
+
+    function renderSummary(p) {
+      const pf = p.portfolio;
+      const cards = [
+        ['总市值', '¥' + fmtNum(pf.total_value)],
+        ['总成本', '¥' + fmtNum(pf.total_cost)],
+        ['总盈亏', fmtNum(pf.pnl) + ' 元', cls(pf.pnl)],
+        ['盈亏%', fmtPct(pf.pnl_pct), cls(pf.pnl_pct)],
+        ['综合PE', fmtNum(pf.pe)],
+        ['综合PB', fmtNum(pf.pb)],
+        ['PE分位', fmtPct(pf.pe_pct)],
+        ['PB分位', fmtPct(pf.pb_pct)],
+        ['综合股息率', fmtPct(pf.dv)],
+        ['综合ROE', fmtPct(pf.roe)],
+        ['净利增长', fmtPct(pf.profit_yoy)],
+        ['年化波动率', fmtPct(pf.volatility)],
+      ];
+      document.getElementById('summary').innerHTML = cards.map(([l, v, c]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div></div>`).join('');
+    }
+
+    function renderTable(p) {
+      const tbody = document.querySelector('#holdingsTable tbody');
+      tbody.innerHTML = '';
+      p.stocks.forEach((s) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name}</td>
+          <td>${fmtNum(s.price)}</td>
+          <td>${fmtNum(s.quantity)}</td>
+          <td>${fmtNum(s.avg_cost)}</td>
+          <td>${fmtNum(s.value)}</td>
+          <td class="${cls(s.pnl)}">${signed(s.pnl)}</td>
+          <td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>
+          <td>${fmtNum(s.pe)}</td>
+          <td>${fmtNum(s.pb)}</td>
+          <td>${fmtNum(s.pe_pct)}%</td>
+          <td>${fmtNum(s.pb_pct)}%</td>
+          <td>${fmtNum(s.dv)}%</td>
+          <td>${fmtNum(s.weight)}%</td>`;
+        tbody.appendChild(tr);
+      });
+      document.getElementById('emptyTip').style.display = p.stocks.length ? 'none' : 'block';
+    }
+
+    function renderChart(p) {
+      if (p.weights.length === 0) return;
+      weightPie(document.getElementById('weightChart'), p.weights, '持仓权重（市值口径）');
+    }
+
+    setupViewToggle();
+    loadPage();
+  </script>
+</body>
+</html>

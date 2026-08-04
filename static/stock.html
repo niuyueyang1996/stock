@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>个股分析 · 自建ETF</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <nav></nav>
+  <div class="container">
+    <div class="panel">
+      <div class="row">
+        <h2 id="title" style="margin:0">个股详情</h2>
+        <span class="grow"></span>
+        <div id="searchBox"></div>
+        <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 刷新此股</button>
+        <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 全量刷新此股</button>
+      </div>
+      <div id="staleTip" class="muted" style="display:none;margin-top:6px"></div>
+    </div>
+
+    <div class="cards" id="quoteCards"></div>
+
+    <div class="panel">
+      <h2>历史分位（实时值 / 前瞻值 的百分位）</h2>
+      <div class="row" style="align-items:stretch">
+        <div class="chart sm" id="peQ" style="flex:1;min-width:280px"></div>
+        <div class="chart sm" id="pbQ" style="flex:1;min-width:280px"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>估值历史 <span class="sub">百度源 · 标注实时/前瞻值 · 可拖动缩放切换分位窗口</span></h2>
+      <div id="histTabs"></div>
+      <div class="row" style="align-items:stretch">
+        <div class="chart lg" id="peLine" style="flex:1;min-width:300px;height:340px"></div>
+        <div class="chart lg" id="pbLine" style="flex:1;min-width:300px;height:340px"></div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:stretch">
+      <div class="panel grow">
+        <h2>全天五档资金流（最新交易日）</h2>
+        <div class="chart sm" id="flowBars"></div>
+        <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据（数据源暂缺）。</div>
+      </div>
+      <div class="panel grow">
+        <h2>近30日主力净流入</h2>
+        <div class="chart sm" id="flowLine"></div>
+        <div class="empty" id="flowLineEmpty" style="display:none;padding:20px">暂无历史资金流数据。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>15分钟资金流趋势</h2>
+      <div class="empty" style="padding:20px">15分钟资金流暂无可用数据源，功能占位，后续版本接入。</div>
+    </div>
+
+    <div class="panel">
+      <h2>财务指标（最新报告期）</h2>
+      <div class="cards" id="finCards"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('stock');
+    let currentCode = new URLSearchParams(location.search).get('code') || '';
+
+    // 搜索框
+    const sb = stockSearchInput();
+    const input = sb.querySelector('input');
+    if (currentCode) input.value = currentCode;
+    sb.querySelector('input').addEventListener('change', () => {
+      const p = parseStockChoice(sb.querySelector('input').value);
+      if (p) { currentCode = p.code; history.replaceState(null, '', '?code=' + p.code); loadPage(); }
+    });
+    document.getElementById('searchBox').appendChild(sb);
+
+    // 单股刷新：弹窗多选内容 → 调 /stocks/{code}/refresh[/full] → 重载
+    async function refreshStock(full) {
+      if (!currentCode) return toast('请先选择股票');
+      const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
+      await doRefresh(btn, full, 'stock', currentCode);
+    }
+
+    async function loadPage() {
+      if (!currentCode) {
+        document.getElementById('title').textContent = '请输入股票代码或名称';
+        return;
+      }
+      try {
+        const d = await api('/stocks/' + currentCode);
+        render(d);
+      } catch (e) {
+        document.getElementById('title').textContent = `查询失败：${e.message}`;
+      }
+    }
+
+    function render(d) {
+      document.getElementById('title').textContent = `${d.code} ${d.name}`;
+      const q = d.quote;
+      const staleTip = document.getElementById('staleTip');
+      staleTip.style.display = q.stale ? 'block' : 'none';
+      staleTip.textContent = q.stale ? '⚠ 缓存无当日数据，展示最近交易日缓存（点击「⚡ 刷新此股」拉取最新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
+
+      const live = d.live || {};
+      const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
+      const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
+      const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
+      document.getElementById('quoteCards').innerHTML = [
+        ['现价', fmtNum(q.price), q.pct_chg >= 0 ? 'up' : 'down'],
+        ['涨跌幅', signed(q.pct_chg) + '%', cls(q.pct_chg)],
+        ['实时市值', mvYi],
+        ['PE(TTM)', fmtNum(pe) + (live.pe_pct != null ? `（分位 ${live.pe_pct}%）` : '')],
+        ['前瞻PE', fmtNum(live.fwd_pe) + (live.fwd_pe_pct != null ? `（分位 ${live.fwd_pe_pct}%）` : '')],
+        ['PB', fmtNum(pb) + (live.pb_pct != null ? `（分位 ${live.pb_pct}%）` : '')],
+        ['前瞻PB', fmtNum(live.fwd_pb) + (live.fwd_pb_pct != null ? `（分位 ${live.fwd_pb_pct}%）` : '')],
+        ['股息率', fmtNum(live.dv_ratio) + '%'],
+        ['前瞻股息率', fmtNum(live.fwd_dv_ratio) + '%'],
+      ].map(([l, v, c]) => `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
+
+      renderQuantiles(d.quantiles);
+      renderValuationHistory(d);
+      renderFlow(d);
+      renderFinancials(d.financials);
+    }
+
+    // 估值历史折线图：周期切换 + 标注实时/前瞻值（拖动缩放分位联动在 charts.js 内）
+    let histPeriod = '3y';
+    function renderValuationHistory(d) {
+      const hist = d.valuation_history;
+      const tabsWrap = document.getElementById('histTabs');
+      const peEl = document.getElementById('peLine');
+      const pbEl = document.getElementById('pbLine');
+      if (!hist || !hist.periods || !Object.keys(hist.periods).length) {
+        peEl.innerHTML = '<div class="empty" style="padding:20px">暂无历史估值序列（请先「全量刷新」）。</div>';
+        pbEl.innerHTML = '';
+        tabsWrap.innerHTML = '';
+        return;
+      }
+      if (!(histPeriod in hist.periods)) histPeriod = hist.default || '3y';
+      tabsWrap.innerHTML = '';
+      tabsWrap.appendChild(periodTabs({
+        periods: Object.keys(hist.periods),
+        active: histPeriod,
+        onChange: (p) => { histPeriod = p; renderValuationHistory(d); },
+      }));
+      const series = hist.periods[histPeriod];
+      if (!series || !series.pe.length) {
+        peEl.innerHTML = '<div class="empty" style="padding:20px">该周期暂无序列。</div>';
+        pbEl.innerHTML = '';
+        return;
+      }
+      const live = d.live || {};
+      valuationLine(peEl, series.pe, [
+        { name: '实时', value: live.pe, color: '#2563eb' },
+        { name: '前瞻', value: live.fwd_pe, color: '#e8590c', symbol: 'triangle' },
+      ], 'PE(TTM) 历史（' + histPeriod + '）');
+      valuationLine(pbEl, series.pb, [
+        { name: '实时', value: live.pb, color: '#2563eb' },
+        { name: '前瞻', value: live.fwd_pb, color: '#e8590c', symbol: 'triangle' },
+      ], 'PB 历史（' + histPeriod + '）');
+    }
+
+    function renderQuantiles(ql) {
+      const mk = (el, key) => {
+        const chart = initChart(el);
+        if (!chart) return;
+        const periods = ['1y', '3y', '5y'];
+        chart.setOption({
+          title: { text: `${key === 'pe_pct' ? 'PE' : 'PB'} 分位`, left: 'center', textStyle: { fontSize: 14 } },
+          tooltip: { formatter: (p) => `${p.name}：${p.value}%` },
+          grid: { left: 40, right: 40, top: 40, bottom: 30 },
+          xAxis: { type: 'category', data: periods.map((x) => x + '分位') },
+          yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+          series: [{
+            type: 'bar', barWidth: 34,
+            data: periods.map((p) => {
+              const row = ql[p];
+              const v = row ? row[key] : null;
+              return { value: v, itemStyle: { color: v === null ? '#ccc' : v <= 25 ? '#2f9e44' : v >= 75 ? '#e03131' : '#2563eb' } };
+            }),
+            label: { show: true, position: 'top', formatter: (p) => (p.value === null ? '—' : p.value + '%') },
+          }],
+        });
+      };
+      mk(document.getElementById('peQ'), 'pe_pct');
+      mk(document.getElementById('pbQ'), 'pb_pct');
+    }
+
+    function renderFlow(d) {
+      const latest = d.fundflow_latest;
+      if (latest) {
+        document.getElementById('flowEmpty').style.display = 'none';
+        fundflowBars(document.getElementById('flowBars'), latest);
+      } else {
+        document.getElementById('flowEmpty').style.display = 'block';
+        document.getElementById('flowBars').innerHTML = '';
+      }
+      const hist = d.fundflow_history || [];
+      if (hist.length) {
+        document.getElementById('flowLineEmpty').style.display = 'none';
+        fundflowLine(document.getElementById('flowLine'), hist);
+      } else {
+        document.getElementById('flowLineEmpty').style.display = 'block';
+        document.getElementById('flowLine').innerHTML = '';
+      }
+    }
+
+    function renderFinancials(fin) {
+      if (!fin) {
+        document.getElementById('finCards').innerHTML =
+          '<div class="empty" style="padding:20px">暂无财务数据（请先「全量刷新」）。</div>';
+        return;
+      }
+      const cards = [
+        ['报告期', fin.report_date],
+        ['去年归母净利', fmtNum(fin.net_profit / 1e8) + ' 亿'],
+        ['最新净资产', fin.net_assets != null ? fmtNum(fin.net_assets / 1e8) + ' 亿' : '—'],
+        ['支付率(去年)', fin.payout_ratio != null ? fmtPct(fin.payout_ratio) : '—'],
+        ['净利同比', fmtPct(fin.profit_yoy)],
+        ['ROE', fmtPct(fin.roe)],
+        ['每股股息', fmtNum(fin.dv_per_share) + ' 元'],
+        ['每股收益', fmtNum(fin.eps) + ' 元'],
+      ];
+      document.getElementById('finCards').innerHTML = cards.map(([l, v]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div></div>`).join('');
+    }
+
+    loadPage();
+  </script>
+</body>
+</html>

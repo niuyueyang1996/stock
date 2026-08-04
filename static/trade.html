@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>交易评分 · 自建ETF</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <nav></nav>
+  <div class="container">
+    <div class="panel">
+      <h2 id="formTitle">录入交易</h2>
+      <div class="row">
+        <div id="searchBox"></div>
+        <select id="side">
+          <option value="buy">买入</option>
+          <option value="sell">卖出</option>
+        </select>
+        <input type="number" id="price" placeholder="成交价" step="0.001" min="0" style="width:100px">
+        <input type="number" id="quantity" placeholder="数量" step="1" min="0" style="width:90px">
+        <input type="number" id="fee" placeholder="费用" step="0.01" min="0" value="0" style="width:90px">
+        <input type="datetime-local" id="tradeTime" style="width:190px">
+        <input type="text" id="note" placeholder="备注" style="width:140px">
+        <button class="btn primary" id="submitBtn" onclick="submitTrade()">提交</button>
+        <button class="btn" id="cancelBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+        <button class="btn" id="rebuildBtn" onclick="rebuildScores()" title="数据源更新后，重建全部交易日的综合评分">🔁 重建综合评分</button>
+      </div>
+      <div class="muted" id="formTip" style="margin-top:8px">
+        录入买卖操作自动更新持仓（移动加权成本），并对当日所有交易金额加权综合评分。
+      </div>
+    </div>
+
+    <div class="row" style="align-items:stretch">
+      <div class="panel grow">
+        <h2 id="dailyTitle">当日综合评分</h2>
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+          <div id="scoreBig" style="font-size:44px;font-weight:700">—</div>
+          <div>
+            <span id="ratingBadge" class="badge N">N/A</span>
+            <div class="muted" id="dailyMeta" style="margin-top:4px"></div>
+          </div>
+        </div>
+        <div id="factorChartWrap">
+          <div id="factorChart" class="chart sm"></div>
+        </div>
+        <div class="empty" id="dailyEmpty" style="display:none;padding:20px">
+          该日暂无交易记录。
+        </div>
+        <h3 style="margin:14px 0 8px">每笔明细</h3>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>时间</th><th>代码/名称</th><th>方向</th><th>价格</th><th>数量</th><th>金额</th><th>单笔分</th><th>评级</th></tr></thead>
+            <tbody id="detailBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel" style="max-width:340px">
+        <h2>历史综合评分</h2>
+        <div id="historyList"></div>
+        <div class="empty" id="historyEmpty" style="display:none;padding:20px">暂无评分历史。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>交易流水 <span class="sub">可修改 / 撤销</span></h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr><th>时间</th><th>代码/名称</th><th>方向</th><th>价格</th><th>数量</th><th>金额</th><th>费用</th><th>备注</th><th>操作</th></tr>
+          </thead>
+          <tbody id="tradeBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="tradeEmpty" style="display:none;padding:20px">暂无交易，先在上方录入。</div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('trade');
+    let editingId = null;
+    let lastTrades = [];
+
+    // 默认时间 = 现在
+    function nowLocal() {
+      const d = new Date();
+      d.setSeconds(0, 0);
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+    document.getElementById('tradeTime').value = nowLocal();
+
+    const sb = stockSearchInput();
+    document.getElementById('searchBox').appendChild(sb);
+
+    async function rebuildScores() {
+      const btn = document.getElementById('rebuildBtn');
+      btn.disabled = true;
+      try {
+        const r = await api('/scoring/rebuild', { method: 'POST' });
+        toast(`已重建 ${r.rebuilt_days} 个交易日的综合评分`);
+        await loadPage();
+      } catch (e) {
+        toast('重建失败：' + e.message, 4000);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function submitTrade() {
+      const stock = parseStockChoice(sb.querySelector('input').value);
+      if (!stock) return toast('请选择股票（代码或 代码 名称）');
+      const body = {
+        code: stock.code, name: stock.name,
+        side: document.getElementById('side').value,
+        price: parseFloat(document.getElementById('price').value),
+        quantity: parseFloat(document.getElementById('quantity').value),
+        fee: parseFloat(document.getElementById('fee').value) || 0,
+        note: document.getElementById('note').value || null,
+      };
+      if (!body.price || !body.quantity) return toast('请填写价格与数量');
+      const t = document.getElementById('tradeTime').value;
+      if (t) body.trade_time = t.replace('T', ' ') + ':00';
+      try {
+        if (editingId) {
+          await api('/trades/' + editingId, { method: 'PUT', body });
+        } else {
+          await api('/trades', { method: 'POST', body });
+        }
+        toast(editingId ? '已修改交易' : '已录入交易');
+        cancelEdit();
+        await loadPage();
+      } catch (e) {
+        toast('失败：' + e.message, 4000);
+      }
+    }
+
+    function editTrade(id) {
+      const t = lastTrades.find((x) => x.id === id);
+      if (!t) return;
+      editingId = t.id;
+      sb.querySelector('input').value = `${t.code}`;
+      document.getElementById('side').value = t.side;
+      document.getElementById('price').value = t.price;
+      document.getElementById('quantity').value = t.quantity;
+      document.getElementById('fee').value = t.fee || 0;
+      document.getElementById('note').value = t.note || '';
+      const dt = (t.trade_time || '').replace(' ', 'T').slice(0, 16);
+      if (dt) document.getElementById('tradeTime').value = dt;
+      document.getElementById('formTitle').textContent = '修改交易 #' + t.id;
+      document.getElementById('submitBtn').textContent = '保存修改';
+      document.getElementById('cancelBtn').style.display = '';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      document.getElementById('formTitle').textContent = '录入交易';
+      document.getElementById('submitBtn').textContent = '提交';
+      document.getElementById('cancelBtn').style.display = 'none';
+      sb.querySelector('input').value = '';
+      document.getElementById('side').value = 'buy';
+      document.getElementById('price').value = '';
+      document.getElementById('quantity').value = '';
+      document.getElementById('fee').value = '0';
+      document.getElementById('note').value = '';
+    }
+
+    async function deleteTrade(id, code) {
+      if (!confirm(`撤销交易 #${id}（${code}）？将回滚持仓。`)) return;
+      try {
+        await api('/trades/' + id, { method: 'DELETE' });
+        toast('已撤销');
+        await loadPage();
+      } catch (e) {
+        toast('撤销失败：' + e.message, 4000);
+      }
+    }
+
+    function renderDaily(daily) {
+      const empty = document.getElementById('dailyEmpty');
+      const chartWrap = document.getElementById('factorChartWrap');
+      if (!daily) {
+        empty.style.display = 'block';
+        document.getElementById('scoreBig').textContent = '—';
+        const badge = document.getElementById('ratingBadge');
+        badge.className = 'badge N'; badge.textContent = 'N/A';
+        document.getElementById('dailyMeta').textContent = '';
+        document.getElementById('detailBody').innerHTML = '';
+        document.getElementById('dailyTitle').textContent = '当日综合评分';
+        chartWrap.style.display = 'none';
+        return;
+      }
+      empty.style.display = 'none';
+      chartWrap.style.display = '';
+      document.getElementById('dailyTitle').textContent = `${daily.score_date} 综合评分`;
+      document.getElementById('scoreBig').textContent = daily.total_score === null ? '—' : daily.total_score;
+      const badge = document.getElementById('ratingBadge');
+      badge.className = 'badge ' + (daily.rating || 'N');
+      badge.textContent = (daily.rating || 'N/A') + ' ' + (daily.rating_name || '');
+      const dir = daily.net_amount >= 0 ? '净买入' : '净卖出';
+      document.getElementById('dailyMeta').textContent =
+        `${daily.trades_count} 笔 · ${dir} ${fmtNum(Math.abs(daily.net_amount))} 元 · 更新于 ${daily.updated_at}`;
+
+      if (daily.factors.length) {
+        const chart = initChart(document.getElementById('factorChart'));
+        chart.setOption({
+          title: { text: '综合因子（金额加权）', left: 'center', textStyle: { fontSize: 14 } },
+          tooltip: { trigger: 'axis' },
+          grid: { left: 90, right: 40, top: 40, bottom: 30 },
+          xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}' } },
+          yAxis: { type: 'category', data: daily.factors.map((f) => f.name), inverse: true },
+          series: [{
+            type: 'bar', barWidth: 16,
+            data: daily.factors.map((f) => ({
+              value: f.score,
+              itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
+            })),
+            label: { show: true, position: 'right' },
+          }],
+        });
+      } else {
+        document.getElementById('factorChart').innerHTML = '';
+      }
+
+      document.getElementById('detailBody').innerHTML = '';
+      daily.detail.forEach((d) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${(d.trade_time || '').slice(11) || ''}</td>
+          <td><a href="/static/stock.html?code=${d.code}">${d.code}</a> ${d.name}</td>
+          <td class="${d.side === 'buy' ? 'up' : 'down'}">${d.side === 'buy' ? '买入' : '卖出'}</td>
+          <td>${fmtNum(d.price)}</td>
+          <td>${fmtNum(d.quantity)}</td>
+          <td>${fmtNum(d.amount)}</td>
+          <td>${d.total_score === null ? '—' : d.total_score}</td>
+          <td><span class="badge ${d.rating || 'N'}">${d.rating || 'N/A'}</span></td>`;
+        document.getElementById('detailBody').appendChild(tr);
+      });
+    }
+
+    function renderHistory(history) {
+      const list = document.getElementById('historyList');
+      const empty = document.getElementById('historyEmpty');
+      list.innerHTML = '';
+      if (!history.length) { empty.style.display = 'block'; return; }
+      empty.style.display = 'none';
+      history.forEach((h) => {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer';
+        item.innerHTML = `
+          <div class="row">
+            <strong>${h.score_date}</strong>
+            <span class="badge ${h.rating || 'N'}">${h.rating || 'N/A'}</span>
+            <span class="grow"></span>
+            <span style="font-size:18px;font-weight:700">${h.total_score === null ? '—' : h.total_score}</span>
+          </div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${h.trades_count} 笔 · 净${h.net_amount >= 0 ? '买' : '卖'} ${fmtNum(Math.abs(h.net_amount))} 元</div>`;
+        item.onclick = async () => {
+          try {
+            const d = await api('/scoring/daily?date=' + h.score_date);
+            renderDaily(d);
+          } catch (e) { /* ignore */ }
+        };
+        list.appendChild(item);
+      });
+    }
+
+    function renderTrades(trades) {
+      lastTrades = trades;
+      const body = document.getElementById('tradeBody');
+      const empty = document.getElementById('tradeEmpty');
+      body.innerHTML = '';
+      empty.style.display = trades.length ? 'none' : 'block';
+      trades.forEach((t) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.trade_time}</td>
+          <td><a href="/static/stock.html?code=${t.code}">${t.code}</a></td>
+          <td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? '买入' : '卖出'}</td>
+          <td>${fmtNum(t.price)}</td>
+          <td>${fmtNum(t.quantity)}</td>
+          <td>${fmtNum(t.amount)}</td>
+          <td>${fmtNum(t.fee)}</td>
+          <td class="muted">${t.note || ''}</td>
+          <td>
+            <button class="btn" onclick="editTrade(${t.id})">改</button>
+            <button class="btn danger" onclick="deleteTrade(${t.id},'${t.code}')">删</button>
+          </td>`;
+        body.appendChild(tr);
+      });
+    }
+
+    async function loadPage() {
+      try {
+        const [daily, history, trades] = await Promise.all([
+          api('/scoring/daily'),
+          api('/scoring/history'),
+          api('/trades'),
+        ]);
+        renderDaily(daily);
+        renderHistory(history);
+        renderTrades(trades);
+      } catch (e) {
+        toast('加载失败：' + e.message);
+      }
+    }
+
+    loadPage();
+  </script>
+</body>
+</html>

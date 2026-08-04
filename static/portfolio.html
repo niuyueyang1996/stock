@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>组合分析 · 自建ETF</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <nav></nav>
+  <div class="container">
+    <div class="cards" id="summary"></div>
+    <div class="panel">
+      <h2>综合估值分位（1y，市值加权）</h2>
+      <div style="display:flex;gap:20px;flex-wrap:wrap">
+        <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
+        <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>组合综合 PE/PB 序列 <span class="sub">市值加权打包 · 可拖动缩放，分位随可见窗口变化</span></h2>
+      <div id="seriesTabs"></div>
+      <div class="row" style="align-items:stretch">
+        <div class="chart lg" id="peSeriesLine" style="flex:1;min-width:300px;height:340px"></div>
+        <div class="chart lg" id="pbSeriesLine" style="flex:1;min-width:300px;height:340px"></div>
+      </div>
+      <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
+        暂无组合估值序列（请先「全量刷新」拉取历史序列）。
+      </div>
+    </div>
+    <div class="row" style="align-items:stretch">
+      <div class="panel grow">
+        <h2>权重分布</h2>
+        <div class="chart sm" id="weightChart"></div>
+      </div>
+      <div class="panel grow">
+        <h2>各持仓 PE 分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
+        <div class="chart sm" id="peBars"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>逐股贡献</h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>PE</th><th>PB</th>
+                <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr>
+          </thead>
+          <tbody id="stockBody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="emptyTip" style="display:none">
+        暂无数据。请先在交易页录入持仓并点「全量刷新」。
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('portfolio');
+
+    async function loadPage() {
+      try {
+        const p = await api('/portfolio');
+        renderSummary(p);
+        renderGauges(p);
+        renderCharts(p);
+        renderTable(p);
+        renderSeries(p);
+      } catch (e) {
+        document.getElementById('emptyTip').style.display = 'block';
+      }
+    }
+
+    function renderSummary(p) {
+      const pf = p.portfolio;
+      const cards = [
+        ['综合PE', fmtNum(pf.pe), '亏损股允许参与'],
+        ['综合PB', fmtNum(pf.pb)],
+        ['PE分位(1y)', fmtPct(pf.pe_pct)],
+        ['PB分位(1y)', fmtPct(pf.pb_pct)],
+        ['综合股息率', fmtPct(pf.dv)],
+        ['综合ROE', fmtPct(pf.roe)],
+        ['营收增长', fmtPct(pf.revenue_yoy)],
+        ['净利增长', fmtPct(pf.profit_yoy)],
+        ['年化波动率', fmtPct(pf.volatility), `样本 ${pf.volatility_sample_days} 交易日`],
+      ];
+      document.getElementById('summary').innerHTML = cards.map(([l, v, sub]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div><div class="label">${sub || ''}</div></div>`).join('');
+    }
+
+    function gauge(el, value, name, color) {
+      const chart = initChart(el);
+      if (!chart) return;
+      chart.setOption({
+        series: [{
+          type: 'gauge', min: 0, max: 100, startAngle: 210, endAngle: -30,
+          progress: { show: true, width: 14, itemStyle: { color } },
+          axisLine: { lineStyle: { width: 14 } },
+          axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false },
+          pointer: { show: false },
+          detail: {
+            valueAnimation: true, formatter: (v) => (value === null ? '—' : v.toFixed(1) + '%'),
+            fontSize: 24, offsetCenter: [0, '50%'], color,
+          },
+          title: { offsetCenter: [0, '82%'], fontSize: 13, color: '#8a919f' },
+          data: [{ value: value ?? 0, name }],
+        }],
+      });
+    }
+
+    function renderGauges(p) {
+      gauge(document.getElementById('peGauge'), p.portfolio.pe_pct, '综合 PE 分位(1y)', '#2563eb');
+      gauge(document.getElementById('pbGauge'), p.portfolio.pb_pct, '综合 PB 分位(1y)', '#1971c2');
+    }
+
+    function renderCharts(p) {
+      if (p.weights.length) weightPie(document.getElementById('weightChart'), p.weights, '');
+      const items = p.stocks
+        .filter((s) => s.pe_pct !== null && s.pe_pct !== undefined)
+        .map((s) => ({ name: s.name, value: s.pe_pct }))
+        .sort((a, b) => b.value - a.value);
+      if (items.length) quantileBars(document.getElementById('peBars'), items, 'PE 分位(1y)');
+    }
+
+    function renderTable(p) {
+      const body = document.getElementById('stockBody');
+      body.innerHTML = '';
+      p.weights.forEach((w) => {
+        const s = p.stocks.find((x) => x.code === w.code);
+        if (!s) return;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name}</td>
+          <td>${fmtNum(w.weight)}%</td>
+          <td>${fmtNum(s.value)}</td>
+          <td>${fmtNum(s.pe)}</td>
+          <td>${fmtNum(s.pb)}</td>
+          <td>${fmtNum(s.pe_pct)}%</td>
+          <td>${fmtNum(s.pb_pct)}%</td>
+          <td>${fmtNum(s.dv)}%</td>
+          <td>${fmtNum(s.roe)}%</td>`;
+        body.appendChild(tr);
+      });
+      document.getElementById('emptyTip').style.display = p.weights.length ? 'none' : 'block';
+    }
+
+    // 组合综合 PE/PB 序列折线：周期 tab + dataZoom 拖动分位联动
+    let seriesPeriod = '3y';
+    function renderSeries(p) {
+      const s = p.series;
+      const empty = document.getElementById('seriesEmpty');
+      const tabsWrap = document.getElementById('seriesTabs');
+      const peEl = document.getElementById('peSeriesLine');
+      const pbEl = document.getElementById('pbSeriesLine');
+      if (!s || !Object.keys(s).length) {
+        empty.style.display = 'block';
+        tabsWrap.innerHTML = '';
+        peEl.innerHTML = '';
+        pbEl.innerHTML = '';
+        return;
+      }
+      empty.style.display = 'none';
+      if (!(seriesPeriod in s)) seriesPeriod = Object.keys(s)[0];
+      tabsWrap.innerHTML = '';
+      tabsWrap.appendChild(periodTabs({
+        periods: Object.keys(s),
+        active: seriesPeriod,
+        onChange: (p2) => { seriesPeriod = p2; drawSeries(s); },
+      }));
+      drawSeries(s);
+    }
+
+    function drawSeries(s) {
+      const d = s[seriesPeriod];
+      if (!d || !d.dates.length) return;
+      // 后端为降序（最新在前），前端统一为升序显示
+      const dates = d.dates.slice().reverse();
+      const pe = d.pe.slice().reverse();
+      const pb = d.pb.slice().reverse();
+      portfolioValuationLine(document.getElementById('peSeriesLine'), { dates, values: pe }, d.cur_pe, {
+        title: `组合综合 PE（${seriesPeriod}）`, label: '综合PE', color: '#2563eb',
+      });
+      portfolioValuationLine(document.getElementById('pbSeriesLine'), { dates, values: pb }, d.cur_pb, {
+        title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
+      });
+    }
+
+    loadPage();
+  </script>
+</body>
+</html>
