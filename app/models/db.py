@@ -181,6 +181,24 @@ CREATE TABLE IF NOT EXISTS dividend_adjustments (
     PRIMARY KEY (code, ex_date)
 );
 
+CREATE TABLE IF NOT EXISTS ai_models (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,           -- 显示名（如 DeepSeek）
+    base_url   TEXT NOT NULL,           -- OpenAI 兼容地址（https://api.deepseek.com/v1）
+    api_key    TEXT NOT NULL,
+    model      TEXT NOT NULL,           -- 模型名（deepseek-chat 等）
+    is_active  INTEGER DEFAULT 0,       -- 当前使用
+    created_at TEXT, updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_reports (
+    code       TEXT PRIMARY KEY,        -- 股票代码
+    name       TEXT,
+    report_json TEXT NOT NULL,          -- 结构化报告（评级/风险系数/维度/原因/详情）
+    model_name TEXT,                    -- 生成报告所用模型
+    created_at TEXT, updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS fx_rate_cache (
     rate_date  TEXT NOT NULL,           -- 'YYYY-MM-DD'
     currency   TEXT NOT NULL,           -- 币种代码（如 HKD）

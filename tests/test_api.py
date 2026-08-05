@@ -1,14 +1,5 @@
 """API 集成测试：全部路由返回结构与错误码（离线，mock 行情）。"""
 import pytest
-from fastapi.testclient import TestClient
-
-from app.main import create_app
-
-
-@pytest.fixture
-def client():
-    # raise_server_exceptions=False：让服务端异常由全局 handler 转成 500+detail 响应（与真实 uvicorn 行为一致）
-    return TestClient(create_app(), raise_server_exceptions=False)
 
 
 class _WriteDetector:

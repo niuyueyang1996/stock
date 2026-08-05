@@ -29,8 +29,10 @@ def rebuild(code: str, conn) -> dict:
     人民币口径：原币金额 × 交易日汇率。某笔买入汇率缺失时人民币成本不可算（置 None）。
     """
     currency = _currency_of(conn, code)
+    # 按 id（录入顺序）重放：adjust 交易用微秒时间戳避免 UNIQUE 冲突，字符串排序会把
+    # 凌晨微秒时间戳排到当天 09:00 买入之前，导致 adjust 先于买入处理报"数量为 0 或负"。
     rows = conn.execute(
-        "SELECT * FROM trades WHERE code=? ORDER BY trade_time, id", (code,)
+        "SELECT * FROM trades WHERE code=? ORDER BY id", (code,)
     ).fetchall()
     qty = 0.0
     avg_cost = 0.0

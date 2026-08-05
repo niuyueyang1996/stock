@@ -43,3 +43,14 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setattr(smod, "_load_stock_list", lambda: [])
     monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
     yield
+
+
+@pytest.fixture
+def client():
+    """TestClient（共享，供各 API 测试模块使用）。"""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    # raise_server_exceptions=False：让服务端异常由全局 handler 转成 500+detail 响应
+    return TestClient(create_app(), raise_server_exceptions=False)
