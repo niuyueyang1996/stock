@@ -82,7 +82,6 @@
       const groups = groupByTag(sortedStocks(p.stocks));
       Object.keys(groups).forEach((tag) => {
         const head = document.createElement('h3');
-        head.style.cssText = 'grid-column:1/-1;margin:8px 0 2px';
         head.textContent = tag;
         wrap.appendChild(head);
         groups[tag].forEach((s) => {
@@ -92,7 +91,7 @@
           <div class="sc-head">
             <a class="sc-code" href="/static/stock.html?code=${s.code}">${s.code}</a>
             <span class="sc-name">${s.name}</span>
-            <span class="tag-badge">${s.tag || ''}</span>
+            <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${s.tag || ''}</span>
             <span class="sc-w">权重 ${fmtNum(s.weight)}%</span>
           </div>
           <div class="sc-grid">
@@ -102,6 +101,7 @@
             <div><span class="k">市值</span><span>${fmtNum(s.value)}</span></div>
             <div><span class="k">盈亏</span><span class="${cls(s.pnl)}">${signed(s.pnl)}</span></div>
             <div><span class="k">盈亏%</span><span class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</span></div>
+            <div><span class="k">今日盈亏</span><span class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</span></div>
             <div><span class="k">PE</span><span>${fmtNum(s.pe)}</span></div>
             <div><span class="k">PB</span><span>${fmtNum(s.pb)}</span></div>
             <div><span class="k">PE分位</span><span>${fmtNum(s.pe_pct)}%</span></div>
@@ -146,7 +146,7 @@
         `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div>${note ? `<div class="label ${noteCls || ''}">${note}</div>` : ''}</div>`;
       document.getElementById('summary').innerHTML = `
         <div class="panel" style="grid-column:1/-1">
-          <h3 style="margin:0 0 8px">简况</h3>
+          <h3>简况</h3>
           <div class="cards summary-main" style="margin-bottom:8px">${main.map(card).join('')}</div>
           <div class="cards summary-sub">${sub.map(card).join('')}</div>
         </div>`;
@@ -186,18 +186,19 @@
             <table>
               <thead><tr>
                 <th>代码/名称</th><th>现价</th><th>数量</th><th>成本</th><th>市值</th>
-                <th>盈亏</th><th>盈亏%</th><th>PE(TTM)</th><th>PB</th>
+                <th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th>
                 <th>PE分位</th><th>PB分位</th><th>股息率</th><th>权重</th>
               </tr></thead>
               <tbody>${rows.map((s) => `
                 <tr>
-                  <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge">${s.tag || ''}</span></td>
+                  <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${s.tag || ''}</span></td>
                   <td>${fmtNum(s.price)}</td>
                   <td>${fmtNum(s.quantity)}</td>
                   <td>${fmtNum(s.avg_cost)}</td>
                   <td>${fmtNum(s.value)}</td>
                   <td class="${cls(s.pnl)}">${signed(s.pnl)}</td>
                   <td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>
+                  <td class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</td>
                   <td>${fmtNum(s.pe)}</td>
                   <td>${fmtNum(s.pb)}</td>
                   <td>${fmtNum(s.pe_pct)}%</td>

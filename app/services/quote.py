@@ -9,7 +9,7 @@
 """
 from datetime import datetime
 
-from app.data.cache import get_daily_price, get_latest_daily_price
+from app.data.cache import get_daily_price, get_latest_daily_price, get_prev_close
 
 
 def get_quote(code: str, now: datetime | None = None, stale: dict | None = None) -> dict:
@@ -33,18 +33,21 @@ def get_quote(code: str, now: datetime | None = None, stale: dict | None = None)
 
 
 def _row_to_quote(row, today: str) -> dict:
-    # 优先用刷新时算好的 pct_change，无则用开盘价占位估算
+    # 真正的"昨日收盘价"：缓存中早于该交易日的最近一条收盘
+    prev_close = get_prev_close(row["code"], row["trade_date"])
+    # 优先用刷新时算好的 pct_change；无则用真实昨收兜底估算
     if row["pct_change"] is not None:
         pct_chg = round(float(row["pct_change"]), 2)
+    elif prev_close:
+        pct_chg = round((row["close"] / prev_close - 1) * 100, 2)
     else:
-        prev_close = row["open"]
-        pct_chg = (row["close"] / prev_close - 1) * 100 if prev_close else 0.0
+        pct_chg = None
     return {
         "code": row["code"],
         "name": row["name"] if "name" in row.keys() else row["code"],
         "price": row["close"],
-        "pct_chg": round(pct_chg, 2),
-        "prev_close": row["open"],
+        "pct_chg": round(pct_chg, 2) if pct_chg is not None else None,
+        "prev_close": round(prev_close, 3) if prev_close else None,
         "open": row["open"],
         "high": row["high"],
         "low": row["low"],

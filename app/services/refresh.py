@@ -58,7 +58,10 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     elif last_date == today:
         if latest["is_closed"]:
             return {"code": code, "fetched": 0, "reason": "today_closed"}
-        start = today  # 盘中，刷新今天
+        # 盘中刷新今天；但若缓存只有当天快照、缺历史（无昨收），则补拉历史窗口，
+        # 否则昨收/今日盈亏永远算不出来（如首次刷新即落当天快照的 ETF）
+        start = today if get_prev_close(code, today) is not None \
+            else (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
     elif last_date:
         start = (date.fromisoformat(last_date) + timedelta(days=1)).isoformat()
     else:
@@ -98,13 +101,16 @@ def _sync_realtime_quote(code: str, now: datetime):
     if not q or not q.price:
         return None
     today = now.date().isoformat()
+    # 涨跌幅以本地缓存中的真实昨日收盘为基准，避免源（新浪）盘中用日K倒数第二根而跳日
+    prev_close = get_prev_close(code, today)
+    pct_chg = round((q.price / prev_close - 1) * 100, 2) if prev_close else q.pct_chg
     upsert_daily_prices(
         code,
         [Bar(date=today, open=q.open or q.price, high=q.high or q.price,
              low=q.low or q.price, close=q.price, volume=q.volume or 0.0,
              amount=q.amount or 0.0)],
         manager.sources[0].name(),
-        [q.pct_chg],
+        [pct_chg],
     )
     return q
 

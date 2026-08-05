@@ -235,9 +235,13 @@
       const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
       const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
       const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
+      const dayPnlPrice = (q.price != null && q.prev_close != null) ? q.price - q.prev_close : null;
       document.getElementById('quoteCards').innerHTML = [
-        ['现价', fmtNum(q.price), q.pct_chg >= 0 ? 'up' : 'down'],
-        ['涨跌幅', signed(q.pct_chg) + '%', cls(q.pct_chg)],
+        ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'],
+        ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
+        ['今开', fmtNum(q.open)],
+        ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
+        ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
         ['实时市值', mvYi],
       ].map(([l, v, c]) => `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
 
@@ -291,14 +295,22 @@
         return;
       }
       const live = d.live || {};
-      valuationLine(peEl, series.pe, [
-        { name: '实时', value: live.pe, color: '#2563eb' },
-        { name: '前瞻', value: live.fwd_pe, color: '#e8590c', symbol: 'triangle' },
-      ], 'PE(TTM) 历史（' + histPeriod + '）');
-      valuationLine(pbEl, series.pb, [
-        { name: '实时', value: live.pb, color: '#2563eb' },
-        { name: '前瞻', value: live.fwd_pb, color: '#e8590c', symbol: 'triangle' },
-      ], 'PB 历史（' + histPeriod + '）');
+      // 个股图：实时(蓝pin+蓝虚线) + 前瞻(橙triangle+橙虚线)，与组合图同款样式，数值显示在图上方 subtext
+      const mk = (v) => (v == null ? [] : [{ name: '前瞻', value: v, color: '#e8590c', symbol: 'triangle', line: true }]);
+      valuationChart(peEl, series.pe, {
+        title: 'PE 历史（' + histPeriod + '）', label: 'PE', color: '#2563eb',
+        marks: [
+          { name: '实时', value: live.pe, color: '#2563eb', line: true },
+          ...mk(live.fwd_pe),
+        ],
+      });
+      valuationChart(pbEl, series.pb, {
+        title: 'PB 历史（' + histPeriod + '）', label: 'PB', color: '#2563eb',
+        marks: [
+          { name: '实时', value: live.pb, color: '#2563eb', line: true },
+          ...mk(live.fwd_pb),
+        ],
+      });
     }
 
     function renderQuantiles(ql) {

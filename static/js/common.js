@@ -33,6 +33,21 @@ function toast(msg, ms = 2500) {
   toast._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+// 持仓页/组合页：点击标签直接修改（事件委托，重渲染后依然生效）
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-edittag]');
+  if (!b) return;
+  const code = b.dataset.edittag;
+  const cur = b.textContent.trim();
+  const t = prompt('修改标签（如：红利/科技/银行，留空报错）', cur || '');
+  if (t === null) return; // 取消
+  const tag = t.trim();
+  if (!tag) { toast('标签不能为空'); return; }
+  api('/stocks/' + code + '/tag', { method: 'PUT', body: { tag } })
+    .then(() => { toast('已修改标签'); loadPage(); })
+    .catch((e2) => toast('修改失败：' + e2.message, 4000));
+});
+
 function initNav(active) {
   const nav = document.querySelector('nav');
   if (!nav) return;

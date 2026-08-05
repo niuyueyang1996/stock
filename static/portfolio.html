@@ -60,7 +60,7 @@
       <div style="overflow-x:auto">
         <table>
           <thead>
-            <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>PE</th><th>PB</th>
+            <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th>
                 <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr>
           </thead>
           <tbody id="stockBody"></tbody>
@@ -162,7 +162,7 @@
           </div>
           <div style="overflow-x:auto">
             <table>
-              <thead><tr><th>代码/名称</th><th>权重</th><th>市值</th><th>PE</th><th>PB</th><th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr></thead>
+              <thead><tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th><th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr></thead>
               <tbody id="tagStockBody"></tbody>
             </table>
           </div>
@@ -199,22 +199,27 @@
         .sort((a, b) => b.value - a.value);
       if (peItems.length) quantileBars(document.getElementById('tagPeChart'), peItems, 'PE 分位(1y)');
 
+      const table = el.querySelector('#tagStockBody').closest('table');
       const body = document.getElementById('tagStockBody');
-      body.innerHTML = '';
-      sortedStocks(section.stocks, tagSortMode).forEach((s) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
+      const rows = sortedStocks(section.stocks, tagSortMode);
+      body.innerHTML = rows.map((s) => `
+        <tr>
           <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} ${s.is_etf ? '<span class="tag-badge">ETF</span>' : ''}</td>
           <td>${fmtNum(s.weight)}%</td>
           <td>${fmtNum(s.value)}</td>
+          <td class="${cls(s.pnl)}">${signed(s.pnl)}</td>
+          <td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>
+          <td class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</td>
           <td>${fmtNum(s.pe)}</td>
           <td>${fmtNum(s.pb)}</td>
           <td>${fmtNum(s.pe_pct)}%</td>
           <td>${fmtNum(s.pb_pct)}%</td>
           <td>${fmtNum(s.dv)}%</td>
-          <td>${fmtNum(s.roe)}%</td>`;
-        body.appendChild(tr);
-      });
+          <td>${fmtNum(s.roe)}%</td>
+        </tr>`).join('');
+      const oldFoot = table.querySelector('tfoot');
+      if (oldFoot) oldFoot.remove();
+      if (rows.length) table.appendChild(Object.assign(document.createElement('tfoot'), { innerHTML: sumRow(rows) }));
       const sel = document.getElementById('tagSortSel');
       if (sel) {
         sel.addEventListener('change', (e) => {
@@ -261,7 +266,7 @@
         `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div>${note ? `<div class="label ${noteCls || ''}">${note}</div>` : ''}</div>`;
       document.getElementById('summary').innerHTML = `
         <div class="panel" style="grid-column:1/-1">
-          <h3 style="margin:0 0 8px">简况</h3>
+          <h3>简况</h3>
           <div class="cards summary-main" style="margin-bottom:8px">${main.map(card).join('')}</div>
           <div class="cards summary-sub">${sub.map(card).join('')}</div>
         </div>`;
@@ -362,24 +367,46 @@
       return arr;
     }
 
+    // 逐股/标签明细表格的合计行（权重/市值/盈亏/今日盈亏求和）
+    function sumRow(rows) {
+      const w = rows.reduce((s, x) => s + x.weight, 0);
+      const v = rows.reduce((s, x) => s + x.value, 0);
+      const pnl = rows.reduce((s, x) => s + (x.pnl || 0), 0);
+      const day = rows.reduce((s, x) => s + (x.day_pnl || 0), 0);
+      return `<tr class="sumrow">
+        <td>合计 · ${rows.length} 只</td>
+        <td>${fmtNum(w)}%</td>
+        <td>${fmtNum(v)}</td>
+        <td class="${cls(pnl)}">${signed(pnl)}</td>
+        <td class="muted">—</td>
+        <td class="${cls(day)}">${signed(day)}</td>
+        <td colspan="6"></td>
+      </tr>`;
+    }
+
     function renderTable(p) {
+      const table = document.getElementById('tablePanel').querySelector('table');
       const body = document.getElementById('stockBody');
-      body.innerHTML = '';
-      sortedStocks(p.stocks, pfSortMode).forEach((s) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge">${s.tag || ''}</span></td>
+      const rows = sortedStocks(p.stocks, pfSortMode);
+      body.innerHTML = rows.map((s) => `
+        <tr>
+          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${s.tag || ''}</span></td>
           <td>${fmtNum(s.weight)}%</td>
           <td>${fmtNum(s.value)}</td>
+          <td class="${cls(s.pnl)}">${signed(s.pnl)}</td>
+          <td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>
+          <td class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</td>
           <td>${fmtNum(s.pe)}</td>
           <td>${fmtNum(s.pb)}</td>
           <td>${fmtNum(s.pe_pct)}%</td>
           <td>${fmtNum(s.pb_pct)}%</td>
           <td>${fmtNum(s.dv)}%</td>
-          <td>${fmtNum(s.roe)}%</td>`;
-        body.appendChild(tr);
-      });
-      document.getElementById('emptyTip').style.display = p.stocks.length ? 'none' : 'block';
+          <td>${fmtNum(s.roe)}%</td>
+        </tr>`).join('');
+      const oldFoot = table.querySelector('tfoot');
+      if (oldFoot) oldFoot.remove();
+      if (rows.length) table.appendChild(Object.assign(document.createElement('tfoot'), { innerHTML: sumRow(rows) }));
+      document.getElementById('emptyTip').style.display = rows.length ? 'none' : 'block';
     }
 
     // 组合综合 PE/PB 序列折线：周期 tab + dataZoom 拖动分位联动
@@ -411,16 +438,19 @@
     function drawSeries(s) {
       const d = s[seriesPeriod];
       if (!d || !d.dates.length) return;
-      const dates = d.dates;
-      const pe = d.pe;
-      const pb = d.pb;
-      portfolioValuationLine(document.getElementById('peSeriesLine'), { dates, values: pe }, d.cur_pe, {
+      const fwd = lastPortfolio ? lastPortfolio.portfolio : {};
+      // 组合图：实时(蓝线+pin) + 前瞻(橙线+triangle)，与个股图同款颜色规范；图上不写字，由上方图例说明颜色对应
+      const mk = (cur, fwdVal) => [
+        { name: '实时', value: cur, color: '#2563eb', line: true },
+        ...(fwdVal == null ? [] : [{ name: '前瞻', value: fwdVal, color: '#e8590c', symbol: 'triangle', line: true }]),
+      ];
+      valuationChart(document.getElementById('peSeriesLine'), { dates: d.dates, values: d.pe }, {
         title: `组合综合 PE（${seriesPeriod}）`, label: '综合PE', color: '#2563eb',
-        fwdValue: lastPortfolio ? lastPortfolio.portfolio.fwd_pe : undefined,
+        marks: mk(d.cur_pe, fwd.fwd_pe),
       });
-      portfolioValuationLine(document.getElementById('pbSeriesLine'), { dates, values: pb }, d.cur_pb, {
+      valuationChart(document.getElementById('pbSeriesLine'), { dates: d.dates, values: d.pb }, {
         title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
-        fwdValue: lastPortfolio ? lastPortfolio.portfolio.fwd_pb : undefined,
+        marks: mk(d.cur_pb, fwd.fwd_pb),
       });
     }
 

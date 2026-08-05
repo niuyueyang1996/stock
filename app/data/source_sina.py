@@ -10,7 +10,7 @@ import akshare as ak
 import requests
 
 from app.config import HTTP_HEADERS, REQUEST_TIMEOUT
-from app.data.base import Bar, DataSource, Financials, Quote, is_hk_code, to_symbol
+from app.data.base import Bar, DataSource, Financials, Quote, is_etf_code, is_hk_code, to_symbol
 
 
 class SinaSource(DataSource):
@@ -110,6 +110,27 @@ class SinaSource(DataSource):
                         )
                     )
             return bars
+        if is_etf_code(code):
+            # 场内 ETF 日K用东财接口（stock_zh_a_daily 不支持 ETF）
+            df = ak.fund_etf_hist_em(
+                symbol=code, period="daily",
+                start_date=start.replace("-", ""), end_date=end.replace("-", ""),
+                adjust="",
+            )
+            if df is None or df.empty:
+                return []
+            return [
+                Bar(
+                    date=str(r["日期"]),
+                    open=float(r["开盘"]),
+                    high=float(r["最高"]),
+                    low=float(r["最低"]),
+                    close=float(r["收盘"]),
+                    volume=float(r["成交量"]),
+                    amount=float(r["成交额"]),
+                )
+                for _, r in df.iterrows()
+            ]
         symbol = to_symbol(code)
         df = ak.stock_zh_a_daily(symbol=symbol, start_date=start, end_date=end)
         if df is None or df.empty:

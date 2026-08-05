@@ -35,7 +35,9 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
             return {"code": code, "name": name, "error": "行情获取失败", "missing": True}
     value = quantity * price
     pct_chg = q.get("pct_chg") if q else None
-    day_pnl = round(value * (pct_chg or 0) / 100, 2) if pct_chg is not None else None
+    prev_close = q.get("prev_close") if q else None
+    # 今日盈亏 =（现价 − 昨日收盘）× 股数
+    day_pnl = round((price - prev_close) * quantity, 2) if prev_close else None
     tag = tag or auto_tag(code, name)
     is_etf = is_etf or is_etf_code(code) or is_hk_code(code) or tag in ("ETF", "港股")
 
@@ -76,6 +78,7 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
         "tag": tag,
         "is_etf": is_etf,
         "price": round(price, 3),
+        "prev_close": round(prev_close, 3) if prev_close else None,
         "quantity": quantity,
         "avg_cost": round(avg_cost, 3),
         "value": round(value, 2),

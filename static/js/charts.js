@@ -155,34 +155,58 @@ function fundflowBars(el, latest) {
   return chart;
 }
 
-// 估值历史折线（百度序列直接画）：实时/前瞻标注 + 可见窗口 P10/30/50/70/90 分位线 + 最低/最高点
-function valuationLine(el, series, marks, title) {
+// ============================================================
+// 估值历史折线（个股 / 组合通用控件）
+// series: [{date,value}] 或 {dates, values}
+// opts: {
+//   title, label, color,
+//   marks: [{name, value, color, symbol, line}]
+// }
+//   - marks 为目标标记（如 实时/综合PE/前瞻）：只画图形符号（默认 pin，可 triangle），不画文字；
+//     数值统一显示在标题 subtext（含可见窗口分位 + 高/低点），避免互相覆盖/压住折线
+//   - line:true 时额外画一条该值的虚线
+//   - 图上方有分位线控制条（P10/30/50/70/90），数值显示在按钮上
+// ============================================================
+function valuationChart(el, series, opts) {
   const chart = initChart(el);
   if (!chart) return null;
-  const dates = series.map((d) => d.date);
-  const values = series.map((d) => d.value);
+  const o = opts || {};
+  const title = o.title || '';
+  const label = o.label || '估值';
+  const color = o.color || '#2563eb';
+  const isArr = Array.isArray(series);
+  const dates = isArr ? series.map((d) => d.date) : (series.dates || []);
+  const values = isArr ? series.map((d) => d.value) : (series.values || []);
   const lastX = dates.length ? dates.length - 1 : 0;
-  const targets = (marks || []).filter((m) => m.value !== null && m.value !== undefined);
+  // 目标标记（过滤无效值；只画图形，文字交给 subtext）
+  const targets = (o.marks || []).filter((m) => m.value !== null && m.value !== undefined);
   const points = targets.map((m) => ({
     coord: [lastX, m.value],
     value: m.name,
     symbol: m.symbol || 'pin',
-    symbolSize: m.symbolSize || 28,
+    symbolSize: m.symbolSize || (m.symbol === 'triangle' ? 8 : 11),
     itemStyle: { color: m.color || '#2563eb' },
-    label: {
-      show: true, position: 'top', fontSize: 10,
-      formatter: `${m.name} ${m.value}`,
-      color: '#333', backgroundColor: '#fff', padding: [2, 4], borderRadius: 3,
-    },
+    label: { show: false }, // 图形旁不写「实时/前瞻」文字，只靠颜色图案区分
   }));
   const QUANTILES = [10, 30, 50, 70, 90];
   let currentQs = [];
   const activeLines = new Set();
 
-  // 分位线控制条：放在图表上方，重绘时清理旧控件
+  // 图例说明（实时/前瞻 的颜色+图案对应关系）放在图表上方，与分位控制条一起，重绘时清理旧控件
   const parent = el.parentNode;
   const ctrlKey = el.id || ('vc-' + Math.random().toString(36).slice(2));
   if (parent) parent.querySelectorAll('.valuation-quantiles[data-for="' + ctrlKey + '"]').forEach((x) => x.remove());
+  if (parent) parent.querySelectorAll('.valuation-legend[data-for="' + ctrlKey + '"]').forEach((x) => x.remove());
+  const legend = document.createElement('div');
+  legend.className = 'valuation-legend';
+  legend.dataset.for = ctrlKey;
+  legend.innerHTML = targets.map((m) => {
+    const c = m.color || '#e03131';
+    return m.symbol === 'triangle'
+      ? `<span class="vg"><i class="vg-tri" style="border-bottom-color:${c}"></i>${m.name}</span>`
+      : `<span class="vg"><i class="vg-pin" style="background:${c}"></i>${m.name}</span>`;
+  }).join('');
+  if (parent) parent.insertBefore(legend, el);
   const ctrl = document.createElement('div');
   ctrl.className = 'valuation-quantiles';
   ctrl.dataset.for = ctrlKey;
@@ -223,248 +247,79 @@ function valuationLine(el, series, marks, title) {
   function buildSeries() {
     const { min, max } = windowMinMax();
     const pointData = points.slice();
+    // 可见窗口高/低点：小圆点 + 白底小字（向内自适应，避免压住折线或画到图外）
+    const mid = min && max ? (min.v + max.v) / 2 : null;
+    const inward = (v) => (mid != null && v > mid ? 'bottom' : 'top');
+    const tipLabel = { backgroundColor: '#fff', padding: [2, 4], borderRadius: 3 };
     if (min) {
       pointData.push({
         coord: [min.i, min.v], value: '低 ' + fmtNum(min.v),
-        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#2f9e44' },
-        label: {
-          show: true, position: 'bottom', fontSize: 10,
-          formatter: '低 ' + fmtNum(min.v), color: '#2f9e44',
-        },
+        symbol: 'circle', symbolSize: 8, itemStyle: { color: '#2f9e44' },
+        label: { ...tipLabel, position: inward(min.v), fontSize: 10 },
       });
     }
     if (max) {
       pointData.push({
         coord: [max.i, max.v], value: '高 ' + fmtNum(max.v),
-        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#e03131' },
-        label: {
-          show: true, position: 'top', fontSize: 10,
-          formatter: '高 ' + fmtNum(max.v), color: '#e03131',
-        },
+        symbol: 'circle', symbolSize: 8, itemStyle: { color: '#e03131' },
+        label: { ...tipLabel, position: inward(max.v), fontSize: 10 },
       });
     }
-    const lineData = currentQs
-      .filter((q) => activeLines.has(q.p))
-      .map((q) => ({ yAxis: q.v, pct: q.p }));
-    return {
-      name: title || '估值', type: 'line', data: values, symbol: 'none', smooth: true,
-      lineStyle: { width: 2, color: '#2563eb' },
-      areaStyle: { opacity: 0.1 },
-      markPoint: { data: pointData },
-      markLine: lineData.length ? {
-        silent: true, symbol: 'none',
-        label: {
-          formatter: (p) => `P${p.data.pct} ${fmtNum(p.data.yAxis)}`,
-          position: 'insideEndTop', fontSize: 10, color: '#1971c2',
-        },
-        lineStyle: { color: '#1971c2', type: 'dashed', width: 1 },
-        data: lineData,
-      } : undefined,
-    };
-  }
-
-  function renderControls() {
-    currentQs = calcQuantiles(windowValues());
-    ctrl.innerHTML = '';
-    const hint = document.createElement('span');
-    hint.className = 'muted';
-    hint.textContent = '分位线：';
-    ctrl.appendChild(hint);
-    currentQs.forEach((q) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'qbtn' + (activeLines.has(q.p) ? ' active' : '');
-      b.textContent = `P${q.p} ${fmtNum(q.v)}`;
-      b.onclick = () => {
-        if (activeLines.has(q.p)) activeLines.delete(q.p);
-        else activeLines.add(q.p);
-        renderControls();
-        applySeries();
-      };
-      ctrl.appendChild(b);
-    });
-  }
-
-  function applySeries() {
-    chart.setOption({ series: [buildSeries()] }, { replaceMerge: ['series'] });
-  }
-
-  // 拖动缩放 → 各目标值在可见窗口内的分位，更新标题副文本
-  function windowSub() {
-    if (!targets.length) return;
-    const vis = windowValues();
-    const parts = targets.map((m) => {
-      const pct = percentileOf(vis, m.value);
-      return `${m.name} 窗口分位 ${pct === null ? '样本不足' : pct + '%'}`;
-    });
-    chart.setOption({
-      title: {
-        text: title || '', left: 'center', textStyle: { fontSize: 14 },
-        subtext: parts.join('　'),
-        subtextStyle: { fontSize: 12, color: '#e8590c' },
-      },
-    });
-  }
-
-  function onZoom() {
-    windowSub();
-    renderControls();
-    applySeries();
-  }
-
-  chart.off('datazoom');
-  chart.on('datazoom', onZoom);
-
-  chart.setOption({
-    title: { text: title || '', left: 'center', textStyle: { fontSize: 14 } },
-    tooltip: {
-      trigger: 'axis', axisPointer: { type: 'cross' },
-      formatter: (ps) => {
-        const p = ps[0];
-        if (!p || p.componentType !== 'series') return '';
-        return `${p.axisValue}<br>${p.seriesName}：${p.value}`;
-      },
-    },
-    grid: { left: 60, right: 50, top: 46, bottom: 46 },
-    xAxis: {
-      type: 'category', data: dates, boundaryGap: false,
-      axisLabel: { fontSize: 10, hideOverlap: true },
-      axisLine: { lineStyle: { color: '#ced4da' } },
-      axisTick: { alignWithLabel: true },
-    },
-    yAxis: {
-      type: 'value', scale: true, axisLabel: { fontSize: 10 },
-      splitLine: { lineStyle: { color: '#f1f3f5', type: 'dashed' } },
-    },
-    dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-      { type: 'slider', height: 16, bottom: 8, start: 0, end: 100 },
-    ],
-    series: [buildSeries()],
-  });
-  renderControls();
-  if (targets.length) windowSub();
-  return chart;
-}
-
-// 组合综合 PE/PB 序列折线：完整序列 + 当前值 markLine/markPoint + dataZoom 窗口分位联动
-function portfolioValuationLine(el, series, curValue, opts) {
-  const chart = initChart(el);
-  if (!chart) return null;
-  const o = opts || {};
-  const dates = (series && series.dates) || [];
-  const values = (series && series.values) || [];
-  const lastX = dates.length ? dates.length - 1 : 0;
-  const hasCur = curValue !== null && curValue !== undefined;
-  const hasFwd = o.fwdValue !== null && o.fwdValue !== undefined;
-  const label = o.label || '综合';
-  const color = o.color || '#2563eb';
-  const QUANTILES = [10, 30, 50, 70, 90];
-  let currentQs = [];
-  const activeLines = new Set();
-
-  const parent = el.parentNode;
-  const ctrlKey = el.id || ('vc-' + Math.random().toString(36).slice(2));
-  if (parent) parent.querySelectorAll('.valuation-quantiles[data-for="' + ctrlKey + '"]').forEach((x) => x.remove());
-  const ctrl = document.createElement('div');
-  ctrl.className = 'valuation-quantiles';
-  ctrl.dataset.for = ctrlKey;
-  if (parent) parent.insertBefore(ctrl, el);
-
-  function windowValues() {
-    const win = dataZoomWindow(chart, values.length);
-    const vis = [];
-    for (let i = win.start; i <= win.end; i++) {
-      const v = values[i];
-      if (v !== null && v !== undefined) vis.push(v);
-    }
-    return vis;
-  }
-
-  function calcQuantiles(vis) {
-    if (!vis.length) return [];
-    const sorted = vis.slice().sort((a, b) => a - b);
-    return QUANTILES.map((p) => ({
-      p,
-      v: sorted[Math.min(sorted.length - 1, Math.floor(p / 100 * sorted.length))],
-    }));
-  }
-
-  function windowMinMax() {
-    const win = dataZoomWindow(chart, values.length);
-    let min = null;
-    let max = null;
-    for (let i = win.start; i <= win.end; i++) {
-      const v = values[i];
-      if (v === null || v === undefined) continue;
-      if (!min || v < min.v) min = { i, v };
-      if (!max || v > max.v) max = { i, v };
-    }
-    return { min, max };
-  }
-
-  function buildSeries() {
-    const { min, max } = windowMinMax();
-    const pointData = [];
-    if (min) {
-      pointData.push({
-        coord: [min.i, min.v], value: '低 ' + fmtNum(min.v),
-        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#2f9e44' },
-        label: { show: true, position: 'bottom', fontSize: 10, formatter: '低 ' + fmtNum(min.v), color: '#2f9e44' },
-      });
-    }
-    if (max) {
-      pointData.push({
-        coord: [max.i, max.v], value: '高 ' + fmtNum(max.v),
-        symbol: 'circle', symbolSize: 12, itemStyle: { color: '#e03131' },
-        label: { show: true, position: 'top', fontSize: 10, formatter: '高 ' + fmtNum(max.v), color: '#e03131' },
-      });
-    }
-    if (hasCur) {
-      pointData.push({
-        coord: [lastX, curValue], value: curValue,
-        symbol: 'pin', symbolSize: 32, itemStyle: { color: '#e03131' },
-        label: { show: true, formatter: String(curValue), fontSize: 10, color: '#fff' },
-      });
-    }
-    if (hasFwd) {
-      pointData.push({
-        coord: [lastX, o.fwdValue], value: '前瞻 ' + o.fwdValue,
-        symbol: 'triangle', symbolSize: 26, itemStyle: { color: '#e8590c' },
-        label: { show: true, position: 'top', fontSize: 10, formatter: '前瞻 ' + o.fwdValue, color: '#e8590c' },
-      });
-    }
-
+    // 虚线只标位置，文字数值显示在标题 subtext；分位线数值在控制条按钮上
     const lineData = [];
-    if (hasCur) {
+    targets.filter((m) => m.line).forEach((m) => {
       lineData.push({
-        yAxis: curValue, name: label,
-        lineStyle: { color: '#e03131', type: 'dashed' },
-        label: { formatter: `${label} ${curValue}`, position: 'insideEndTop', fontSize: 11, color: '#e03131' },
+        yAxis: m.value, name: m.name,
+        lineStyle: { color: m.color || '#e03131', type: 'dashed' },
       });
-    }
-    if (hasFwd) {
-      lineData.push({
-        yAxis: o.fwdValue, name: '前瞻',
-        lineStyle: { color: '#e8590c', type: 'dashed' },
-        label: { formatter: '前瞻 ' + o.fwdValue, position: 'insideEndTop', fontSize: 11, color: '#e8590c' },
-      });
-    }
+    });
     currentQs.filter((q) => activeLines.has(q.p)).forEach((q) => {
       lineData.push({
         yAxis: q.v, pct: q.p,
-        lineStyle: { color: '#1971c2', type: 'dashed' },
-        label: { formatter: `P${q.p} ${fmtNum(q.v)}`, position: 'insideEndTop', fontSize: 10, color: '#1971c2' },
+        lineStyle: { color: '#2f9e44', type: 'dashed' },
       });
     });
-
     return {
       name: label, type: 'line', data: values, symbol: 'none', smooth: true,
       lineStyle: { width: 2, color },
       areaStyle: { opacity: 0.1 },
       markPoint: { data: pointData },
-      markLine: lineData.length ? { silent: true, symbol: 'none', data: lineData } : undefined,
+      markLine: lineData.length ? {
+        silent: true, symbol: 'none',
+        label: { show: false },
+        lineStyle: { type: 'dashed' },
+        data: lineData,
+      } : undefined,
     };
+  }
+
+  // 图表上方 subtext：彩色 chip 标签(实时/前瞻) + 数值 + 绿色分位；第二行低/高（语义色呼应高低点圆点）
+  function updateSub() {
+    const vis = windowValues();
+    const pct = (v) => {
+      const p = percentileOf(vis, v);
+      return p == null ? '' : 'P' + p;
+    };
+    const rich = { q: { color: '#2f9e44', fontSize: 11, fontWeight: 'bold' } };
+    const parts = targets.map((m, i) => {
+      const k = 'c' + i;
+      rich[k] = {
+        color: '#fff', backgroundColor: m.color || '#2563eb',
+        borderRadius: 3, padding: [2, 5], fontSize: 11, fontWeight: 'bold',
+      };
+      const p = pct(m.value);
+      return `{${k}|${m.name}} ${fmtNum(m.value)}` + (p ? ` {q|${p}}` : '');
+    });
+    const { min, max } = windowMinMax();
+    const mm = [];
+    if (min) mm.push('{lo|低 ' + fmtNum(min.v) + '}');
+    if (max) mm.push('{hi|高 ' + fmtNum(max.v) + '}');
+    rich.lo = { color: '#2f9e44', fontSize: 12 };
+    rich.hi = { color: '#e03131', fontSize: 12 };
+    const sub = [parts.join('　　'), mm.join('　　')].filter((s) => s).join('\n');
+    chart.setOption({
+      title: { subtext: sub, subtextStyle: { fontSize: 12, color: '#495057', lineHeight: 20, rich } },
+    });
   }
 
   function renderControls() {
@@ -493,39 +348,33 @@ function portfolioValuationLine(el, series, curValue, opts) {
     chart.setOption({ series: [buildSeries()] }, { replaceMerge: ['series'] });
   }
 
-  function renderSub() {
-    if (!hasCur) return;
-    const vis = windowValues();
-    const pct = percentileOf(vis, curValue);
-    const fwdText = hasFwd ? ` · 前瞻 ${o.fwdValue}` : '';
-    chart.setOption({
-      title: {
-        text: o.title || '', left: 'center', textStyle: { fontSize: 14 },
-        subtext: `${label} 当前 ${curValue}${fwdText} · 可见窗口分位 ${pct === null ? '样本不足' : pct + '%'}`,
-        subtextStyle: { fontSize: 12, color: '#e8590c' },
-      },
-    });
-  }
-
   function onZoom() {
-    renderSub();
     renderControls();
     applySeries();
+    updateSub();
   }
 
   chart.off('datazoom');
   chart.on('datazoom', onZoom);
+
   chart.setOption({
-    title: { text: o.title || '', left: 'center', textStyle: { fontSize: 14 } },
+    title: { text: title, left: 'center', textStyle: { fontSize: 14 } },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
         const p = ps[0];
-        if (!p) return '';
-        return `${p.axisValue}<br>${label}：${p.value}`;
+        if (!p || p.componentType !== 'series') return '';
+        const v = p.value;
+        const q = percentileOf(windowValues(), v);
+        let qTxt = '';
+        if (q != null) {
+          const c = q <= 25 ? '#2f9e44' : q >= 75 ? '#e03131' : '#2563eb';
+          qTxt = `<br>窗口分位 <b style="color:${c}">${q}%</b>`;
+        }
+        return `${p.axisValue}<br>${label}：${v}${qTxt}`;
       },
     },
-    grid: { left: 60, right: 50, top: 46, bottom: 46 },
+    grid: { left: 60, right: 50, top: 64, bottom: 46 },
     xAxis: {
       type: 'category', data: dates, boundaryGap: false,
       axisLabel: { fontSize: 10, hideOverlap: true },
@@ -543,7 +392,7 @@ function portfolioValuationLine(el, series, curValue, opts) {
     series: [buildSeries()],
   });
   renderControls();
-  if (hasCur) renderSub();
+  updateSub();
   return chart;
 }
 
