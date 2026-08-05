@@ -366,3 +366,42 @@ input:focus, select:focus {
 ::-webkit-scrollbar-thumb { background: #cdd4e0; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: #b4bdcf; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ============ 全局请求 loading 屏障 ============ */
+.loading-mask {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(255, 255, 255, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  animation: loadingFade .15s ease;
+}
+.loading-mask .loading-spinner {
+  width: 40px; height: 40px; border-radius: 50%;
+  border: 4px solid rgba(37, 99, 235, .15);
+  border-top-color: #2563eb;
+  animation: loadingSpin .8s linear infinite;
+}
+@keyframes loadingSpin { to { transform: rotate(360deg); } }
+@keyframes loadingFade { from { opacity: 0; } to { opacity: 1; } }
+
+/* ============ 交易评分：左目录 + 右详情 ============ */
+.day-dir {
+  width: 270px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  min-height: 0;          /* 关键：允许子项收缩，overflow 才生效 */
+  overflow-y: auto;
+  background: #fafbfc;
+}
+.day-dir-title {
+  padding: 10px 12px; font-weight: 700; font-size: 13px;
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: #fafbfc; z-index: 1;
+}
+.day-tab {
+  padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+  transition: background .15s;
+}
+.day-tab:hover { background: #eef4ff; }
+.day-tab.active { background: #2563eb; color: #fff; }
+.day-tab.active .muted { color: rgba(255,255,255,.82); }
+.day-tab.active .badge { color: #2563eb; }
+.day-detail { flex: 1; padding: 16px 20px; min-width: 0; min-height: 0; overflow-y: auto; }

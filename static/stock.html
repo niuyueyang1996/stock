@@ -21,6 +21,7 @@
         <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 全量刷新此股</button>
       </div>
       <div id="staleTip" class="muted" style="display:none;margin-top:6px"></div>
+      <div id="missingBanner" style="display:none;margin-top:6px;color:#e8590c"></div>
     </div>
 
     <div class="panel" id="growthPanel" style="display:none">
@@ -30,6 +31,8 @@
         <input type="number" id="growthInput" step="0.01" style="width:120px">
         <span class="muted">营收</span>
         <input type="number" id="revenueGrowthInput" step="0.01" style="width:120px">
+        <span class="muted">支付率%</span>
+        <input type="number" id="payoutInput" step="0.01" style="width:80px">
         <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
         <span class="muted" id="growthMeta"></span>
       </div>
@@ -103,16 +106,111 @@
     let lastQuote = null;
     let lastName = '';
     let lastLive = {};
+    let lastFx = null;          // 港股当前汇率（人民币折算显示用）
 
-    // 搜索框
+    // 搜索框：选择股票 → 先试打开；缓存缺失则弹窗询问下载
     const sb = stockSearchInput();
     const input = sb.querySelector('input');
     if (currentCode) input.value = currentCode;
     sb.querySelector('input').addEventListener('change', () => {
       const p = parseStockChoice(sb.querySelector('input').value);
-      if (p) { currentCode = p.code; history.replaceState(null, '', '?code=' + p.code); loadPage(); }
+      if (p) { currentCode = p.code; history.replaceState(null, '', '?code=' + p.code); openStock(); }
     });
     document.getElementById('searchBox').appendChild(sb);
+
+    // 缺失项中文说明
+    const MISSING_LABEL = { bars: '日K行情', financials: '财务数据', valuation: '估值历史/分位' };
+
+    // 下载确认弹窗：download=下载并打开 / open=仅打开已有数据 / cancel=取消（不下载）
+    function showDownloadDialog(status) {
+      return new Promise((resolve) => {
+        const missing = (status.missing_items || []).map((k) => MISSING_LABEL[k] || k).join('、');
+        const mask = document.createElement('div');
+        mask.className = 'modal-mask';
+        mask.innerHTML = `
+          <div class="modal">
+            <h3>缺少缓存数据</h3>
+            <p>「${status.stock}」缺少：${missing}</p>
+            <p class="muted">打开前需联网下载（日K/财务/估值历史），是否下载？</p>
+            <div class="modal-actions">
+              <button class="btn" id="dlCancel">取消</button>
+              <button class="btn" id="dlPartial">仅打开已有数据</button>
+              <button class="btn primary" id="dlOk">下载并打开</button>
+            </div>
+          </div>`;
+        document.body.appendChild(mask);
+        const close = (r) => { mask.remove(); resolve(r); };
+        mask.querySelector('#dlCancel').onclick = () => close('cancel');
+        mask.querySelector('#dlPartial').onclick = () => close('open');
+        mask.querySelector('#dlOk').onclick = () => close('download');
+        mask.addEventListener('click', (e) => { if (e.target === mask) close('cancel'); });
+      });
+    }
+
+    // 切换/加载股票前清空旧数据，避免残留误导
+    function clearStockView() {
+      document.getElementById('title').textContent = currentCode ? `正在加载 ${currentCode}…` : '请输入股票代码或名称';
+      document.getElementById('staleTip').style.display = 'none';
+      document.getElementById('missingBanner').style.display = 'none';
+      document.getElementById('quoteCards').innerHTML = '';
+      document.getElementById('growthBody').innerHTML = '<tr><td colspan="4" class="muted">—</td></tr>';
+      document.getElementById('growthPanel').style.display = 'none';
+      document.getElementById('tagPanel').style.display = 'none';
+      document.getElementById('finCards').innerHTML = '';
+      ['peQ', 'pbQ'].forEach((id) => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+      document.getElementById('histTabs').innerHTML = '';
+      document.getElementById('peLine').innerHTML = '';
+      document.getElementById('pbLine').innerHTML = '';
+      document.getElementById('flowBars').innerHTML = '';
+      document.getElementById('flowLine').innerHTML = '';
+      document.getElementById('flowEmpty').style.display = 'block';
+      document.getElementById('flowLineEmpty').style.display = 'block';
+    }
+
+    async function openStock() {
+      if (!currentCode) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
+      clearStockView();
+      // 直接调 api 以便捕获 409（loadPage 内部会吞掉错误，不适合这里）
+      try {
+        const d = await api('/stocks/' + currentCode, { blocking: true });
+        render(d);
+      } catch (e) {
+        if (e.status === 409) {
+          // 缓存缺失 → 弹窗询问下载
+          let status = (e.body && e.body.code === 'CACHE_MISS') ? e.body : null;
+          try { status = status || await api('/stocks/' + currentCode + '/cache-status'); } catch (e2) { /* 兜底 */ }
+          if (status) {
+            const choice = await showDownloadDialog(status);
+            if (choice === 'download') {
+              document.getElementById('title').textContent = '下载中…';
+              try {
+                await api('/stocks/' + currentCode + '/refresh/full', { blocking: true,
+                  method: 'POST', body: { items: ['bars', 'financials', 'valuation'] },
+                });
+                // 下载完成后刷新页面：URL 带 ?code=，重载后按最终缓存正常渲染图表（等同 F5）
+                location.reload();
+              } catch (e2) {
+                // 下载失败：保留搜索选择，展示失败项，禁止无限重试
+                document.getElementById('title').textContent = `下载失败：${e2.message}`;
+                toast('下载失败：' + e2.message, 4000);
+              }
+            } else if (choice === 'open') {
+              // 仅打开已有数据：partial=1 展示部分数据 + 缺失标记
+              try {
+                const dp = await api('/stocks/' + currentCode + '?partial=1', { blocking: true });
+                render(dp);
+              } catch (e2) {
+                document.getElementById('title').textContent = `查询失败：${e2.message}`;
+              }
+            }
+            // choice === 'cancel'：不发起下载，视图已清空，保留搜索选择
+            return;
+          }
+        }
+        document.getElementById('title').textContent = `查询失败：${e.message}`;
+        clearStockView();
+      }
+    }
 
     // 单股刷新：弹窗多选内容 → 调 /stocks/{code}/refresh[/full] → 重载
     async function refreshStock(full) {
@@ -124,13 +222,16 @@
     async function saveExpectedGrowth() {
       const v = parseFloat(document.getElementById('growthInput').value);
       const rv = parseFloat(document.getElementById('revenueGrowthInput').value);
+      const pv = document.getElementById('payoutInput').value;
       if (Number.isNaN(v) || Number.isNaN(rv)) return toast('请输入有效的净利/营收预期增速（%）');
       try {
-        await Promise.all([
+        const calls = [
           api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: v } }),
           api('/stocks/' + currentCode + '/expected-revenue-growth', { method: 'PUT', body: { growth: rv } }),
-        ]);
-        toast('已保存预期增速');
+        ];
+        if (pv !== '') calls.push(api('/stocks/' + currentCode + '/expected-payout', { method: 'PUT', body: { growth: parseFloat(pv) } }));
+        await Promise.all(calls);
+        toast('已保存预期增速/支付率');
         await loadPage();
       } catch (e) {
         toast('保存失败：' + e.message, 4000);
@@ -157,11 +258,15 @@
       mask.innerHTML = `
         <div class="modal">
           <h3>${sideText} ${lastName || currentCode}</h3>
-          <div class="row">
-            <input type="number" id="qtPrice" step="0.001" min="0" value="${lastQuote ? lastQuote.price : ''}" placeholder="成交价" style="width:110px">
-            <input type="number" id="qtQty" step="1" min="0" placeholder="数量" style="width:110px">
-            <input type="number" id="qtFee" step="0.01" min="0" value="0" placeholder="费用" style="width:100px">
+          <div class="row" style="align-items:center;gap:6px">
+            <span class="muted">价格</span>
+            <input type="number" id="qtPrice" step="0.001" min="0" value="${lastQuote ? lastQuote.price : ''}" placeholder="成交价" style="width:96px">
+            <span class="muted">× 数量(股)</span>
+            <input type="number" id="qtQty" step="1" min="0" placeholder="股数" style="width:96px">
+            <span class="muted">费用</span>
+            <input type="number" id="qtFee" step="0.01" min="0" value="0" placeholder="手续费" style="width:86px">
           </div>
+          <div class="muted" id="qtAmount" style="margin-top:8px;font-size:12px"></div>
           <div class="modal-actions">
             <button class="btn" id="qtCancel">取消</button>
             <button class="btn primary" id="qtOk">确认${sideText}</button>
@@ -171,6 +276,26 @@
       const close = () => mask.remove();
       mask.querySelector('#qtCancel').onclick = close;
       mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      // 实时计算成交金额：价格 × 数量（+ 费用）；港股同时显示人民币
+      const calcAmt = () => {
+        const p = parseFloat(mask.querySelector('#qtPrice').value) || 0;
+        const q = parseFloat(mask.querySelector('#qtQty').value) || 0;
+        const f = parseFloat(mask.querySelector('#qtFee').value) || 0;
+        const base = p * q;
+        let txt = '输入数量和价格，自动计算金额';
+        if (q > 0 && lastFx) {
+          // 港股：原币 + 人民币
+          txt = `成交金额 = ${p} × ${q} = ${base.toFixed(2)} 港币 ≈ ¥${(base * lastFx).toFixed(2)}`;
+          if (f > 0) txt += ` + 费用 ${f} = ${(base + f).toFixed(2)} 港币 ≈ ¥${((base + f) * lastFx).toFixed(2)}`;
+        } else if (q > 0) {
+          txt = `成交金额 = ${p} × ${q} = ${base.toFixed(2)} 元`;
+          if (f > 0) txt += ` + 费用 ${f} = ${(base + f).toFixed(2)} 元`;
+        }
+        mask.querySelector('#qtAmount').textContent = txt;
+      };
+      ['qtPrice', 'qtQty', 'qtFee'].forEach((id) =>
+        mask.querySelector('#' + id).addEventListener('input', calcAmt));
+      calcAmt();
       mask.querySelector('#qtOk').onclick = async () => {
         const price = parseFloat(mask.querySelector('#qtPrice').value);
         const quantity = parseFloat(mask.querySelector('#qtQty').value);
@@ -196,7 +321,7 @@
         return;
       }
       try {
-        const d = await api('/stocks/' + currentCode);
+        const d = await api('/stocks/' + currentCode, { blocking: true });
         render(d);
       } catch (e) {
         document.getElementById('title').textContent = `查询失败：${e.message}`;
@@ -208,7 +333,32 @@
       const q = d.quote;
       lastQuote = q;
       lastName = d.name;
+      lastFx = d.fx_rate || null;   // 港股汇率（人民币折算显示）
+      const missingBanner = document.getElementById('missingBanner');
+      const partialMissing = d.partial_missing || [];
+      if (partialMissing.length) {
+        missingBanner.style.display = 'block';
+        missingBanner.textContent = '⚠ 部分数据缺失（' + partialMissing.map((k) => MISSING_LABEL[k] || k).join('、')
+          + '），点「🔄 全量刷新此股」补全';
+      } else {
+        missingBanner.style.display = 'none';
+      }
       const staleTip = document.getElementById('staleTip');
+      if (!q) {
+        // 部分打开：无行情数据
+        staleTip.style.display = 'none';
+        document.getElementById('quoteCards').innerHTML =
+          '<div class="empty" style="padding:20px">无行情数据（缓存缺失，请先全量刷新）。</div>';
+        renderQuantiles(d.quantiles);
+        renderValuationHistory(d);
+        renderFlow(d);
+        renderFinancials(d.financials);
+        renderGrowth(d.live || {});
+        document.getElementById('growthPanel').style.display = 'none';
+        document.getElementById('tagPanel').style.display = '';
+        document.getElementById('tagInput').value = d.tag || '';
+        return;
+      }
       staleTip.style.display = q.stale ? 'block' : 'none';
       staleTip.textContent = q.stale ? '⚠ 缓存无当日数据，展示最近交易日缓存（点击「⚡ 刷新此股」拉取最新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
 
@@ -220,9 +370,11 @@
         growthPanel.style.display = '';
         document.getElementById('growthInput').value = live.expected_growth;
         document.getElementById('revenueGrowthInput').value = live.expected_revenue_growth;
+        document.getElementById('payoutInput').value = live.expected_payout != null ? live.expected_payout : '';
         const pSrc = live.expected_growth_source === 'user' ? '净利自定义' : '净利默认最新财报';
         const rSrc = live.expected_revenue_growth_source === 'user' ? '营收自定义' : '营收默认TTM同比';
-        document.getElementById('growthMeta').textContent = `${pSrc} · ${rSrc}`;
+        const paySrc = live.expected_payout_source === 'user' ? '支付率自定义' : '支付率默认上年';
+        document.getElementById('growthMeta').textContent = `${pSrc} · ${rSrc} · ${paySrc}`;
       } else {
         growthPanel.style.display = 'none';
       }
@@ -236,14 +388,22 @@
       const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
       const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
       const dayPnlPrice = (q.price != null && q.prev_close != null) ? q.price - q.prev_close : null;
-      document.getElementById('quoteCards').innerHTML = [
-        ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'],
-        ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
+      const isHk = d.currency === 'HKD' && d.fx_rate;
+      // 港股：价格旁显示人民币换算
+      const priceCard = isHk
+        ? ['现价', fmtNum(q.price) + ' 港币', (q.pct_chg ?? 0) >= 0 ? 'up' : 'down',
+           '≈ ¥' + fmtNum(q.price * d.fx_rate)]
+        : ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'];
+      const mvCard = isHk && live.total_mv != null
+        ? ['实时市值', mvYi + ' 港币', '', '≈ ¥' + fmtNum(live.total_mv * d.fx_rate / 1e8) + ' 亿']
+        : ['实时市值', mvYi];
+      const cards = [priceCard, ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
         ['今开', fmtNum(q.open)],
         ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
         ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
-        ['实时市值', mvYi],
-      ].map(([l, v, c]) => `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
+        mvCard];
+      document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`).join('');
 
       renderQuantiles(d.quantiles);
       renderValuationHistory(d);
@@ -377,7 +537,7 @@
         `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div></div>`).join('');
     }
 
-    loadPage();
+    openStock();
   </script>
 </body>
 </html>

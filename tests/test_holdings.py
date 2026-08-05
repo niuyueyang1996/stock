@@ -10,6 +10,100 @@ def _qty(code):
         return dict(row) if row else None
 
 
+def test_cost_adjust_increases_cost():
+    """正调整：补记漏记成本 → avg_cost 上升，数量不变。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")   # 成本 10
+    holdings.adjust_cost("600000", amount=200, note="补记成本")        # 加 200 → 成本 12
+    h = _qty("600000")
+    assert h["quantity"] == 100
+    assert h["avg_cost"] == pytest.approx(12.0)
+
+
+def test_cost_adjust_dividend_reduction():
+    """负调整：分红除权摊薄 → avg_cost 下降，数量不变（pnl 不再虚亏）。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")   # 成本 10
+    holdings.adjust_cost("600000", amount=-300, note="分红除权 3元/股")  # 减 300 → 成本 7
+    h = _qty("600000")
+    assert h["quantity"] == 100
+    assert h["avg_cost"] == pytest.approx(7.0)
+
+
+def test_cost_adjust_no_holding_rejected():
+    """无持仓时无法调整成本。"""
+    with pytest.raises(ValueError):
+        holdings.adjust_cost("600000", amount=100, name="浦发银行")
+
+
+def test_cost_adjust_replay_consistent():
+    """重放法一致：调整后任意交易操作仍保持调整后的成本。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    holdings.adjust_cost("600000", amount=-100, note="分红")
+    holdings.record_trade("600000", "buy", 12, 100)   # 再加仓 → 成本重算
+    h = _qty("600000")
+    # 调整后成本 9，加仓 100@12 → (100×9+1200)/200 = 10.5
+    assert h["avg_cost"] == pytest.approx(10.5)
+
+
+def test_cost_adjust_no_snapshot():
+    """adjust 不生成评分快照。"""
+    from app.models.db import get_conn
+
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    r = holdings.adjust_cost("600000", amount=100, note="补记")
+    with get_conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM trade_score_snapshots WHERE trade_id=?", (r["trade_id"],)).fetchone()[0]
+    assert n == 0
+
+
+def test_cost_adjust_delete_reverts():
+    """删除调整记录 → 成本恢复原值。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    r = holdings.adjust_cost("600000", amount=200, note="补记")
+    holdings.delete_trade(r["trade_id"])
+    assert _qty("600000")["avg_cost"] == pytest.approx(10.0)
+
+
+def test_adjust_qty_split_shares():
+    """拆股/送股：只加股不改总成本 → 每股成本摊薄。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")  # 100股@10，总成本1000
+    holdings.adjust_cost("600000", delta_qty=100, note="1拆2")         # 加100股，总成本不变
+    h = _qty("600000")
+    assert h["quantity"] == 200
+    assert h["avg_cost"] == pytest.approx(5.0)  # 1000/200
+
+
+def test_adjust_qty_and_amount_combined():
+    """同时调整股数与成本。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    holdings.adjust_cost("600000", amount=200, delta_qty=100, note="补记+送股")
+    h = _qty("600000")
+    assert h["quantity"] == 200
+    assert h["avg_cost"] == pytest.approx(6.0)  # (1000+200)/200
+
+
+def test_adjust_zero_both_rejected():
+    """金额与股数都为 0 → 拒绝。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    with pytest.raises(ValueError):
+        holdings.adjust_cost("600000", amount=0, delta_qty=0)
+
+
+def test_adjust_qty_to_zero_rejected():
+    """调整后股数 ≤ 0 → 拒绝（重放时抛错并回滚）。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    with pytest.raises(ValueError):
+        holdings.adjust_cost("600000", delta_qty=-100, note="错误减股")
+
+
+def test_cost_adjust_dividend_flag_tracks_cumulative():
+    """is_dividend=True 的调整计入累计分红，普通成本修正不计。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    holdings.adjust_cost("600000", amount=-300, is_dividend=True, note="除权")   # 除权 300
+    holdings.adjust_cost("600000", amount=50, is_dividend=False, note="补记")    # 普通修正
+    hs = {h["code"]: h for h in holdings.get_holdings(active_only=True)}
+    assert hs["600000"]["total_dividend"] == pytest.approx(300.0)
+
+
 def test_moving_average_cost():
     """两次买入移动加权：100@10 + 100@12 → avg_cost=11。"""
     holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
@@ -97,8 +191,8 @@ def test_existing_stock_no_resync(monkeypatch):
     assert called == []
 
 
-def test_full_close_purges_cache():
-    """清仓后删除该股全部数据缓存（日K/估值/分位/财务/序列）。"""
+def test_full_close_keeps_cache():
+    """清仓只改持仓状态，原始缓存（日K/估值/分位/财务/序列）长期保留。"""
     from types import SimpleNamespace
 
     from app.data.base import Financials
@@ -128,19 +222,21 @@ def test_full_close_purges_cache():
     with get_conn() as c:
         assert c.execute("SELECT COUNT(*) FROM daily_price_cache WHERE code='600000'").fetchone()[0] > 0
 
-    # 清仓卖出 → 缓存全部清空
+    # 清仓卖出 → 持仓 closed，但原始缓存全部保留
     holdings.record_trade("600000", "sell", 15, 100)
+    h = _qty("600000")
+    assert h["status"] == "closed"
     with get_conn() as c:
         for tbl in ("daily_price_cache", "daily_valuation_cache", "valuation_quantile_cache",
-                    "financial_cache", "valuation_history_cache", "daily_fundflow_cache"):
+                    "financial_cache", "valuation_history_cache"):
             n = c.execute(f"SELECT COUNT(*) FROM {tbl} WHERE code='600000'").fetchone()[0]
-            assert n == 0, f"{tbl} 应被清空"
+            assert n > 0, f"{tbl} 应保留原始缓存"
 
 
 def test_closed_stock_rebuy_no_resync(monkeypatch):
-    """清仓后旧股再次买入：有交易记录 → 不视为新股 → 不重新同步（缓存已删，靠交易记录判定）。"""
+    """清仓后旧股再次买入：有交易记录 → 不视为新股 → 不重新同步（缓存保留，靠交易记录判定）。"""
     holdings.record_trade("600003", "buy", 10, 100, name="旧股")
-    holdings.record_trade("600003", "sell", 15, 100)  # 清仓 → 缓存已删
+    holdings.record_trade("600003", "sell", 15, 100)  # 清仓 → 原始缓存保留
     from app.services import refresh as rmod
 
     called = []
@@ -149,8 +245,8 @@ def test_closed_stock_rebuy_no_resync(monkeypatch):
     assert called == []
 
 
-def test_delete_trade_purges_cache_when_closed():
-    """撤销唯一买入导致清仓 → 同样删除缓存。"""
+def test_delete_trade_keeps_cache_when_closed():
+    """撤销唯一买入导致清仓 → 原始缓存同样保留。"""
     from app.data.cache import upsert_valuation_series
     from app.models.db import get_conn
 
@@ -161,7 +257,7 @@ def test_delete_trade_purges_cache_when_closed():
     holdings.delete_trade(trade["id"])  # 删除唯一买入 → 持仓归零 closed
     with get_conn() as c:
         n = c.execute("SELECT COUNT(*) FROM valuation_history_cache WHERE code='600000'").fetchone()[0]
-        assert n == 0
+        assert n > 0  # 原始缓存保留
 
 
 def test_sync_financials_repairs_incomplete_cache():

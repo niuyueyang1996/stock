@@ -24,13 +24,14 @@ CREATE TABLE IF NOT EXISTS holdings (
 CREATE TABLE IF NOT EXISTS trades (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     code       TEXT NOT NULL,
-    side       TEXT NOT NULL,           -- buy/sell
+    side       TEXT NOT NULL,           -- buy/sell/adjust
     price      REAL NOT NULL,
     quantity   REAL NOT NULL,
-    amount     REAL NOT NULL,           -- price*quantity
+    amount     REAL NOT NULL,           -- price*quantity（adjust：成本调整额）
     fee        REAL NOT NULL DEFAULT 0,
     trade_time TEXT NOT NULL,           -- 'YYYY-MM-DD HH:MM:SS'
     note       TEXT,
+    is_dividend INTEGER NOT NULL DEFAULT 0,  -- adjust 记录：1=分红除权摊薄（计入累计分红）
     UNIQUE(code, trade_time, side, price, quantity)
 );
 
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS valuation_history_cache (
     period     TEXT NOT NULL,           -- 1y/3y/5y
     trade_date TEXT NOT NULL,           -- 'YYYY-MM-DD'
     value      REAL,
+    updated_at TEXT,                    -- 序列更新时间（组合派生缓存版本用）
     PRIMARY KEY (code, indicator, period, trade_date)
 );
 
@@ -122,18 +124,24 @@ CREATE TABLE IF NOT EXISTS portfolio_valuation_cache (
     calc_date  TEXT NOT NULL,           -- 权重基准日（开仓/清仓后重算）
     trade_date TEXT NOT NULL,           -- 序列日期 'YYYY-MM-DD'
     pe         REAL, pb REAL,
+    coverage   REAL,                    -- 该日当前持仓市值覆盖率（<90% 不进分位样本）
+    portfolio_hash TEXT,                -- 派生缓存键（持仓+数据版本）
     PRIMARY KEY (period, calc_date, trade_date)
 );
 
 CREATE TABLE IF NOT EXISTS daily_scores (
     score_date   TEXT PRIMARY KEY,   -- 'YYYY-MM-DD' 当日综合评分
-    total_score  REAL NOT NULL,      -- 当日所有交易金额加权综合分 0-100
-    rating       TEXT NOT NULL,      -- A/B/C/D
-    rating_name  TEXT,               -- 优秀/良好/一般/较差
+    total_score  REAL,               -- 当日所有交易金额加权综合分 0-100（可 NULL：覆盖不足/无可评分交易）
+    rating       TEXT NOT NULL,      -- A/B/C/D 或 N/A（覆盖不足）
+    rating_name  TEXT,               -- 优秀/良好/一般/较差/覆盖不足
     factors_json TEXT,               -- 综合因子聚合（按金额加权的因子分）
     detail_json  TEXT,               -- 每笔明细 [{trade_id,code,name,side,amount,score,rating,factors}]
     trades_count INTEGER,
     net_amount   REAL,               -- 当日净成交额（买入正、卖出负）
+    coverage     REAL,               -- 综合覆盖率（可评分快照平均）
+    status       TEXT,               -- rated / low_coverage / no_scoreable
+    model_version TEXT,              -- 快照模型版本
+    estimated_count INTEGER DEFAULT 0, -- 当日 estimated 快照数
     updated_at   TEXT
 );
 
@@ -158,16 +166,201 @@ CREATE TABLE IF NOT EXISTS stock_expected_revenue_growth (
     growth     REAL NOT NULL,           -- 预期营收年同比增速(%)
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS stock_expected_payout (
+    code       TEXT PRIMARY KEY,
+    payout     REAL NOT NULL,           -- 预期股息支付率(%)
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS dividend_adjustments (
+    code       TEXT NOT NULL,           -- 已自动除权的股票
+    ex_date    TEXT NOT NULL,           -- 除权除息日
+    amount     REAL,                    -- 本次摊薄成本（负值）
+    applied_at TEXT,
+    PRIMARY KEY (code, ex_date)
+);
+
+CREATE TABLE IF NOT EXISTS fx_rate_cache (
+    rate_date  TEXT NOT NULL,           -- 'YYYY-MM-DD'
+    currency   TEXT NOT NULL,           -- 币种代码（如 HKD）
+    rate       REAL NOT NULL,           -- 1 原币 = x 人民币
+    source     TEXT,                    -- 来源（中行折算价/央行中间价/买卖价中点）
+    updated_at TEXT,
+    PRIMARY KEY (rate_date, currency)
+);
+
+CREATE TABLE IF NOT EXISTS trade_score_snapshots (
+    trade_id       INTEGER PRIMARY KEY, -- 与 trades.id 一一对应
+    code           TEXT NOT NULL,
+    side           TEXT NOT NULL,       -- buy/sell
+    score_date     TEXT NOT NULL,       -- 'YYYY-MM-DD'
+    total_score    REAL,
+    rating         TEXT,
+    rating_name    TEXT,
+    status         TEXT NOT NULL DEFAULT 'frozen',  -- frozen/estimated/insufficient
+    coverage       REAL,                -- 有效因子权重覆盖率(0~1)
+    model_version  TEXT,                -- 生成快照的模型版本
+    factors_json   TEXT,                -- 因子明细 [{key,name,raw,score,weight,used,data_date}]
+    price          REAL,
+    quantity       REAL,
+    amount         REAL,                -- 原币成交金额
+    amount_cny     REAL,                -- 人民币成交金额（港股按交易日汇率折算）
+    fx_rate        REAL,                -- 交易日汇率（原币→人民币）
+    created_at     TEXT,
+    updated_at     TEXT
+);
 """
 
 
 def get_conn() -> sqlite3.Connection:
     """获取 SQLite 连接（开启外键、行字典访问）。"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    # timeout=30：写事务内若再开连接读写（如汇率落库）不立即抛 database is locked
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+# 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
+SCHEMA_VERSION_KEY = "db_schema_version"
+_CURRENT_VERSION = 2
+
+# 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
+# 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
+_MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
+    2: [
+        ("currency", "ALTER TABLE stocks ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY'"),
+        ("fx_rate", "ALTER TABLE trades ADD COLUMN fx_rate REAL"),
+        ("amount_cny", "ALTER TABLE trades ADD COLUMN amount_cny REAL"),
+        ("is_dividend", "ALTER TABLE trades ADD COLUMN is_dividend INTEGER DEFAULT 0"),
+        ("avg_cost_cny", "ALTER TABLE holdings ADD COLUMN avg_cost_cny REAL"),
+        ("total_buy_cny", "ALTER TABLE holdings ADD COLUMN total_buy_cny REAL"),
+        ("currency", "ALTER TABLE holdings ADD COLUMN currency TEXT"),
+        ("last_year_net_assets", "ALTER TABLE financial_cache ADD COLUMN last_year_net_assets REAL"),
+        ("portfolio_hash", "ALTER TABLE portfolio_valuation_cache ADD COLUMN portfolio_hash TEXT"),
+        ("coverage", "ALTER TABLE portfolio_valuation_cache ADD COLUMN coverage REAL"),
+        ("updated_at", "ALTER TABLE valuation_history_cache ADD COLUMN updated_at TEXT"),
+        ("coverage", "ALTER TABLE daily_scores ADD COLUMN coverage REAL"),
+        ("status", "ALTER TABLE daily_scores ADD COLUMN status TEXT"),
+        ("model_version", "ALTER TABLE daily_scores ADD COLUMN model_version TEXT"),
+        ("estimated_count", "ALTER TABLE daily_scores ADD COLUMN estimated_count INTEGER DEFAULT 0"),
+    ],
+}
+
+
+def _db_version(conn) -> int:
+    row = conn.execute("SELECT value FROM config WHERE key=?", (SCHEMA_VERSION_KEY,)).fetchone()
+    return int(row["value"]) if row else 1
+
+
+def _set_db_version(conn, version: int) -> None:
+    conn.execute(
+        "INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (SCHEMA_VERSION_KEY, str(version)),
+    )
+
+
+def _backup_db() -> str | None:
+    """迁移前备份数据库到 data/ 时间戳文件；失败不阻断迁移。返回备份路径或 None。"""
+    import shutil
+    import time
+
+    try:
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        dest = DATA_DIR / f"etf_backup_{stamp}.db"
+        if DB_PATH.exists():
+            shutil.copy2(str(DB_PATH), str(dest))
+            return str(dest)
+    except Exception:  # noqa: BLE001 备份失败不阻断迁移
+        pass
+    return None
+
+
+def _recreate_daily_scores_nullable(conn) -> None:
+    """把 daily_scores.total_score 改为可 NULL（旧表为 NOT NULL）。
+
+    覆盖不足/无可评分交易时无综合分；旧库需重建表。日评分是派生缓存，重建后由 rebuild_all 恢复。
+    """
+    info = {r["name"]: r for r in conn.execute("PRAGMA table_info(daily_scores)").fetchall()}
+    if not info or info["total_score"]["notnull"] == 0:
+        return
+    conn.execute("ALTER TABLE daily_scores RENAME TO daily_scores_old")
+    conn.execute(
+        """CREATE TABLE daily_scores (
+            score_date   TEXT PRIMARY KEY,
+            total_score  REAL,
+            rating       TEXT NOT NULL,
+            rating_name  TEXT,
+            factors_json TEXT,
+            detail_json  TEXT,
+            trades_count INTEGER,
+            net_amount   REAL,
+            coverage     REAL,
+            status       TEXT,
+            model_version TEXT,
+            estimated_count INTEGER DEFAULT 0,
+            updated_at   TEXT
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO daily_scores(score_date, total_score, rating, rating_name, factors_json, detail_json,
+                 trades_count, net_amount, coverage, status, model_version, estimated_count, updated_at)
+           SELECT score_date, total_score, rating, rating_name, factors_json, detail_json,
+                 trades_count, net_amount, coverage, status, model_version, estimated_count, updated_at
+           FROM daily_scores_old"""
+    )
+    conn.execute("DROP TABLE daily_scores_old")
+
+
+def _migrate_data_v2(conn) -> None:
+    """v2 数据迁移：推断币种 + 回填 CNY 交易的人民币金额。
+
+    - 五位港股代码 → HKD，其余 → CNY。
+    - 已有 CNY 交易的 amount_cny 回填为 amount、fx_rate=1.0。
+    - 旧港股交易的 amount_cny 保持 NULL：等待汇率刷新后回填，期间绝不按 1:1 计算。
+    - 旧组合派生缓存与日评分聚合由重建路径在刷新时处理。
+    """
+    conn.execute(
+        "UPDATE stocks SET currency='HKD' WHERE length(code)=5 AND code GLOB '[0-9][0-9][0-9][0-9][0-9]'"
+    )
+    conn.execute("UPDATE stocks SET currency='CNY' WHERE currency IS NULL OR currency=''")
+    conn.execute(
+        "UPDATE trades SET amount_cny=amount, fx_rate=1.0 WHERE amount_cny IS NULL AND "
+        "code IN (SELECT code FROM stocks WHERE currency='CNY')"
+    )
+    _recreate_daily_scores_nullable(conn)
+
+
+def migrate_db() -> bool:
+    """版本化迁移：从当前版本依次升级到 _CURRENT_VERSION。
+
+    仅当版本号落后时执行；迁移前生成时间戳备份。返回是否执行了迁移。
+    """
+    with get_conn() as conn:
+        version = _db_version(conn)
+        if version >= _CURRENT_VERSION:
+            return False
+        _backup_db()
+        for target in range(version + 1, _CURRENT_VERSION + 1):
+            cols = _MIGRATE_COLUMNS.get(target, [])
+            for _col, ddl in cols:
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass  # 列已存在
+            if target == 2:
+                _migrate_data_v2(conn)
+            _set_db_version(conn, target)
+    # 迁移后：为旧交易回填评分快照（estimated/insufficient），失败不阻断迁移
+    try:
+        from app.analysis.scoring import backfill_snapshots
+
+        backfill_snapshots()
+    except Exception:  # noqa: BLE001
+        pass
+    return True
 
 
 def init_db() -> None:
@@ -206,3 +399,5 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO config(key, value) VALUES('sell_weights', ?)",
             (json.dumps(SELL_WEIGHTS),),
         )
+    # 版本化迁移（建表之后，新列/数据迁移）
+    migrate_db()

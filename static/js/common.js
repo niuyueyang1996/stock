@@ -98,6 +98,7 @@ const REFRESH_OPTIONS = {
     ['bars', '日K历史（全量重拉覆盖）'],
     ['financials', '财务数据（净利/净资产/EPS/支付率）'],
     ['valuation', '估值分位（百度序列+1y/3y/5y分位+实时估值）'],
+    ['fx', '港股汇率（HKD/CNY）'],
     ['portfolio', '组合综合序列重算'],
   ],
   stock_dynamic: [
@@ -156,7 +157,7 @@ async function doRefresh(btn, full, scope = 'global', code) {
     const path = scope === 'stock'
       ? `/stocks/${code}/refresh` + (full ? '/full' : '')
       : full ? '/refresh/full' : '/refresh';
-    const r = await api(path, { method: 'POST', body: JSON.stringify({ items }) });
+    const r = await api(path, { blocking: true, method: 'POST', body: JSON.stringify({ items }) });
     const n = r.total_fetched ?? 0;
     const label = scope === 'stock' ? '个股' : (full ? '全量' : '动态');
     document.getElementById('statusText').textContent =
@@ -188,7 +189,7 @@ function stockSearchInput() {
     if (!q) { sug.style.display = 'none'; return; }
     timer = setTimeout(async () => {
       try {
-        const rows = await api('/stocks/search?q=' + encodeURIComponent(q) + '&limit=10');
+        const rows = await api('/stocks/search?q=' + encodeURIComponent(q) + '&limit=10', { silent: true });
         sug.innerHTML = '';
         rows.forEach((r) => {
           const o = document.createElement('div');

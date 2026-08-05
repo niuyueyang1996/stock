@@ -115,6 +115,15 @@ def get_latest_quantile(code: str, period: str):
         ).fetchone()
 
 
+def get_quantile_asof(code: str, period: str, as_of: str):
+    """calc_date ≤ as_of 的最近一次分位（历史评分：只使用交易日及以前的数据）。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM valuation_quantile_cache WHERE code=? AND period=? AND calc_date<=? ORDER BY calc_date DESC LIMIT 1",
+            (code, period, as_of),
+        ).fetchone()
+
+
 # ---------- 日级资金流缓存 ----------
 
 def get_daily_fundflow(code: str, trade_date: str | None = None):
@@ -128,6 +137,15 @@ def get_daily_fundflow(code: str, trade_date: str | None = None):
         return c.execute(
             "SELECT * FROM daily_fundflow_cache WHERE code=? ORDER BY trade_date DESC LIMIT 1",
             (code,),
+        ).fetchone()
+
+
+def get_fundflow_asof(code: str, as_of: str):
+    """trade_date ≤ as_of 的最近一条资金流（历史评分用）。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM daily_fundflow_cache WHERE code=? AND trade_date<=? ORDER BY trade_date DESC LIMIT 1",
+            (code, as_of),
         ).fetchone()
 
 
@@ -152,15 +170,16 @@ def upsert_financials(code: str, fin, dv_per_share: float | None = None) -> None
     with get_conn() as c:
         c.execute(
             """INSERT INTO financial_cache(code, report_date, roe, roa, revenue_yoy, profit_yoy,
-                 dv_per_share, net_profit, net_assets, eps, total_shares, payout_ratio,
+                 dv_per_share, net_profit, net_assets, last_year_net_assets, eps, total_shares, payout_ratio,
                  dv_report, profit_series, revenue_series,
                  roe_annual, revenue_yoy_annual, profit_yoy_annual)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(code, report_date) DO UPDATE SET
                  roe=excluded.roe, roa=excluded.roa,
                  revenue_yoy=excluded.revenue_yoy, profit_yoy=excluded.profit_yoy,
                  dv_per_share=excluded.dv_per_share, net_profit=excluded.net_profit,
-                 net_assets=excluded.net_assets, eps=excluded.eps,
+                 net_assets=excluded.net_assets, last_year_net_assets=excluded.last_year_net_assets,
+                 eps=excluded.eps,
                  total_shares=excluded.total_shares,
                  payout_ratio=excluded.payout_ratio, dv_report=excluded.dv_report,
                  profit_series=excluded.profit_series, revenue_series=excluded.revenue_series,
@@ -169,7 +188,9 @@ def upsert_financials(code: str, fin, dv_per_share: float | None = None) -> None
                  profit_yoy_annual=excluded.profit_yoy_annual""",
             (code, fin.report_date, fin.roe, fin.roa, fin.revenue_yoy, fin.profit_yoy,
              dv_per_share if dv_per_share is not None else fin.dv_per_share,
-             fin.net_profit, fin.net_assets, fin.eps, fin.total_shares,
+             fin.net_profit, fin.net_assets,
+             fin.last_year_net_assets if getattr(fin, "last_year_net_assets", None) is not None else None,
+             fin.eps, fin.total_shares,
              fin.payout_ratio, fin.dv_report, series_json, revenue_json,
              fin.roe_annual, fin.revenue_yoy_annual, fin.profit_yoy_annual),
         )
@@ -189,12 +210,16 @@ def upsert_valuation_series(code: str, indicator: str, period: str, points: list
     """批量 UPSERT 估值历史序列到缓存。points: [(trade_date, value)]"""
     if not points:
         return
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
     with get_conn() as c:
         c.executemany(
-            """INSERT INTO valuation_history_cache(code, indicator, period, trade_date, value)
-               VALUES (?,?,?,?,?)
-               ON CONFLICT(code, indicator, period, trade_date) DO UPDATE SET value=excluded.value""",
-            [(code, indicator, period, d, v) for d, v in points],
+            """INSERT INTO valuation_history_cache(code, indicator, period, trade_date, value, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(code, indicator, period, trade_date) DO UPDATE SET
+                 value=excluded.value, updated_at=excluded.updated_at""",
+            [(code, indicator, period, d, v, now) for d, v in points],
         )
 
 
@@ -232,6 +257,15 @@ def get_valuation(code: str, trade_date: str | None = None):
             ).fetchone()
         return c.execute(
             "SELECT * FROM daily_valuation_cache WHERE code=? ORDER BY trade_date DESC LIMIT 1", (code,)
+        ).fetchone()
+
+
+def get_valuation_asof(code: str, as_of: str):
+    """trade_date ≤ as_of 的最近一条估值缓存（历史评分用）。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM daily_valuation_cache WHERE code=? AND trade_date<=? ORDER BY trade_date DESC LIMIT 1",
+            (code, as_of),
         ).fetchone()
 
 
@@ -281,6 +315,76 @@ def get_expected_revenue_growth(code: str):
         return c.execute(
             "SELECT * FROM stock_expected_revenue_growth WHERE code=?", (code,)
         ).fetchone()
+
+
+def upsert_expected_payout(code: str, payout: float) -> None:
+    """保存用户自定义预期股息支付率(%)。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO stock_expected_payout(code, payout, updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(code) DO UPDATE SET
+                 payout=excluded.payout, updated_at=excluded.updated_at""",
+            (code, payout, now),
+        )
+
+
+def get_expected_payout(code: str):
+    """读取用户自定义预期支付率；未设置返回 None。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM stock_expected_payout WHERE code=?", (code,)
+        ).fetchone()
+
+
+# ---------- 汇率缓存（原币→人民币） ----------
+
+def upsert_fx_rate(currency: str, rate_date: str, rate: float, source: str | None = None) -> None:
+    """保存某日某币种兑人民币汇率（1 原币 = rate 人民币）。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO fx_rate_cache(rate_date, currency, rate, source, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(rate_date, currency) DO UPDATE SET
+                 rate=excluded.rate, source=excluded.source, updated_at=excluded.updated_at""",
+            (rate_date, currency, rate, source, now),
+        )
+
+
+def get_fx_rate(currency: str, rate_date: str):
+    """指定日汇率；无则 None。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM fx_rate_cache WHERE currency=? AND rate_date=?", (currency, rate_date)
+        ).fetchone()
+
+
+def get_latest_fx_rate(currency: str, before_date: str | None = None):
+    """指定日前最近一个有效汇率（非交易日用最近交易日）。"""
+    with get_conn() as c:
+        if before_date:
+            return c.execute(
+                "SELECT * FROM fx_rate_cache WHERE currency=? AND rate_date<=? ORDER BY rate_date DESC LIMIT 1",
+                (currency, before_date),
+            ).fetchone()
+        return c.execute(
+            "SELECT * FROM fx_rate_cache WHERE currency=? ORDER BY rate_date DESC LIMIT 1", (currency,)
+        ).fetchone()
+
+
+def get_fx_rates(currency: str, start: str, end: str) -> list:
+    """区间汇率（升序）。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM fx_rate_cache WHERE currency=? AND rate_date BETWEEN ? AND ? ORDER BY rate_date",
+            (currency, start, end),
+        ).fetchall()
 
 
 # ---------- 清仓缓存清理 ----------

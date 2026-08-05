@@ -48,6 +48,21 @@ def _seed_series(code, ind, points, periods=("1y", "3y", "5y")):
         upsert_valuation_series(code, ind, p, points)
 
 
+def _seed_fin_passthrough(code, total_shares, ttm, net_assets):
+    """预置财务：TTM 利润=ttm、净资产=net_assets、股本=total_shares（现价 10）。"""
+    fin = Financials(
+        report_date="20260331", roe=20.0, roa=4.0, revenue_yoy=8.0, profit_yoy=10.0,
+        net_profit=ttm, net_assets=net_assets, eps=1.0,
+        dv_per_share=0.0, payout_ratio=0.0, dv_report=None,
+        total_shares=total_shares,
+        profit_series=[
+            {"report_date": "20260331", "net_profit": ttm, "profit_yoy": 10.0},
+            {"report_date": "20251231", "net_profit": ttm, "profit_yoy": 5.0},
+        ],
+    )
+    upsert_financials(code, fin)
+
+
 # ---------- 指数式综合公式 ----------
 
 def test_combo_weighted_formula():
@@ -80,6 +95,68 @@ def test_combo_weighted_denom_zero_na():
     weights = {"A": 2 / 3, "B": 1 / 3}
     day = {"A": -10.0, "B": 5.0}  # (2/3)/(-10)+(1/3)/5 = 0
     assert _combo_weighted(day, weights) is None
+
+
+def test_combo_zero_value_no_crash():
+    """历史序列某股 PE=0（利润为零）→ 当日剔除该股重新归一化，不崩溃。"""
+    from app.analysis.portfolio import _combo_day
+
+    weights = {"A": 0.5, "B": 0.5}
+    day = {"A": 0.0, "B": 20.0}  # A PE=0 → 剔除
+    val, cov = _combo_day(day, weights)
+    assert val == pytest.approx(20.0)  # 只剩 B，权重归一化
+    assert cov == pytest.approx(0.5)   # 覆盖率 0.5（A 剔除）
+
+
+# ---------- 今日盈亏口径 ----------
+
+def _insert_trade(code, side, price, qty, fee, trade_time):
+    from app.models.db import get_conn
+
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO trades(code,side,price,quantity,amount,fee,trade_time) VALUES(?,?,?,?,?,?,?)",
+            (code, side, price, qty, price * qty, fee, trade_time),
+        )
+
+
+def test_day_pnl_today_buy_at_close_zero():
+    """按现价当日买入（无前日持仓）→ 今日盈亏 = 0，而非 (现价−昨收)×量。"""
+    from app.analysis.portfolio import _day_pnl
+
+    _insert_trade("600519", "buy", 1306.45, 100, 0, "2026-08-05 09:30:00")
+    pnl = _day_pnl("600519", 100, 1306.45, 1328.36, "2026-08-05")
+    assert pnl == pytest.approx(0.0)
+
+
+def test_day_pnl_prior_holding():
+    """前日持仓（今日无交易）→ (现价−昨收)×量。"""
+    from app.analysis.portfolio import _day_pnl
+
+    _insert_trade("600519", "buy", 1300.0, 100, 0, "2026-08-04 09:30:00")
+    pnl = _day_pnl("600519", 100, 1306.45, 1328.36, "2026-08-05")
+    assert pnl == pytest.approx((1306.45 - 1328.36) * 100)
+
+
+def test_day_pnl_mixed_buy_sell():
+    """昨日100股 + 今日买100@1306 + 卖50@1306（昨收1300，现价1306）：
+    前日剩余50股浮盈300 + 卖出50股实现300 = 600。"""
+    from app.analysis.portfolio import _day_pnl
+
+    _insert_trade("600519", "buy", 1300.0, 100, 0, "2026-08-04 09:30:00")   # 前日 100 股
+    _insert_trade("600519", "buy", 1306.0, 100, 0, "2026-08-05 09:30:00")   # 今日买 100
+    _insert_trade("600519", "sell", 1306.0, 50, 0, "2026-08-05 10:00:00")   # 今日卖 50（卖前日）
+    pnl = _day_pnl("600519", 150, 1306.0, 1300.0, "2026-08-05")
+    assert pnl == pytest.approx(600.0)
+
+
+def test_day_pnl_fee_deducted():
+    """当日费用计入今日盈亏。"""
+    from app.analysis.portfolio import _day_pnl
+
+    _insert_trade("600519", "buy", 1306.45, 100, 5.0, "2026-08-05 09:30:00")
+    pnl = _day_pnl("600519", 100, 1306.45, 1328.36, "2026-08-05")
+    assert pnl == pytest.approx(-5.0)
 
 
 # ---------- 打包分位 ----------
@@ -132,7 +209,8 @@ def test_compute_portfolio_series_end_to_end():
     d = s["3y"]
     denom = (1 / 6) / 10 + (2 / 6) / 20 + (3 / 6) / 50
     expect = round(1 / denom, 2)  # 23.08
-    assert d["dates"][0] == "2026-01-02"  # 降序，最新在前
+    assert d["dates"][0] == "2026-01-01"  # 升序，最早在前（历史数据统一升序）
+    assert d["dates"][-1] == "2026-01-02"
     assert d["pe"][0] == pytest.approx(expect, abs=0.01)
     # 综合 PB：w 1/6,2/6,3/6 × PB=2
     pb_denom = 1 / 6 / 2 + 2 / 6 / 2 + 3 / 6 / 2
@@ -178,8 +256,8 @@ def test_portfolio_dynamic_score():
     assert factors["diversity"]["score"] is None  # 权重 0，不参与总分
 
 
-def test_portfolio_excludes_etf_from_stats():
-    """ETF 只计入持仓市值/权重，不参与个股 PE/PB 等统计。"""
+def test_portfolio_etf_counts_in_assets_no_fundamentals():
+    """ETF 计入持仓市值/权重/资产；无财务数据则不参与 PE/PB 等基本面统计。"""
     _seed_holdings([("600000", 100), ("510300", 100)])
     _seed_fin("600000")
     from app.analysis.portfolio import compute_portfolio
@@ -188,9 +266,102 @@ def test_portfolio_excludes_etf_from_stats():
     pf = p["portfolio"]
     etf = next(s for s in p["stocks"] if s["code"] == "510300")
     assert etf["is_etf"] is True
-    assert pf["pe"] is not None  # 只来自非 ETF 的 600000
+    assert pf["pe"] is not None  # 只来自有财务的 600000
+    # ETF 计入总市值
+    assert pf["total_value"] == pytest.approx(2000.0)  # 600000@1000 + 510300@1000
     assert len(p["tag_weights"]) == 2
     etf_tag = next(t for t in p["tags"] if t["tag"] == "ETF")
     assert etf_tag["is_etf"] is True
     assert etf_tag["pe"] is None
     assert etf_tag["total_value"] > 0
+
+
+def test_passthrough_metrics_and_roe_identity():
+    """穿透式：归属利润/净资产汇总 → 综合PE/PB/ROE，且 ROE% = PB/PE×100。"""
+    _seed_holdings([("A", 100), ("B", 200)])
+    # A: 股本1000，TTM利润100，净资产500，现价10 → 市值1000
+    _seed_fin_passthrough("A", total_shares=1000, ttm=100.0, net_assets=500.0)
+    # B: 股本2000，TTM利润200，净资产1000，现价10 → 市值2000
+    _seed_fin_passthrough("B", total_shares=2000, ttm=200.0, net_assets=1000.0)
+    from app.analysis.portfolio import compute_portfolio
+
+    pf = compute_portfolio()["portfolio"]
+    # 归属利润 A=100/1000*100=10，B=200/2000*200=20 → 合计30
+    # 归属净资产 A=0.1*500=50，B=0.1*1000=100 → 合计150
+    # 综合PE=3000/30=100，PB=3000/150=20，ROE=30/150*100=20
+    assert pf["pe"] == pytest.approx(100.0)
+    assert pf["pb"] == pytest.approx(20.0)
+    assert pf["roe"] == pytest.approx(20.0)
+    # ROE% = PB/PE×100（同一覆盖集合）
+    assert pf["roe"] == pytest.approx(pf["pb"] / pf["pe"] * 100, rel=1e-3)
+
+
+def test_passthrough_loser_negative_contribution():
+    """亏损股负利润贡献：综合利润为负 → PE 为负；PB 仍正常。"""
+    _seed_holdings([("A", 100), ("B", 100)])
+    _seed_fin_passthrough("A", total_shares=1000, ttm=100.0, net_assets=500.0)
+    _seed_fin_passthrough("B", total_shares=1000, ttm=-200.0, net_assets=500.0)
+    from app.analysis.portfolio import compute_portfolio
+
+    pf = compute_portfolio()["portfolio"]
+    # 归属利润 A=10，B=-20 → 合计 -10 → PE 负
+    assert pf["pe"] is not None and pf["pe"] < 0
+    assert pf["pb"] is not None
+
+
+def test_passthrough_zero_profit_na():
+    """归属利润=0 → 综合 PE 不适用（None）。"""
+    _seed_holdings([("A", 100)])
+    _seed_fin_passthrough("A", total_shares=1000, ttm=0.0, net_assets=500.0)
+    from app.analysis.portfolio import compute_portfolio
+
+    pf = compute_portfolio()["portfolio"]
+    assert pf["pe"] is None
+
+
+def test_portfolio_fwd_pb_passthrough():
+    """组合前瞻PB = Σ有效市值 ÷ Σ归属预测净资产（穿透汇总，非个股加权）。"""
+    _seed_holdings([("A", 100), ("B", 200)])
+    _seed_fin_passthrough("A", total_shares=1000, ttm=100.0, net_assets=500.0)
+    _seed_fin_passthrough("B", total_shares=2000, ttm=200.0, net_assets=1000.0)
+    from app.analysis.portfolio import compute_portfolio
+
+    pf = compute_portfolio()["portfolio"]
+    # 次级推演：A fwd_na = 500+(110−100)×1=510；B = 1000+(220−200)×1=1020
+    # 归属：A=100/1000×510=51，B=200/2000×1020=102；市值 1000+2000=3000
+    fwd_na_attr = 100 / 1000 * 510 + 200 / 2000 * 1020
+    assert pf["fwd_pb"] == pytest.approx(3000 / fwd_na_attr, rel=1e-3)
+    assert pf["fwd_pb_coverage"] > 0
+
+
+def test_segmented_percentile_order():
+    """正负 PE 分段排序分位：正小→大 → 0 → 负 绝对值大→小（样本≥60）。"""
+    from app.analysis.portfolio import _percentile, _segmented_key
+
+    hist = list(range(100, 156)) + [8.0, 15.0, 30.0, 0.0, -100.0, -20.0, -5.0]  # 56+7=63
+    # 分段序：8 < 15 < 30 < 100..155 < 0 < -100 < -20 < -5
+    order = sorted(hist, key=_segmented_key)
+    assert order[0] == 8.0 and order[1] == 15.0 and order[2] == 30.0
+    assert order[59] == 0.0          # 0 在全部正 PE 之后
+    assert order[60] == -100.0       # 负 PE 从绝对值大（最负）开始
+    assert order[-1] == -5.0
+    # 分位相对关系：正 PE 分位 < 零 < 负 PE（越「较差」分位越高）
+    p30 = _percentile(hist, 30.0)
+    p0 = _percentile(hist, 0.0)
+    pneg = _percentile(hist, -20.0)
+    assert p30 is not None and p0 is not None and pneg is not None
+    assert p30 < p0 < pneg
+    # -20 分段秩：除 -5 外全部在其前 → 62/63
+    assert pneg == pytest.approx(62 / 63 * 100, abs=0.1)
+
+
+def test_negative_pe_ascending_is_rejected():
+    """普通数值升序（负数在前）不是分段序：必须由 _segmented_key 排序。"""
+    from app.analysis.portfolio import _segmented_key
+
+    # 普通升序会把 -100 排最前；分段序应把它排在 0 之后
+    plain = sorted([-100.0, -20.0, -5.0, 8.0, 15.0, 30.0, 0.0])
+    assert plain[0] == -100.0
+    segmented = sorted([-100.0, -20.0, -5.0, 8.0, 15.0, 30.0, 0.0], key=_segmented_key)
+    assert segmented.index(0.0) > segmented.index(30.0)   # 0 在正 PE 之后
+    assert segmented.index(-100.0) > segmented.index(0.0)  # 负 PE 在 0 之后

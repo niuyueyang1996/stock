@@ -43,8 +43,9 @@ def _merged(side: str) -> dict:
 
 @router.get("/scoring/rules")
 def scoring_rules():
-    """当前评分规则：买入/卖出权重 + 因子说明 + 评级阈值。"""
+    """当前评分规则：买入/卖出权重 + 因子说明 + 评级阈值 + 模型版本。"""
     from app.config import RATING_LEVELS
+    from app.analysis.scoring import current_model_version
 
     return {
         "ok": True,
@@ -53,7 +54,8 @@ def scoring_rules():
             "sell_weights": _merged("sell"),
             "factor_names": FACTOR_NAMES,
             "rating_levels": [{"threshold": t, "grade": g, "name": n} for t, g, n in RATING_LEVELS],
-            "note": "缺失因子不参与评分，总分按已用因子权重归一化",
+            "model_version": current_model_version(),
+            "note": "缺失因子不放大其他因子：评分=50+(已知因子得分−50)×覆盖率；覆盖率60%~80%低置信度，低于60%不评级",
         },
     }
 
@@ -88,8 +90,13 @@ def update_scoring_rules(body: RulesBody):
                 "INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(weights, ensure_ascii=False)),
             )
-    logger.info("[评分权重更新] 更新 %s", ", ".join(k for k, _ in updates))
-    return {"ok": True, "data": {"buy_weights": _merged("buy"), "sell_weights": _merged("sell")}}
+    # 权重修改 → 生成新模型版本，只作用于之后的交易；历史快照不变
+    from app.analysis.scoring import bump_model_version
+
+    version = bump_model_version()
+    logger.info("[评分权重更新] 更新 %s，模型版本 %s", ", ".join(k for k, _ in updates), version)
+    return {"ok": True, "data": {"buy_weights": _merged("buy"), "sell_weights": _merged("sell"),
+                                  "model_version": version}}
 
 
 @router.get("/scoring/daily")
@@ -114,9 +121,9 @@ def score_history():
 
 @router.post("/scoring/rebuild")
 def rebuild_scoring():
-    """重建全部有交易日的综合评分（数据源更新后触发，评分页专属入口）。
+    """只重建全部有交易日的日聚合评分（不重算冻结快照）。
 
-    返回重建覆盖的交易日数；失败由全局异常处理器兜底返回明确原因。
+    缺失快照的交易先以 estimated 回填，再聚合。返回重建覆盖的交易日数。
     """
     from app.analysis.scoring import rebuild_all
 

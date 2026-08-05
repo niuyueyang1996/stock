@@ -34,6 +34,12 @@ _RESET_TABLES = [
     "financial_cache",
     "valuation_history_cache",
     "portfolio_valuation_cache",
+    "fx_rate_cache",
+    "trade_score_snapshots",
+    "stock_expected_growth",
+    "stock_expected_revenue_growth",
+    "stock_expected_payout",
+    "dividend_adjustments",
 ]
 
 

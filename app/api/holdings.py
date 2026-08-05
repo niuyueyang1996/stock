@@ -22,6 +22,14 @@ class InitBody(BaseModel):
     items: list[InitItem]
 
 
+class CostAdjustBody(BaseModel):
+    amount: float = 0.0
+    delta_qty: float = 0.0
+    note: str | None = None
+    trade_time: str | None = None
+    is_dividend: bool = False
+
+
 @router.post("/holdings/import-excel")
 async def import_holdings_excel(file: UploadFile = File(...)):
     """一键导入「汇总持仓.xlsx」；仅空仓时允许。"""
@@ -46,6 +54,25 @@ async def import_holdings_excel(file: UploadFile = File(...)):
 def list_holdings(active: bool = True):
     """持仓列表（可含已清仓）。"""
     return {"ok": True, "data": svc.get_holdings(active_only=active)}
+
+
+@router.post("/holdings/{code}/cost-adjust")
+def adjust_holding_cost(code: str, body: CostAdjustBody):
+    """直接调整持仓：amount 正=加成本（补记漏记）、负=减成本（分红除权摊薄）；
+    delta_qty 调整股数（拆股/送股，正=加股 负=减股，只加股不改总成本 → 每股摊薄）。
+
+    插入一条 adjust 交易记录，不生成评分快照。
+    """
+    try:
+        result = svc.adjust_cost(
+            code, amount=body.amount, delta_qty=body.delta_qty,
+            note=body.note, trade_time=body.trade_time, is_dividend=body.is_dividend,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    logger.info("[持仓调整] %s 成本%s元 股数%+g 除权=%s（%s）",
+                code, body.amount, body.delta_qty, body.is_dividend, body.note or "")
+    return {"ok": True, "data": result}
 
 
 @router.post("/holdings")

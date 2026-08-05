@@ -111,26 +111,42 @@ class SinaSource(DataSource):
                     )
             return bars
         if is_etf_code(code):
-            # 场内 ETF 日K用东财接口（stock_zh_a_daily 不支持 ETF）
-            df = ak.fund_etf_hist_em(
-                symbol=code, period="daily",
-                start_date=start.replace("-", ""), end_date=end.replace("-", ""),
-                adjust="",
-            )
+            # 场内 ETF 日K：东财优先，网络不可用时降级到新浪（把 ETF 当股票拉日K）
+            df = None
+            try:
+                df = ak.fund_etf_hist_em(
+                    symbol=code, period="daily",
+                    start_date=start.replace("-", ""), end_date=end.replace("-", ""),
+                    adjust="",
+                )
+            except Exception:  # noqa: BLE001 东财不可用 → 降级
+                df = None
+            if df is None or df.empty:
+                try:
+                    df = ak.stock_zh_a_daily(symbol=to_symbol(code), start_date=start, end_date=end)
+                except Exception:  # noqa: BLE001 新浪也失败 → 空
+                    return []
             if df is None or df.empty:
                 return []
-            return [
-                Bar(
-                    date=str(r["日期"]),
-                    open=float(r["开盘"]),
-                    high=float(r["最高"]),
-                    low=float(r["最低"]),
-                    close=float(r["收盘"]),
-                    volume=float(r["成交量"]),
-                    amount=float(r["成交额"]),
-                )
-                for _, r in df.iterrows()
-            ]
+            is_em = "日期" in df.columns  # 东财中文列 vs 新浪英文列
+            bars = []
+            for _, r in df.iterrows():
+                d = str(r["日期"] if is_em else r["date"])[:10]
+                if not (start <= d <= end):
+                    continue
+                def cell(em_k, sina_k):
+                    k = em_k if is_em else sina_k
+                    try:
+                        return float(r[k]) if k in r.index and r[k] is not None else 0.0
+                    except (TypeError, ValueError):
+                        return 0.0
+                bars.append(Bar(
+                    date=d,
+                    open=cell("开盘", "open"), high=cell("最高", "high"),
+                    low=cell("最低", "low"), close=cell("收盘", "close"),
+                    volume=cell("成交量", "volume"), amount=cell("成交额", "amount"),
+                ))
+            return bars
         symbol = to_symbol(code)
         df = ak.stock_zh_a_daily(symbol=symbol, start_date=start, end_date=end)
         if df is None or df.empty:
@@ -200,6 +216,18 @@ class SinaSource(DataSource):
         if bps is None:
             bps = cell("每股净资产")
         net_assets = round(bps * total_shares, 2) if (bps is not None and total_shares) else cell("股东权益合计(净资产)")
+        # 上年末归母净资产：优先年报「归母净资产」指标，兜底「股东权益合计(净资产)」×? 或 上年每股净资产×股本
+        last_year_net_assets = None
+        if last_annual:
+            last_year_net_assets = cell("归母净资产", last_annual)
+            if last_year_net_assets is None:
+                last_year_net_assets = cell("股东权益合计(净资产)", last_annual)
+            if last_year_net_assets is None:
+                ly_bps = cell("每股净资产", last_annual)
+                if ly_bps is None:
+                    ly_bps = cell("每股净资产_最新股数", last_annual)
+                if ly_bps is not None and total_shares:
+                    last_year_net_assets = round(ly_bps * total_shares, 2)
 
         return Financials(
             report_date=str(latest),
@@ -209,6 +237,7 @@ class SinaSource(DataSource):
             profit_yoy=cell("归属母公司净利润增长率"),
             net_profit=net_profit,
             net_assets=net_assets,
+            last_year_net_assets=last_year_net_assets,
             eps=eps,
             dv_per_share=dv_per_share,
             payout_ratio=payout_ratio,

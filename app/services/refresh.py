@@ -211,6 +211,7 @@ FULL_ITEMS = {
     "bars": "日K历史（全量重拉覆盖）",
     "financials": "财务数据（净利/净资产/EPS/支付率）",
     "valuation": "估值分位（百度序列 + 1y/3y/5y 分位 + 实时估值）",
+    "fx": "港股汇率（HKD/CNY）",
     "portfolio": "组合综合序列重算",
 }
 # 个股刷新（不含组合/评分）：只刷当前股数据
@@ -253,6 +254,8 @@ def refresh_dynamic(items: list[str] | None = None) -> dict:
             result["stocks"].append({"code": code, "daily": r1, "valuation": r2})
         except Exception as e:  # noqa: BLE001 单只失败不中断整体
             result["stocks"].append({"code": code, "error": f"{type(e).__name__}: {e}"})
+    # 港股汇率：存在港股时自动刷新
+    result["fx"] = _refresh_fx(now) if "fx" in items else None
     logger.info("[刷新完成] 动态刷新：%d 只股票，本次拉取 %d 条数据", len(codes), result["total_fetched"])
     return result
 
@@ -279,6 +282,10 @@ def refresh_full(items: list[str] | None = None) -> dict:
             result["stocks"].append({"code": code, "daily": r1, "valuation": r2, "financials": r3})
         except Exception as e:  # noqa: BLE001 单只失败不中断整体
             result["stocks"].append({"code": code, "error": f"{type(e).__name__}: {e}"})
+    # 港股汇率：存在港股时自动刷新
+    result["fx"] = _refresh_fx(now) if "fx" in items else None
+    # 分红除权：今天有除权的持仓自动摊薄成本（幂等）
+    result["dividend"] = _apply_dividends(now)
     # 百度序列可能更新 → 按最新全部持仓权重重算组合综合 PE/PB 序列
     result["portfolio_rebuilt"] = _rebuild_portfolio_series() if "portfolio" in items else 0
     logger.info("[刷新完成] 全量刷新：%d 只股票，本次拉取 %d 条数据，组合序列重算 %d 点",
@@ -317,6 +324,28 @@ def refresh_stock(code: str, items: list[str] | None = None, full: bool = False)
     except Exception as e:  # noqa: BLE001 单股失败不抛
         result["error"] = f"{type(e).__name__}: {e}"
     return result
+
+
+def _refresh_fx(now: datetime) -> dict | None:
+    """存在港股时自动刷新 HKD/CNY 汇率；无港股返回 None。"""
+    try:
+        from app.services.fx import refresh_hk_fx
+
+        return refresh_hk_fx(now)
+    except Exception as e:  # noqa: BLE001 汇率刷新失败不中断整体
+        logger.warning("[汇率] HKD/CNY 刷新失败：%s", e)
+        return {"currency": "HKD", "fetched": 0, "error": str(e)}
+
+
+def _apply_dividends(now: datetime) -> dict:
+    """今天有分红除权的持仓自动摊薄成本（幂等）。失败不中断整体刷新。"""
+    try:
+        from app.services.dividend import apply_dividend_adjustments
+
+        return apply_dividend_adjustments(now)
+    except Exception as e:  # noqa: BLE001 除权失败不中断
+        logger.warning("[除权] 自动除权检查失败：%s", e)
+        return {"today": now.date().isoformat(), "applied": [], "skipped": [], "failed": [], "error": str(e)}
 
 
 def _rebuild_scores() -> int:

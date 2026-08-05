@@ -57,6 +57,7 @@ class Financials:
     roe_annual: float | None = None             # 去年年报 ROE(%)
     revenue_yoy_annual: float | None = None     # 去年年报营收同比(%)
     profit_yoy_annual: float | None = None      # 去年年报净利同比(%)
+    last_year_net_assets: float | None = None   # 上年年报归母净资产(元)，前瞻 PB 用
 
 
 @dataclass

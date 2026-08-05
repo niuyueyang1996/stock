@@ -24,6 +24,30 @@ def create_app() -> FastAPI:
     # 启动时建表（幂等）
     init_db()
 
+    # 启动后后台任务（不阻塞启动）：
+    #   1) 强制拉一遍港股汇率（只有「全量刷新」才会再拉）
+    #   2) 今天有分红除权的持仓自动摊薄成本（幂等）
+    try:
+        import threading
+
+        def _startup_tasks():
+            try:
+                from app.services.fx import refresh_hk_fx
+
+                refresh_hk_fx(force=True)
+            except Exception:  # noqa: BLE001 汇率拉取失败不影响服务
+                pass
+            try:
+                from app.services.dividend import apply_dividend_adjustments
+
+                apply_dividend_adjustments()
+            except Exception:  # noqa: BLE001 除权检查失败不影响服务
+                pass
+
+        threading.Thread(target=_startup_tasks, daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
+
     # 请求日志（在 CORS 之后 add，即最先执行）：记录方法/路径/查询/状态/耗时
     @app.middleware("http")
     async def log_requests(request, call_next):  # noqa: ANN001

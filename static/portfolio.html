@@ -24,7 +24,7 @@
       <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
     </div>
     <div class="panel" id="gaugePanel">
-      <h2>综合估值分位（1y，市值加权）</h2>
+      <h2>综合估值分位（1y，穿透式打包序列）</h2>
       <div style="display:flex;gap:20px;flex-wrap:wrap">
         <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
         <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
@@ -44,8 +44,11 @@
       <div class="chart sm" id="weightChart" style="height:340px"></div>
     </div>
     <div class="panel" id="peBarPanel">
-      <h2>各持仓 PE 分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
-      <div class="chart sm" id="peBars" style="height:420px"></div>
+      <h2>各持仓估值分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75) · 无基本面(ETF/港股)不显示</span></h2>
+      <div class="row" style="align-items:stretch">
+        <div class="chart sm" id="peBars" style="flex:1;min-width:280px;height:420px"></div>
+        <div class="chart sm" id="pbBars" style="flex:1;min-width:280px;height:420px"></div>
+      </div>
     </div>
     <div class="panel" id="tablePanel">
       <div class="row">
@@ -87,7 +90,7 @@
 
     async function loadPage() {
       try {
-        const p = await api('/portfolio');
+        const p = await api('/portfolio', { blocking: true });
         lastPortfolio = p;
         renderTagTabs(p);
         renderSummary(p);
@@ -261,6 +264,7 @@
         ['PE分位(1y)', fmtPct(pf.pe_pct)],
         ['PB分位(1y)', fmtPct(pf.pb_pct)],
         ['年化波动率', fmtPct(pf.volatility), null, `样本 ${pf.volatility_sample_days} 交易日`],
+        ['累计已收分红', '¥' + fmtNum(pf.total_dividend)],
       ];
       const card = ([l, v, c, note, noteCls]) =>
         `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div>${note ? `<div class="label ${noteCls || ''}">${note}</div>` : ''}</div>`;
@@ -297,22 +301,33 @@
       const chart = initChart(document.getElementById('scoreFactorChart'));
       if (!chart) return;
       const pf = p.portfolio;
+      // 只显示参与打分的因子（used=True），标签与条形严格一一对应
+      const used = factors.filter((f) => f.used && f.score != null);
+      const names = used.map((f) => f.name);
+      const scores = used.map((f) => ({
+        value: f.score,
+        raw: f.raw,
+        itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
+      }));
       chart.setOption({
         title: {
           text: `综合得分 ${pf.score == null ? '—' : pf.score} ${pf.score_rating || ''}`,
           left: 'center', textStyle: { fontSize: 14 },
         },
-        tooltip: { trigger: 'axis' },
+        tooltip: {
+          trigger: 'axis',
+          formatter: (ps) => {
+            const i = ps[0].dataIndex;
+            return `${names[i]}：${scores[i].value} 分${scores[i].raw != null ? `（原始值 ${scores[i].raw}）` : ''}`;
+          },
+        },
         grid: { left: 120, right: 40, top: 44, bottom: 30 },
         xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}' } },
-        yAxis: { type: 'category', data: factors.map((f) => f.name).reverse(), inverse: true },
+        yAxis: { type: 'category', data: names },
         series: [{
           type: 'bar', barWidth: 16,
-          data: factors.map((f) => ({
-            value: f.score,
-            itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
-          })),
-          label: { show: true, position: 'right' },
+          data: scores,
+          label: { show: true, position: 'right', formatter: (p) => p.value },
         }],
       });
     }
@@ -350,12 +365,18 @@
           '持仓权重（按标签）',
         );
       }
-      const items = p.stocks
+      const peItems = p.stocks
         .filter((s) => !s.is_etf)
         .filter((s) => s.pe_pct !== null && s.pe_pct !== undefined)
         .map((s) => ({ name: s.name, value: s.pe_pct }))
         .sort((a, b) => b.value - a.value);
-      if (items.length) quantileBars(document.getElementById('peBars'), items, 'PE 分位(1y)');
+      if (peItems.length) quantileBars(document.getElementById('peBars'), peItems, 'PE 分位(1y)');
+      const pbItems = p.stocks
+        .filter((s) => !s.is_etf)
+        .filter((s) => s.pb_pct !== null && s.pb_pct !== undefined)
+        .map((s) => ({ name: s.name, value: s.pb_pct }))
+        .sort((a, b) => b.value - a.value);
+      if (pbItems.length) quantileBars(document.getElementById('pbBars'), pbItems, 'PB 分位(1y)');
     }
 
     function sortedStocks(stocks, mode) {

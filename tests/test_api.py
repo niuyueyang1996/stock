@@ -11,6 +11,65 @@ def client():
     return TestClient(create_app(), raise_server_exceptions=False)
 
 
+class _WriteDetector:
+    """包装 SQLite 连接，记录写语句（GET 读路径不应有任何写）。"""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.writes = []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __setattr__(self, name, value):
+        if name in ("_inner", "writes"):
+            super().__setattr__(name, value)
+        else:
+            setattr(self._inner, name, value)
+
+    def execute(self, sql, *a, **k):
+        self._track(sql)
+        return self._inner.execute(sql, *a, **k)
+
+    def executemany(self, sql, *a, **k):
+        self._track(sql)
+        return self._inner.executemany(sql, *a, **k)
+
+    def _track(self, sql):
+        head = str(sql).strip().upper().split(" ", 1)[0]
+        if head in ("INSERT", "UPDATE", "DELETE", "REPLACE", "DROP", "ALTER", "CREATE"):
+            self.writes.append(head)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._inner.__exit__(exc_type, exc, tb)
+
+
+def test_get_endpoints_no_db_writes(client):
+    """GET /portfolio /stocks/{code} /holdings 全程无数据库写入（只读缓存）。"""
+    from unittest import mock
+
+    import sqlite3
+
+    _seed_stock_cache(client)  # 写路径造缓存（不计入）
+    real_connect = sqlite3.connect
+    detector = {}
+
+    def patched_connect(*a, **k):
+        d = _WriteDetector(real_connect(*a, **k))
+        detector["d"] = d
+        return d
+
+    with mock.patch("sqlite3.connect", patched_connect):
+        assert client.get("/api/portfolio").status_code == 200
+        assert client.get("/api/stocks/600000").status_code == 200
+        assert client.get("/api/holdings").status_code == 200
+        assert client.get("/api/portfolio/weights").status_code == 200
+    assert detector["d"].writes == []
+
+
 def test_status(client):
     r = client.get("/api/status")
     assert r.status_code == 200
@@ -88,13 +147,60 @@ def test_portfolio(client):
     assert r.json()["data"]["stock"]["code"] == "600000"
 
 
+def _seed_stock_cache(client, code="600000"):
+    """预置个股缓存：日K + 财务 + 估值序列 + 当前估值（GET 详情用）。"""
+    from app.data.base import Bar, Financials
+    from app.data.cache import (
+        upsert_daily_prices,
+        upsert_financials,
+        upsert_valuation,
+        upsert_valuation_series,
+    )
+    from datetime import date, timedelta
+
+    today = date.today().isoformat()
+    prev = (date.today() - timedelta(days=1)).isoformat()
+    upsert_daily_prices(code, [Bar(prev, 10, 10, 10, 9.95, 100, 1000), Bar(today, 10, 10, 10, 10, 100, 1000)], "mock")
+    upsert_financials(code, Financials(
+        report_date="20260331", roe=20.0, roa=4.0, revenue_yoy=8.0, profit_yoy=10.0,
+        net_profit=1_000_000_000, net_assets=5_000_000_000, eps=1.0,
+        dv_per_share=0.5, payout_ratio=50.0, dv_report="2025年报",
+        total_shares=1_000_000_000,
+        profit_series=[
+            {"report_date": "20260331", "net_profit": 1_000_000_000, "profit_yoy": 10.0},
+            {"report_date": "20251231", "net_profit": 1_000_000_000, "profit_yoy": 5.0},
+        ],
+    ))
+    upsert_valuation(code, today, pe_ttm=10.0, pb=1.0)
+    upsert_valuation_series(code, "pe", "1y", [(today, 10.0)])
+
+
 def test_stock_detail(client):
+    _seed_stock_cache(client)
     r = client.get("/api/stocks/600000")
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["code"] == "600000"
     assert data["quote"]["price"] == pytest.approx(10.0)
     assert "quantiles" in data and "fundflow_15m" in data
+
+
+def test_stock_detail_backfills_name_from_list(client, monkeypatch):
+    """stocks 表缺名称时，从全市场列表回填名称（并写入 stocks 表）。"""
+    import app.api.stocks as smod
+
+    monkeypatch.setattr(smod, "_load_stock_list", lambda: [{"code": "601728", "name": "中国电信"}])
+    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
+    _seed_stock_cache(client, "601728")
+    r = client.get("/api/stocks/601728")
+    assert r.status_code == 200
+    assert r.json()["data"]["name"] == "中国电信"
+    # 回填已写入 stocks 表 → 交易流水也能拿到名称
+    from app.models.db import get_conn
+
+    with get_conn() as c:
+        row = c.execute("SELECT name FROM stocks WHERE code='601728'").fetchone()
+    assert row["name"] == "中国电信"
 
 
 def test_expected_growth_crud(client):
@@ -121,6 +227,7 @@ def test_stock_tag_crud(client):
     r = client.put("/api/stocks/600000/tag", json={"tag": "银行"})
     assert r.status_code == 200
     assert r.json()["data"]["tag"] == "银行"
+    _seed_stock_cache(client)
     r = client.get("/api/stocks/600000")
     assert r.status_code == 200
     assert r.json()["data"]["tag"] == "银行"
@@ -189,30 +296,45 @@ def test_unhandled_exception_returns_clear_detail(client, monkeypatch):
     assert "数据源连接失败" in body["detail"]
 
 
-def test_stock_detail_auto_downloads_when_no_cache(client, monkeypatch):
-    """GET /stocks/{code}：无缓存行情 → 自动同步全部数据后重试成功（首次查看任意 A 股即出结果）。"""
+def test_stock_detail_cache_miss_409_no_network(client, monkeypatch):
+    """GET /stocks/{code}：无缓存 → 409 CACHE_MISS，不联网不写库不自动下载。"""
     import app.api.stocks as smod
-    from app.services import quote as qmod
     from app.services import refresh as rmod
 
     calls = []
     monkeypatch.setattr(rmod, "sync_stock_full", lambda code: calls.append(code) or {"code": code})
 
-    orig = qmod.get_quote
-    state = {"n": 0}
+    r = client.get("/api/stocks/600000")
+    assert r.status_code == 409
+    body = r.json()
+    assert body["code"] == "CACHE_MISS"
+    assert body["stock"] == "600000"
+    assert "bars" in body["missing_items"]
+    assert body["can_refresh"] is True
+    assert calls == []  # 未触发自动下载
 
-    def flaky_quote(code, *a, **k):
-        state["n"] += 1
-        if state["n"] == 1:
-            raise RuntimeError("无缓存行情")
-        return orig(code, *a, **k)
 
-    monkeypatch.setattr(qmod, "get_quote", flaky_quote)
-    monkeypatch.setattr(smod, "get_quote", flaky_quote)
+def test_stock_detail_cache_status_endpoint(client):
+    """GET /stocks/{code}/cache-status：纯读返回缺失/可用项。"""
+    r = client.get("/api/stocks/600000/cache-status")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["code"] == "CACHE_MISS"
+    assert "bars" in data["missing_items"]
+    # 下载后齐全
+    client.post("/api/stocks/600000/refresh/full", json={"items": ["bars", "financials", "valuation"]})
+    r2 = client.get("/api/stocks/600000/cache-status")
+    assert r2.json()["data"]["code"] == "CACHE_OK"
 
+
+def test_stock_detail_download_then_open(client):
+    """前端下载流：409 → POST refresh/full → GET 自动重试成功。"""
+    r = client.get("/api/stocks/600000")
+    assert r.status_code == 409
+    r = client.post("/api/stocks/600000/refresh/full", json={"items": ["bars", "financials", "valuation"]})
+    assert r.status_code == 200
     r = client.get("/api/stocks/600000")
     assert r.status_code == 200
-    assert calls == ["600000"]  # 自动同步被触发一次
     assert r.json()["data"]["quote"]["price"] == pytest.approx(10.0)
 
 
