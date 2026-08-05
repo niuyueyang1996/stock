@@ -21,6 +21,8 @@ DIMENSION_CN = {
     "cyclicality": "周期性", "moat": "护城河", "fundamentals": "基本面",
     "growth": "增长", "dividend": "股息", "valuation": "估值", "competition": "同业竞争",
 }
+# dimensions 键名别名：AI 偶发把维度 JSON 键名写成中文（prompt 要求正文用中文维度名），映射回英文键
+DIM_KEY_ALIASES = {k: (k, cn) for k, cn in DIMENSION_CN.items()}
 
 _SYSTEM_PROMPT = (
     "你是资深股票分析师。根据给定的个股结构化数据，从周期性、护城河、基本面、增长、股息、估值、同业竞争 "
@@ -33,9 +35,11 @@ _SYSTEM_PROMPT = (
     "   c) 无法确认时效时明确说明。\n"
     "3. 系统提供数据缺失时，在该维度 analysis 中注明「（系统数据缺失，以下为补充）」。\n"
     "4. data_source 字段：provided=基于系统数据；supplemented=AI 补充/推断。\n"
-    "5. 输出语言：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、detail、"
-    "预期增速依据）一律使用简体中文，禁止混入英文单词；维度名用中文（周期性、护城河、基本面、增长、股息、估值、同业竞争），"
-    "不要写 growth/fundamentals/valuation 等英文。JSON 键名保持英文（程序结构用），仅文字内容须为中文。\n"
+    "5. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、detail、"
+    "预期增速依据）一律使用简体中文，禁止混入英文单词；若在正文中提及维度，用中文名"
+    "（周期性、护城河、基本面、增长、股息、估值、同业竞争），不要写 growth/fundamentals 等英文。\n"
+    "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 7 个键固定为 "
+    "cyclicality/moat/fundamentals/growth/dividend/valuation/competition，禁止改名。\n"
     "6. expected_growth 字段：基于系统财务数据（最新财报同比、TTM 同比、ROE、支付率、前瞻指标）与陷阱判断，"
     "给出你对该股未来一年净利与营收年同比增速的预判（%，可为负），并用 net_profit_reason / revenue_reason 简述依据。"
     "若识别出周期陷阱，勿把历史高点同比直接外推到未来，增速应回归行业中枢。\n\n"
@@ -309,8 +313,11 @@ def _normalize_report(data: dict) -> dict:
         risk = 50
     dims = {}
     raw_dims = data.get("dimensions") or {}
+    if not isinstance(raw_dims, dict):
+        raw_dims = {}
     for k in DIMENSIONS:
-        d = raw_dims.get(k) or {}
+        # AI 偶发把维度 JSON 键名写成中文，映射回英文键（英文优先，中文兜底）
+        d = next((raw_dims[a] for a in DIM_KEY_ALIASES[k] if isinstance(raw_dims.get(a), dict)), {})
         try:
             score = max(0, min(100, int(float(d.get("score", 50)))))
         except (TypeError, ValueError):

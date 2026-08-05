@@ -32,6 +32,36 @@ _FAKE_AI_OUTPUT = {
 }
 
 
+# AI 偶发把 dimensions 键名写成中文（300308 中际旭创真实复现：全部 analysis 丢失）
+_CHINESE_KEY_AI_OUTPUT = {
+    "rating": "B",
+    "risk_score": 75,
+    "dimensions": {
+        "周期性": {"score": 45, "analysis": "行业处于AI算力景气高点，盈利有周期性回落风险", "risk": "high", "data_source": "provided"},
+        "护城河": {"score": 85, "analysis": "全球光模块龙头，800G/1.6T技术领先", "risk": "low", "data_source": "provided"},
+        "基本面": {"score": 78, "analysis": "盈利强劲增长，ROE 42%", "risk": "low", "data_source": "provided"},
+        "增长": {"score": 70, "analysis": "收入高增但增速将回落", "risk": "medium", "data_source": "provided"},
+        "股息": {"score": 30, "analysis": "股息率仅0.14%，股东回报弱", "risk": "high", "data_source": "provided"},
+        "估值": {"score": 35, "analysis": "PE 74、PB 31 处历史高位", "risk": "high", "data_source": "provided"},
+        "同业竞争": {"score": 80, "analysis": "竞争格局良好，头部集中", "risk": "low", "data_source": "provided"},
+    },
+    "cross_analysis": {
+        "cycle_trap": {"detected": True, "impact_score": -15, "explanation": "盈利与营收处于AI景气高点，需求透支，警惕周期回落"},
+        "value_trap": {"detected": False, "impact_score": 0, "explanation": ""},
+        "dividend_trap": {"detected": False, "impact_score": 0, "explanation": ""},
+    },
+    "expected_growth": {
+        "net_profit": 40.0,
+        "net_profit_reason": "净利增速依据（全中文）",
+        "revenue": 35.0,
+        "revenue_reason": "营收增速依据（全中文）",
+    },
+    "summary": "公司盈利强劲、成长突出，但估值处历史高位",
+    "reasons": ["全球光模块龙头", "业绩增长迅速", "估值处历史高位", "行业竞争格局良好"],
+    "detail": "## 详细报告\n各维度分析…",
+}
+
+
 def _add_active_model():
     m = ai_svc.save_model("DeepSeek", "https://api.deepseek.com/v1", "sk-test", "deepseek-chat")
     ai_svc.activate_model(m["id"])
@@ -131,6 +161,33 @@ def test_normalize_expected_growth():
     # 非 dict（如字符串）→ 全 None，不抛异常
     n4 = ai_svc._normalize_report({"expected_growth": "oops"})
     assert n4["expected_growth"]["net_profit"] is None
+
+
+def test_normalize_maps_chinese_dimension_keys():
+    """AI 把 dimensions 键名写成中文（300308 真实复现）→ 映射回英文键，analysis 不再丢失。"""
+    n = ai_svc._normalize_report(_CHINESE_KEY_AI_OUTPUT)
+    dims = n["dimensions"]
+    assert dims["cyclicality"]["analysis"] == "行业处于AI算力景气高点，盈利有周期性回落风险"
+    assert dims["moat"]["score"] == 85
+    assert dims["growth"]["risk"] == "medium"
+    assert dims["valuation"]["analysis"] == "PE 74、PB 31 处历史高位"
+    assert dims["competition"]["data_source"] == "provided"
+    # 其他字段不受影响
+    assert n["expected_growth"]["net_profit"] == 40.0
+    assert n["cross_analysis"]["cycle_trap"]["detected"] is True
+    assert n["rating"] == "B"
+
+
+def test_analyze_stock_chinese_dimension_keys(monkeypatch):
+    """analyze_stock 遇中文维度键名：落库报告各维度 analysis 完整（修复 300308 问题）。"""
+    _add_active_model()
+    monkeypatch.setattr(ai_svc, "chat_json", lambda *a, **k: _CHINESE_KEY_AI_OUTPUT)
+    result = ai_svc.analyze_stock("300308")
+    dims = result["report"]["dimensions"]
+    assert all(dims[k]["analysis"] for k in ai_svc.DIMENSIONS)
+    assert dims["growth"]["score"] == 70
+    assert dims["cyclicality"]["risk"] == "high"
+    assert dims["moat"]["analysis"].startswith("全球光模块龙头")
 
 
 # ---------- API 层 ----------
