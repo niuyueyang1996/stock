@@ -1,0 +1,23 @@
+OPTIMIZATION_PLAN.md
+  s_fc28265c948f97::t_675eff7578ada5 1-4,6-44,48,50,56-66,74-84,89-96,98,101-115,120,122,124-132
+  s_fc28265c948f97::t_9a5b2c91588a32 5,45-47,49,51-55,67-73,85-88,97,99-100,116-119,121,123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "ee01e5ceac1bffc17a6e6279835c517c18579b86",
+  "prompts": {},
+  "logical_commit_id": "ee01e5ceac1bffc17a6e6279835c517c18579b86",
+  "sessions": {
+    "s_fc28265c948f97": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd129-cbe0-7ae3-8759-edb7a8de2c64",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 643,
+      "total_deletions": 511
+    }
+  }
+}
