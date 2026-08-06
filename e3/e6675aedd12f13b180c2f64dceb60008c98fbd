@@ -1,0 +1,24 @@
+app/windows_launcher.py
+  s_0e9a490e4e5bf6::t_9e2796cbe18adb 272,285
+tests/test_packaging.py
+  s_0e9a490e4e5bf6::t_9e2796cbe18adb 135-170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e3e6675aedd12f13b180c2f64dceb60008c98fbd",
+  "prompts": {},
+  "logical_commit_id": "e3e6675aedd12f13b180c2f64dceb60008c98fbd",
+  "sessions": {
+    "s_0e9a490e4e5bf6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd4d1-d913-7501-ad60-957977067f54",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 38,
+      "total_deletions": 1
+    }
+  }
+}
