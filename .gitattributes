@@ -3,5 +3,5 @@ static/vendor/echarts.min.js -text
 
 # Keep automation sources predictable; build.ps1 is intentionally ASCII-only.
 packaging/windows/build.ps1 text eol=lf
+packaging/windows/languages/*.isl -text
 .github/workflows/*.yml text eol=lf
-

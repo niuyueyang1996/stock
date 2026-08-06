@@ -21,10 +21,15 @@ jobs:
       - name: Verify vendored asset integrity
         shell: pwsh
         run: |
-          $expected = "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1"
-          $actual = (Get-FileHash -Algorithm SHA256 static/vendor/echarts.min.js).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) {
-            throw "ECharts checkout checksum mismatch: $actual"
+          $files = @{
+            "static/vendor/echarts.min.js" = "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1"
+            "packaging/windows/languages/ChineseSimplified.isl" = "e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d"
+          }
+          foreach ($file in $files.Keys) {
+            $actual = (Get-FileHash -Algorithm SHA256 $file).Hash.ToLowerInvariant()
+            if ($actual -ne $files[$file]) {
+              throw "Checkout checksum mismatch for ${file}: $actual"
+            }
           }
 
       - name: Set up Python 3.12 x64
@@ -37,7 +42,7 @@ jobs:
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        run: choco install innosetup --version=6.7.1 --yes --no-progress --allow-downgrade
 
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')

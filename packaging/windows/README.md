@@ -9,7 +9,7 @@ Python 3.12、全部依赖和静态资源，不会在用户电脑上运行 pip�
 
 - Windows 10/11 x64
 - 64 位 Python 3.12，且 `python` 在 PATH 中
-- Inno Setup 6
+- Inno Setup 6.7.1
 - 可访问 Python 包索引（仅构建时需要）
 
 在仓库根目录执行：

@@ -10,6 +10,9 @@
 #ifndef IconFile
   #define IconFile "stock-analyzer.ico"
 #endif
+#ifndef LanguageFile
+  #define LanguageFile "languages\ChineseSimplified.isl"
+#endif
 
 #define MyAppName "个人自建 ETF 持仓分析"
 #define MyAppExeName "StockAnalyzer.exe"
@@ -37,7 +40,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimp"; MessagesFile: "{#LanguageFile}"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

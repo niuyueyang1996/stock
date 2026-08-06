@@ -124,3 +124,32 @@ def test_echarts_is_marked_binary_for_cross_platform_checkout():
     root = Path(__file__).resolve().parent.parent
     attributes = (root / ".gitattributes").read_text(encoding="ascii")
     assert "static/vendor/echarts.min.js -text" in attributes.splitlines()
+
+
+def test_inno_language_file_is_vendored_and_wired():
+    root = Path(__file__).resolve().parent.parent
+    language = root / "packaging" / "windows" / "languages" / "ChineseSimplified.isl"
+    assert hashlib.sha256(language.read_bytes()).hexdigest() == (
+        "e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d"
+    )
+    assert "Inno Setup version 6.5.0+ Chinese Simplified messages" in language.read_text(
+        encoding="utf-8"
+    )
+
+    installer = (root / "packaging" / "windows" / "StockAnalyzer.iss").read_text(
+        encoding="utf-8"
+    )
+    assert 'MessagesFile: "{#LanguageFile}"' in installer
+    assert "compiler:Languages" not in installer
+
+    attributes = (root / ".gitattributes").read_text(encoding="ascii")
+    assert "packaging/windows/languages/*.isl -text" in attributes.splitlines()
+
+
+def test_workflow_pins_inno_setup_version():
+    root = Path(__file__).resolve().parent.parent
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "choco install innosetup --version=6.7.1" in workflow
+    assert "--allow-downgrade" in workflow

@@ -23,10 +23,14 @@ $LockFile = Join-Path $PSScriptRoot 'requirements-windows.lock'
 $SpecFile = Join-Path $PSScriptRoot 'StockAnalyzer.spec'
 $IssFile = Join-Path $PSScriptRoot 'StockAnalyzer.iss'
 $CompiledIssFile = Join-Path $BuildRoot 'StockAnalyzer.iss'
+$LanguageFile = Join-Path $PSScriptRoot 'languages\ChineseSimplified.isl'
+$CompiledLanguageFile = Join-Path $BuildRoot 'ChineseSimplified.isl'
 $IconScript = Join-Path $PSScriptRoot 'generate_icon.py'
 $IconFile = Join-Path $PSScriptRoot 'stock-analyzer.ico'
 $EChartsFile = Join-Path $Root 'static\vendor\echarts.min.js'
 $EChartsSha256 = 'bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1'
+$LanguageFileSha256 = 'e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d'
+$ExpectedInnoVersion = '6.7.1'
 
 New-Item -ItemType Directory -Force -Path $BuildRoot, $OutputDir | Out-Null
 
@@ -70,6 +74,10 @@ try {
     if ($ActualEChartsHash -ne $EChartsSha256) {
         throw "ECharts checksum validation failed: $ActualEChartsHash"
     }
+    $ActualLanguageHash = (Get-FileHash -Algorithm SHA256 $LanguageFile).Hash.ToLowerInvariant()
+    if ($ActualLanguageHash -ne $LanguageFileSha256) {
+        throw "Inno Setup language file checksum validation failed: $ActualLanguageHash"
+    }
 
     & $VenvPython $IconScript
     if ($LASTEXITCODE -ne 0) { throw 'Failed to generate the application icon.' }
@@ -95,6 +103,8 @@ try {
     $IssText = [IO.File]::ReadAllText($IssFile, [Text.Encoding]::UTF8)
     $Utf8Bom = [Text.UTF8Encoding]::new($true)
     [IO.File]::WriteAllText($CompiledIssFile, $IssText, $Utf8Bom)
+    $LanguageText = [IO.File]::ReadAllText($LanguageFile, [Text.Encoding]::UTF8)
+    [IO.File]::WriteAllText($CompiledLanguageFile, $LanguageText, $Utf8Bom)
 
     $IsccCandidates = @(
         (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
@@ -106,8 +116,12 @@ try {
     if (-not $Iscc) {
         throw 'Inno Setup 6 was not found. Install it from https://jrsoftware.org/isdl.php'
     }
+    $InnoVersion = (Get-Item $Iscc).VersionInfo.ProductVersion
+    if (-not $InnoVersion.StartsWith($ExpectedInnoVersion)) {
+        throw "Inno Setup version $InnoVersion was found; version $ExpectedInnoVersion is required."
+    }
 
-    & $Iscc "/DMyAppVersion=$Version" "/DSourceDir=$BundleDir" "/DOutputDir=$OutputDir" "/DIconFile=$IconFile" $CompiledIssFile
+    & $Iscc "/DMyAppVersion=$Version" "/DSourceDir=$BundleDir" "/DOutputDir=$OutputDir" "/DIconFile=$IconFile" "/DLanguageFile=$CompiledLanguageFile" $CompiledIssFile
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
 
     $Installer = Join-Path $OutputDir "StockAnalyzer-Setup-$Version-x64.exe"
