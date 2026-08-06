@@ -6,7 +6,7 @@ FastAPI + SQLite + 原生 JS/ECharts，无前端构建。数据源 akshare（新
 ## 快速上手
 
 ```bash
-.venv/Scripts/python.exe -m uvicorn app.main:app --port 8000   # 启动
+.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000   # 启动
 .venv/Scripts/python.exe -m pytest tests/ -q -p no:cacheprovider --basetemp=.tmp_test  # 测试（Windows 需 basetemp）
 ```
 
@@ -37,7 +37,8 @@ app/
     volatility.py  人民币波动率（前向填充 3 日 + 95% 覆盖门槛）
   api/             system/holdings/trades/stocks/portfolio/scoring
 static/            前端 4 页 + js/（api.js common.js charts.js）
-tests/             pytest（122 用例，全程离线，conftest 打桩网络）
+packaging/windows/ Windows 托盘程序 + PyInstaller/Inno Setup 构建链
+tests/             pytest（含 Windows 打包支持测试，全程离线，conftest 打桩网络）
 ```
 
 ## 核心口径（用户确认，改前必读）
@@ -96,6 +97,8 @@ tests/             pytest（122 用例，全程离线，conftest 打桩网络）
 - **交易评分页（trade.html）**：左目录 + 右详情布局。`.row` 高度 `70vh` + `flex-wrap:nowrap`；`day-dir`/`day-detail` 需 `min-height:0` 才让 `overflow-y:auto` 生效（flex 子项默认 min-height:auto 会阻止滚动，踩过坑）。
 - 评分快照状态中文：frozen→冻结 / estimated→回填 / insufficient→数据不足；日状态 rated→已评级 / low_coverage→覆盖不足 / no_scoreable→无可评分。
 - **start.cmd 必须纯 ASCII**（cmd 按 GBK 解析 UTF-8 中文会崩）；`if` 括号块内不能有 `(3,10)` 这类括号（被当块结束），版本检查移到独立标签。
+- Windows 打包态的数据库/日志/运行状态位于 `%LOCALAPPDATA%\StockAnalyzer`；静态资源从 PyInstaller `_MEIPASS` 只读加载。`STOCK_APP_HOME` 仅用于测试/便携覆盖。
+- Windows 启动器必须保持单实例、只监听 `127.0.0.1`，用 `/api/health` 判断服务身份；安装包严禁包含仓库 `data/` 中的个人文件。
 
 ## 关键坑（踩过，改前注意）
 - SQLite 写事务内不要再开连接写（如汇率落库）会 "database is locked"——汇率计算移到事务外。
@@ -106,5 +109,5 @@ tests/             pytest（122 用例，全程离线，conftest 打桩网络）
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 
 ## 测试
-- 122 用例。重点：scoring（冻结快照/覆盖率/日聚合）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级）、api（409 CACHE_MISS/GET 零写入/名称回填）。
+- 145 用例。重点：scoring（冻结快照/覆盖率/日聚合）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级）、api（409 CACHE_MISS/GET 零写入/名称回填）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockSource、quote 固定、列表为空。

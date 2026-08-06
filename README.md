@@ -68,12 +68,30 @@
 | Web 框架 | FastAPI + Uvicorn |
 | 数据库 | SQLite（标准库 `sqlite3`，版本化迁移） |
 | 数据源 | akshare（新浪/雪球/百度/东财/中行） |
-| 前端 | 原生 HTML/JS + ECharts 5（CDN） |
+| 前端 | 原生 HTML/JS + 本地内置 ECharts 5.6.0 |
 | 测试 | pytest + httpx TestClient（全程离线） |
 
 ---
 
 ## 快速开始
+
+### Windows 一键安装（推荐）
+
+从 [GitHub Releases](https://github.com/niuyueyang1996/stock/releases) 下载
+`StockAnalyzer-Setup-<version>-x64.exe`，双击后按中文向导安装。安装包支持 Windows
+10/11 x64，已经内置 Python 和全部依赖，不需要用户安装开发工具或打开命令行。
+
+安装完成后会在桌面和开始菜单创建“股票持仓分析”快捷方式。双击后程序进入系统托盘，
+服务就绪时自动用默认浏览器打开首页。托盘菜单可重新打开首页、重启服务、查看日志或退出。
+
+> 首版安装包未做代码签名，SmartScreen 可能显示“Windows 已保护你的电脑”。请先核对
+> Release 同时提供的 SHA-256，然后点击“更多信息”→“仍要运行”。
+
+个人数据库和日志保存在 `%LOCALAPPDATA%\StockAnalyzer`。覆盖安装不会删除数据；卸载时
+会询问是否删除，默认选择保留。详细构建说明见
+[`packaging/windows/README.md`](packaging/windows/README.md)。
+
+### 源码运行（开发者）
 
 ```bash
 # 1) 创建虚拟环境并安装依赖（首次）
@@ -81,7 +99,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 2) 启动服务（默认 0.0.0.0:8000，自动建表/迁移）
+# 2) 启动服务（默认 127.0.0.1:8000，自动建表/迁移）
 ./run.sh                 # 或 start.cmd / uvicorn app.main:app --port 8000
 ```
 
@@ -153,6 +171,7 @@ pip install -r requirements.txt
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/health` | 本地健康检查（不访问数据源，含应用标识/版本） |
 | GET | `/status` | 服务状态 + 数据源探活 |
 | POST | `/refresh` | 动态刷新（价格/估值/汇率） |
 | POST | `/refresh/full` | 全量刷新（日K/财务/估值/汇率/组合序列/自动除权） |
@@ -213,7 +232,8 @@ pip install -r requirements.txt
 
 ```
 stock/
-├── run.sh / start.cmd        # 启动脚本
+├── run.sh / start.cmd        # 源码开发启动脚本
+├── packaging/windows/        # PyInstaller + Inno Setup + 一键构建脚本
 ├── README.md / CLAUDE.md     # 文档 + 项目上下文
 ├── app/
 │   ├── main.py               # 入口：init_db、自动除权线程、路由
@@ -226,7 +246,7 @@ stock/
 │   └── scripts/              # 数据源探测
 ├── static/                   # 前端（index/portfolio/stock/trade + js/）
 ├── data/etf.db               # SQLite 数据库
-└── tests/                    # pytest 122 用例（离线）
+└── tests/                    # pytest 145 用例（离线）
 ```
 
 ---
@@ -245,6 +265,6 @@ python -m pytest tests/ -q -p no:cacheprovider --basetemp=.tmp_test
 
 - 数据源依赖新浪/雪球/百度/东财/中行，某源失败对应数据跳过。
 - 15 分钟资金流无可用源，界面占位。
-- ECharts 走 CDN，离线图表不渲染（可下载到 static/js/ 改引用）。
+- Windows 安装包未签名，首次运行可能出现 SmartScreen 提示。
 - 汇率仅实现 HKD/CNY。
 - 送转股不自动处理持仓数量（需手动调整股数）。

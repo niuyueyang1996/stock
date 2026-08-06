@@ -6,9 +6,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import STATIC_DIR
 from app.models.db import init_db
+from app.version import APP_NAME, APP_VERSION
 
 # 全局中文日志：每个 API 请求打印「调用了什么接口」，写操作在业务内打印「更新了什么」
 logging.basicConfig(
@@ -19,7 +21,7 @@ logger = logging.getLogger("api")
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="个人自建ETF持仓分析", version="0.1.0")
+    app = FastAPI(title=APP_NAME, version=APP_VERSION)
 
     # 启动时建表（幂等）
     init_db()
@@ -65,10 +67,15 @@ def create_app() -> FastAPI:
         )
         return response
 
-    # CORS（前端开发用）
+    # 桌面版只绑定 loopback；同时限制 Host 与浏览器跨域来源，避免其他网站操作本机 API。
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+        www_redirect=False,
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -89,7 +96,8 @@ def create_app() -> FastAPI:
         )
 
     # 前端静态资源
-    STATIC_DIR.mkdir(parents=True, exist_ok=True)
+    if not STATIC_DIR.is_dir():
+        raise RuntimeError(f"静态资源目录不存在：{STATIC_DIR}")
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/")

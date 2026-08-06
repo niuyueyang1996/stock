@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.market.calendar import is_market_closed, is_trade_day
+from app.version import APP_ID, APP_VERSION
 
 logger = logging.getLogger("api")
 router = APIRouter()
@@ -59,6 +60,12 @@ def _probe_source() -> dict:
         return manager.status
     except Exception:
         return {}
+
+
+@router.get("/health")
+def health():
+    """纯本地健康检查：不访问行情源，供 Windows 启动器等待服务就绪。"""
+    return {"ok": True, "app_id": APP_ID, "version": APP_VERSION}
 
 
 @router.get("/status")

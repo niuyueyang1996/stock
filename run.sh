@@ -46,4 +46,4 @@ if [ "$NEED_SETUP" = "1" ]; then
     .venv/bin/pip install -r requirements.txt || { echo "[ERROR] 依赖安装失败，请检查网络后重新运行"; exit 1; }
 fi
 
-exec .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "$PORT"
+exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port "$PORT"

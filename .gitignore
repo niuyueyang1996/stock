@@ -8,3 +8,6 @@ __pycache__/
 data/*.db
 data/*.json
 .server.log
+build/
+dist/
+packaging/windows/stock-analyzer.ico

@@ -1,11 +1,45 @@
 """全局配置：路径、收盘确认、评分权重、数据源开关。"""
+import os
+import sys
 from pathlib import Path
 
-# 项目根目录（app/ 的上一级）
+# 项目根目录（app/ 的上一级）与只读资源目录。
+# PyInstaller 中 sys._MEIPASS 指向解包后的程序资源目录；个人数据绝不写入这里。
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+IS_PACKAGED = bool(getattr(sys, "frozen", False))
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", BASE_DIR))
+
+
+def resolve_app_home(
+    *,
+    env: dict[str, str] | None = None,
+    is_packaged: bool | None = None,
+    os_name: str | None = None,
+    base_dir: Path | None = None,
+) -> Path:
+    """Resolve the writable application home for development or a packaged app."""
+    values = os.environ if env is None else env
+    override = values.get("STOCK_APP_HOME", "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    packaged = IS_PACKAGED if is_packaged is None else is_packaged
+    platform_name = os.name if os_name is None else os_name
+    root = BASE_DIR if base_dir is None else base_dir
+    if packaged and platform_name == "nt":
+        local_app_data = values.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            return Path(local_app_data) / "StockAnalyzer"
+        return Path.home() / "AppData" / "Local" / "StockAnalyzer"
+    return root
+
+
+APP_HOME = resolve_app_home()
+DATA_DIR = APP_HOME / "data"
 DB_PATH = DATA_DIR / "etf.db"
-STATIC_DIR = BASE_DIR / "static"
+LOG_DIR = APP_HOME / "logs"
+RUNTIME_DIR = APP_HOME / "runtime"
+STATIC_DIR = RESOURCE_DIR / "static"
 
 # 收盘确认：交易日 now >= 15:00+5min 视为已收盘，用当日收盘价定格
 CLOSE_CONFIRM_MINUTES = 5
