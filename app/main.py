@@ -34,24 +34,47 @@ def create_app() -> FastAPI:
         import threading
 
         def _startup_tasks():
+            # 预热进度写入 app.prewarm，前端首页提示条轮询 /api/status/prewarm 展示
+            from app.prewarm import begin, complete, finish, mark
+
+            begin()
+            logger.info("[预热] 启动后台预热（不阻塞服务）：①港股汇率 ②今日除权 ③全市场列表缓存")
             try:
                 from app.services.fx import refresh_hk_fx
 
-                refresh_hk_fx(force=True)
+                mark("拉取港股汇率")
+                r = refresh_hk_fx(force=True)
+                if r.get("fetched"):
+                    logger.info("[预热] 港股汇率已拉取 %d 项，回填 %d 笔港股金额",
+                                r["fetched"], r.get("backfilled", 0))
+                elif r.get("currency") is None:
+                    logger.info("[预热] 港股汇率：无港股持仓，跳过")
+                else:
+                    logger.info("[预热] 港股汇率已有当日值，跳过")
             except Exception:  # noqa: BLE001 汇率拉取失败不影响服务
-                pass
+                logger.warning("[预热] 港股汇率拉取失败（不影响服务，可稍后全量刷新重试）")
+            complete("港股汇率")
+
             try:
                 from app.services.dividend import apply_dividend_adjustments
 
-                apply_dividend_adjustments()
+                mark("检查今日除权")
+                apply_dividend_adjustments()   # 成功/失败内部已有日志
             except Exception:  # noqa: BLE001 除权检查失败不影响服务
-                pass
+                logger.warning("[预热] 今日除权检查失败（不影响服务）")
+            complete("今日除权")
+
             try:
                 from app.api.stocks import preload_market_lists
 
+                mark("缓存全市场列表")
                 preload_market_lists()
+                logger.info("[预热] 全市场列表缓存就绪，搜索与名称回填可用")
             except Exception:  # noqa: BLE001 市场列表预热失败不影响服务
-                pass
+                logger.warning("[预热] 市场列表预热失败（不影响服务，可稍后全量刷新重试）")
+            complete("全市场列表")
+
+            finish()
 
         threading.Thread(target=_startup_tasks, daemon=True).start()
     except Exception:  # noqa: BLE001

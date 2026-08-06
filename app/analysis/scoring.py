@@ -14,9 +14,7 @@ from datetime import datetime
 
 from app.config import BUY_WEIGHTS, RATING_LEVELS, SELL_WEIGHTS
 from app.data.cache import (
-    get_daily_fundflow,
     get_financials,
-    get_fundflow_asof,
     get_latest_quantile,
     get_prev_close,
     get_quantile_asof,
@@ -140,7 +138,7 @@ def _concentration_asof(code: str, as_of: str, exclude_trade_id: int | None = No
 def _score_factors(side: str, weights: dict, f: dict) -> dict:
     """纯函数：按因子值计算 0-100 总分与评级（不触库）。
 
-    f: {pe_pct, pb_pct, dv, main_net_pct, pct_chg, roe, concentration, data_dates: {key: date}}
+    f: {pe_pct, pb_pct, dv, pct_chg, roe, concentration, data_dates: {key: date}}
     返回 {factors, total, rating, rating_name, coverage, missing, low_confidence, insufficient}。
     """
     data_dates = f.pop("data_dates", {})
@@ -149,7 +147,6 @@ def _score_factors(side: str, weights: dict, f: dict) -> dict:
             ("pe_pct", "PE分位(1y)", f.get("pe_pct"), 100 - f["pe_pct"] if f.get("pe_pct") is not None else None),
             ("pb_pct", "PB分位(1y)", f.get("pb_pct"), 100 - f["pb_pct"] if f.get("pb_pct") is not None else None),
             ("dv_ratio", "股息率", f.get("dv"), min(100, f["dv"] / 4 * 100) if f.get("dv") is not None else None),
-            ("fund_flow", "主力资金", f.get("main_net_pct"), _clamp(50 + f["main_net_pct"] * 10) if f.get("main_net_pct") is not None else None),
             ("pct_chg", "当日涨跌", f.get("pct_chg"), _clamp(100 - f["pct_chg"] * 10) if f.get("pct_chg") is not None else None),
             ("roe", "ROE", f.get("roe"), min(100, f["roe"] / 15 * 100) if f.get("roe") is not None else None),
         ]
@@ -158,7 +155,6 @@ def _score_factors(side: str, weights: dict, f: dict) -> dict:
             ("pe_pct", "PE分位(1y)", f.get("pe_pct"), f.get("pe_pct")),
             ("pb_pct", "PB分位(1y)", f.get("pb_pct"), f.get("pb_pct")),
             ("dv_ratio", "股息率", f.get("dv"), 100 - min(100, f["dv"] / 4 * 100) if f.get("dv") is not None else None),
-            ("fund_flow", "主力资金", f.get("main_net_pct"), _clamp(50 - f["main_net_pct"] * 10) if f.get("main_net_pct") is not None else None),
             ("pct_chg", "当日涨跌", f.get("pct_chg"), _clamp(f["pct_chg"] * 10) if f.get("pct_chg") is not None else None),
             ("concentration", "组合集中度", f.get("concentration"), min(100, f["concentration"] / 20 * 100) if f.get("concentration") is not None else None),
         ]
@@ -251,19 +247,13 @@ def compute_snapshot(code: str, side: str, price: float, quantity: float,
     if pe_pct is None and pb_pct is not None and (pe_ttm is None or pe_ttm <= 0):
         pe_pct = pb_pct
 
-    # 资金流
-    flow = get_daily_fundflow(code) if status == "frozen" else get_fundflow_asof(code, as_of)
-    main_net_pct = flow["main_net_pct"] if flow else None
-    if main_net_pct is not None:
-        data_dates["fund_flow"] = flow["trade_date"]
-
     # 集中度（卖出因子）：交易发生前的持仓
     concentration = None
     if side == "sell":
         concentration = _concentration_asof(code, as_of, exclude_trade_id=trade_id)
         data_dates["concentration"] = as_of
 
-    f = {"pe_pct": pe_pct, "pb_pct": pb_pct, "dv": dv, "main_net_pct": main_net_pct,
+    f = {"pe_pct": pe_pct, "pb_pct": pb_pct, "dv": dv,
          "pct_chg": pct_chg, "roe": roe, "concentration": concentration,
          "data_dates": data_dates}
     res = _score_factors(side, weights, f)

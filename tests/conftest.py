@@ -16,7 +16,7 @@ def temp_db(monkeypatch, tmp_path):
     # 打桩网络依赖：数据源用 mock，行情固定返回，保证测试离线可跑
     # 注意：各分析模块以 `from x import y` 在加载期绑定函数，需在 patch 后覆盖其绑定
     from app.data import base as base_mod
-    from app.data.source_mock import MockSource
+    from app.data.providers import MockProvider
     from app.services import quote as quote_mod
 
     _mock_quote = lambda code, now=None, stale=None: {  # noqa: E731
@@ -24,7 +24,7 @@ def temp_db(monkeypatch, tmp_path):
         "prev_close": 9.95, "open": 9.96, "high": 10.1, "low": 9.9,
         "volume": 100000, "amount": 1000000, "ts": "2026-08-04 15:00:00", "stale": False,
     }
-    monkeypatch.setattr(base_mod, "build_manager", lambda: base_mod.SourceManager([MockSource()]))
+    monkeypatch.setattr(base_mod, "build_manager", lambda: base_mod.SourceManager([MockProvider()]))
     monkeypatch.setattr(quote_mod, "get_quote", _mock_quote)
 
     # 覆盖已绑定的模块引用（这些模块可能在 import 时已绑定原函数）
@@ -34,8 +34,8 @@ def temp_db(monkeypatch, tmp_path):
     import app.analysis.valuation as vmod
     import app.services.refresh as rmod
 
-    monkeypatch.setattr(vmod, "build_manager", lambda: base_mod.SourceManager([MockSource()]))
-    monkeypatch.setattr(rmod, "build_manager", lambda: base_mod.SourceManager([MockSource()]))
+    monkeypatch.setattr(vmod, "build_manager", lambda: base_mod.SourceManager([MockProvider()]))
+    monkeypatch.setattr(rmod, "build_manager", lambda: base_mod.SourceManager([MockProvider()]))
     import app.api.stocks as smod
 
     monkeypatch.setattr(smod, "get_quote", _mock_quote)

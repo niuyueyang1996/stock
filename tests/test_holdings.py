@@ -182,7 +182,7 @@ def test_new_stock_triggers_data_sync(monkeypatch):
 
 def test_existing_stock_no_resync(monkeypatch):
     """已有缓存数据的股票再交易：不再触发数据同步。"""
-    holdings.record_trade("600002", "buy", 10, 100, name="旧股")  # 首笔走真同步（MockSource）
+    holdings.record_trade("600002", "buy", 10, 100, name="旧股")  # 首笔走真同步（MockProvider）
     from app.services import refresh as rmod
 
     called = []

@@ -97,7 +97,7 @@
         <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
       </div>
       <div class="panel grow">
-        <h2>近30日主力净流入</h2>
+        <h2>近30日净流入</h2>
         <div class="chart sm" id="flowLine"></div>
         <div class="empty" id="flowLineEmpty" style="display:none;padding:20px">暂无历史资金流数据 — 当日刷新后从接入日起累积。</div>
       </div>
@@ -108,6 +108,7 @@
       <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
       <div id="flowTabs"></div>
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
+      <div class="chart lg" id="flowBuySell" style="height:300px"></div>
       <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。</div>
     </div>
 
@@ -183,6 +184,7 @@
       document.getElementById('flowLineEmpty').style.display = 'block';
       document.getElementById('flowTabs').innerHTML = '';
       document.getElementById('flowIntraday').innerHTML = '';
+      document.getElementById('flowBuySell').innerHTML = '';
       document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
     }
@@ -488,7 +490,8 @@
         return;
       }
       try {
-        const d = await api('/stocks/' + currentCode, { blocking: true });
+        // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
+        const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
         render(d);
       } catch (e) {
         document.getElementById('title').textContent = `查询失败：${e.message}`;
@@ -668,13 +671,14 @@
     }
 
     function renderFlow(d) {
-      // 今日自适应分档条件（P50/P80/P95）：让用户知道每档的组成边界
+      // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
       const bandsEl = document.getElementById('flowBands');
       const bands = d.fundflow_bands;
       bandsEl.textContent = bands
-        ? '今日分档（自适应）：小单 <' + fmtFlow(bands.p50)
-          + ' · 中单 ' + fmtFlow(bands.p50) + '~' + fmtFlow(bands.p80)
-          + ' · 大单 ' + fmtFlow(bands.p80) + '~' + fmtFlow(bands.p95)
+        ? '今日分档（自适应）：特小单 <' + fmtFlow(bands.p15)
+          + ' · 小单 ' + fmtFlow(bands.p15) + '~' + fmtFlow(bands.p40)
+          + ' · 中单 ' + fmtFlow(bands.p40) + '~' + fmtFlow(bands.p75)
+          + ' · 大单 ' + fmtFlow(bands.p75) + '~' + fmtFlow(bands.p95)
           + ' · 特大单 >' + fmtFlow(bands.p95)
         : '';
       const latest = d.fundflow_latest;
@@ -693,15 +697,20 @@
         document.getElementById('flowLineEmpty').style.display = 'block';
         document.getElementById('flowLine').innerHTML = '';
       }
-      // 分时资金流：1 分钟基础（openStock 以 window=1 请求），前端切换刻度本地重采样
+      // 分时资金流：1 分钟基础（后端始终返回），前端按 1/5/15/30 本地重采样
       const base = d.fundflow_15m || [];
       const intraEl = document.getElementById('flowIntraday');
+      const bsEl = document.getElementById('flowBuySell');
       const intraEmpty = document.getElementById('flowIntradayEmpty');
       const tabsEl = document.getElementById('flowTabs');
       if (base.length) {
         intraEmpty.style.display = 'none';
         const windows = d.fundflow_windows || [1, 5, 15, 30];
-        const draw = (w) => fundflowIntraday(intraEl, resampleFlow(base, w), w);
+        const draw = (w) => {
+          const pts = resampleFlow(base, w);
+          fundflowIntraday(intraEl, pts, w);
+          fundflowBuySell(bsEl, pts, w);
+        };
         tabsEl.innerHTML = '';
         tabsEl.appendChild(periodTabs({
           periods: windows.map((x) => x + '分钟'),
@@ -712,6 +721,7 @@
       } else {
         intraEmpty.style.display = 'block';
         intraEl.innerHTML = '';
+        bsEl.innerHTML = '';
         tabsEl.innerHTML = '';
       }
     }

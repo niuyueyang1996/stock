@@ -6,6 +6,22 @@ function initChart(el) {
   return chart;
 }
 
+// 图例「一键独显」：点某条线一次 → 只显示它（关掉其余）；独显状态再点同一条 → 恢复全部。
+// params.selected 反映点击后的勾选状态：被点项为选中 → 独显（关掉其余）；若点了最后一条导致全关 → 恢复。
+const _soloWired = new WeakSet();   // 同一 echarts 实例只绑一次（initChart 复用实例，避免重复监听）
+function applyLegendSolo(chart, names) {
+  if (!chart || _soloWired.has(chart)) return;
+  _soloWired.add(chart);
+  chart.on('legendselectchanged', (params) => {
+    const selected = params.selected || {};
+    if (selected[params.name]) {
+      for (const n of names) if (n !== params.name) chart.dispatchAction({ type: 'legendUnSelect', name: n });
+    } else if (!names.some((n) => selected[n])) {
+      chart.dispatchAction({ type: 'legendAllSelect' });
+    }
+  });
+}
+
 // 当前值在窗口序列中的百分位（count(<=cur)/n×100），负值允许参与；样本为空返回 null
 function percentileOf(values, target) {
   if (target === null || target === undefined || !values.length) return null;
@@ -128,11 +144,11 @@ function fundflowBars(el, latest) {
   const chart = initChart(el);
   if (!chart) return null;
   const items = [
-    ['主力', latest.main_net],
-    ['超大单', latest.super_large_net],
+    ['特大单', latest.super_large_net],
     ['大单', latest.large_net],
     ['中单', latest.medium_net],
     ['小单', latest.small_net],
+    ['特小单', latest.xs_net],
   ];
   chart.setOption({
     title: { text: '全天五档资金净流入', left: 'center', textStyle: { fontSize: 14 } },
@@ -404,37 +420,38 @@ function resampleFlow(points, windowMin) {
     const [h, m] = p.ts.split(':').map(Number);
     const start = Math.floor((h * 60 + m) / windowMin) * windowMin;
     const key = String(Math.floor(start / 60)).padStart(2, '0') + ':' + String(start % 60).padStart(2, '0');
-    if (!buckets.has(key)) buckets.set(key, { ts: key, small_net: 0, medium_net: 0, large_net: 0, super_large_net: 0, main_net: 0 });
+    if (!buckets.has(key)) buckets.set(key, { ts: key, small_net: 0, medium_net: 0, large_net: 0, super_large_net: 0, xs_net: 0, buy_amount: 0, sell_amount: 0 });
     const b = buckets.get(key);
     b.small_net += p.small_net;
     b.medium_net += p.medium_net;
     b.large_net += p.large_net;
     b.super_large_net += p.super_large_net;
-    b.main_net += p.main_net;
+    b.xs_net += p.xs_net;
+    b.buy_amount += p.buy_amount;
+    b.sell_amount += p.sell_amount;
   }
   return [...buckets.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1));
 }
 
 // 分时五档资金流【累积】折线：每分钟净流入逐段累加，看清整体趋势，不再波来波去。
-// 主力线加粗，金额智能转万/亿，tooltip 显示到该时刻的累积净流入。
+// 五档各自一条线，特大单加粗并标 0 轴，金额智能转万/亿，tooltip 显示到该时刻的累积净流入。
 function fundflowIntraday(el, points, window) {
   const chart = initChart(el);
   if (!chart) return null;
   const ts = points.map((p) => p.ts);
-  const KEYS = ['main_net', 'super_large_net', 'large_net', 'medium_net', 'small_net'];
+  const KEYS = ['super_large_net', 'large_net', 'medium_net', 'small_net', 'xs_net'];
   const cum = {};
   for (const k of KEYS) {
     let s = 0;
     cum[k] = points.map((p) => (s += Math.round(p[k])));
   }
   const series = [
-    { name: '小单', type: 'line', smooth: true, symbol: 'none', data: cum.small_net, lineStyle: { width: 1.2, color: '#adb5bd' } },
-    { name: '中单', type: 'line', smooth: true, symbol: 'none', data: cum.medium_net, lineStyle: { width: 1.2, color: '#74c0fc' } },
-    { name: '大单', type: 'line', smooth: true, symbol: 'none', data: cum.large_net, lineStyle: { width: 1.2, color: '#f08c00' } },
-    { name: '特大单', type: 'line', smooth: true, symbol: 'none', data: cum.super_large_net, lineStyle: { width: 1.2, color: '#e03131' } },
-    { name: '主力', type: 'line', smooth: true, symbol: 'none', data: cum.main_net,
-      lineStyle: { width: 2.5, color: '#1a1a2e' },
+    { name: '特大单', type: 'line', smooth: true, symbol: 'none', data: cum.super_large_net, lineStyle: { width: 2.5, color: '#e03131' },
       markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
+    { name: '大单', type: 'line', smooth: true, symbol: 'none', data: cum.large_net, lineStyle: { width: 1.5, color: '#f76707' } },
+    { name: '中单', type: 'line', smooth: true, symbol: 'none', data: cum.medium_net, lineStyle: { width: 1.5, color: '#339af0' } },
+    { name: '小单', type: 'line', smooth: true, symbol: 'none', data: cum.small_net, lineStyle: { width: 1.5, color: '#12b886' } },
+    { name: '特小单', type: 'line', smooth: true, symbol: 'none', data: cum.xs_net, lineStyle: { width: 1.5, color: '#7048e8' } },
   ];
   chart.setOption({
     title: { text: '分时资金流（' + window + '分钟 · 累积净流入）', left: 'center', textStyle: { fontSize: 14 } },
@@ -444,43 +461,101 @@ function fundflowIntraday(el, points, window) {
         const i = ps[0].dataIndex;
         return [
           ts[i],
-          '主力   ' + fmtFlow(cum.main_net[i]),
           '特大单 ' + fmtFlow(cum.super_large_net[i]),
           '大单   ' + fmtFlow(cum.large_net[i]),
           '中单   ' + fmtFlow(cum.medium_net[i]),
           '小单   ' + fmtFlow(cum.small_net[i]),
+          '特小单 ' + fmtFlow(cum.xs_net[i]),
         ].join('<br>');
       },
     },
-    legend: { data: ['主力', '特大单', '大单', '中单', '小单'], top: 28 },
+    legend: { data: ['特大单', '大单', '中单', '小单', '特小单'], top: 28 },
     grid: { left: 70, right: 30, top: 60, bottom: 40 },
     xAxis: { type: 'category', data: ts, axisLabel: { interval: 'auto' } },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     series,
-  });
+  }, { notMerge: true });
+  applyLegendSolo(chart, ['特大单', '大单', '中单', '小单', '特小单']);
   return chart;
 }
 
-// 历史主力资金净流入折线
+// 买盘/卖盘【累积】金额折线：买盘红、卖盘绿，另加一条「累积净流入」（买盘−卖盘）看清买卖净流向。
+// 再叠一组「窗口净流入」柱（每根柱=该窗口的净流入，非累加，右轴独立刻度），一眼看出哪分钟异动。
+function fundflowBuySell(el, points, window) {
+  const chart = initChart(el);
+  if (!chart) return null;
+  const ts = points.map((p) => p.ts);
+  const cum = {};
+  const windowNet = [];
+  let buy = 0, sell = 0;
+  cum.buy_amount = [];
+  cum.sell_amount = [];
+  cum.net = [];
+  for (const p of points) {
+    buy += Math.round(p.buy_amount);
+    sell += Math.round(p.sell_amount);
+    cum.buy_amount.push(buy);
+    cum.sell_amount.push(sell);
+    cum.net.push(buy - sell);
+    windowNet.push(Math.round(p.buy_amount - p.sell_amount));
+  }
+  chart.setOption({
+    title: { text: '买盘 / 卖盘 / 净流入（' + window + '分钟 · 累积）· 柱=窗口净流入', left: 'center', textStyle: { fontSize: 14 } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        return [
+          ts[i],
+          '窗口净流入 ' + fmtFlow(windowNet[i]),
+          '买盘      ' + fmtFlow(cum.buy_amount[i]),
+          '卖盘      ' + fmtFlow(cum.sell_amount[i]),
+          '累积净流入 ' + fmtFlow(cum.net[i]),
+        ].join('<br>');
+      },
+    },
+    legend: { data: ['买盘', '卖盘', '净流入', '窗口净流入'], top: 28 },
+    grid: { left: 70, right: 70, top: 60, bottom: 40 },
+    xAxis: { type: 'category', data: ts, axisLabel: { interval: 'auto' } },
+    yAxis: [
+      { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
+      { type: 'value', splitLine: { show: false }, axisLabel: { formatter: (v) => fmtFlow(v) } },
+    ],
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    series: [
+      { name: '买盘', type: 'line', smooth: true, symbol: 'none', data: cum.buy_amount, lineStyle: { width: 2, color: '#e03131' } },
+      { name: '卖盘', type: 'line', smooth: true, symbol: 'none', data: cum.sell_amount, lineStyle: { width: 2, color: '#2f9e44' } },
+      { name: '净流入', type: 'line', smooth: true, symbol: 'none', data: cum.net,
+        lineStyle: { width: 2, color: '#2563eb', type: 'dashed' },
+        markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
+      { name: '窗口净流入', type: 'bar', yAxisIndex: 1, data: windowNet, barWidth: '60%',
+        itemStyle: { color: (params) => params.value >= 0 ? 'rgba(225,29,72,.6)' : 'rgba(16,185,129,.6)' } },
+    ],
+  }, { notMerge: true });
+  applyLegendSolo(chart, ['买盘', '卖盘', '净流入', '窗口净流入']);
+  return chart;
+}
+
+// 历史资金净流入折线
 function fundflowLine(el, history) {
   const chart = initChart(el);
   if (!chart) return null;
   chart.setOption({
-    title: { text: '近30日主力净流入', left: 'center', textStyle: { fontSize: 14 } },
+    title: { text: '近30日净流入', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: { trigger: 'axis', formatter: (ps) => {
       const p = ps[0];
-      return `${p.axisValue}<br>主力净流入 ${fmtFlow(p.value)}`;
+      return `${p.axisValue}<br>净流入 ${fmtFlow(p.value)}`;
     } },
     grid: { left: 70, right: 30, top: 40, bottom: 30 },
     xAxis: { type: 'category', data: history.map((h) => h.trade_date), boundaryGap: false },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     series: [{
-      type: 'line', smooth: true, symbol: 'none', data: history.map((h) => h.main_net),
+      type: 'line', smooth: true, symbol: 'none', data: history.map((h) => h.netamount),
       lineStyle: { width: 2, color: '#2563eb' },
       areaStyle: { opacity: 0.08 },
       markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } },
     }],
-  });
+  }, { notMerge: true });
   return chart;
 }

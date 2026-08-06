@@ -15,23 +15,28 @@ from app.data.fundflow import (
 # ---------- 分位计算 ----------
 
 def test_compute_quantiles():
+    # [1..10] 十个数：P15=2 / P40=5 / P75=8 / P95=10
     q = compute_quantiles([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-    assert q == (5, 8, 10)
+    assert q == (2, 5, 8, 10)
 
 
 def test_compute_quantiles_empty():
-    assert compute_quantiles([]) == (0, 0, 0)
+    assert compute_quantiles([]) == (0, 0, 0, 0)
 
 
 # ---------- 自适应分档 ----------
 
 def test_classify_tick():
-    p50, p80, p95 = (5, 8, 10)
-    assert classify_tick(5, p50, p80, p95) == "small"      # 边界归小
-    assert classify_tick(8, p50, p80, p95) == "medium"     # P80 边界归中
-    assert classify_tick(9, p50, p80, p95) == "large"
-    assert classify_tick(10, p50, p80, p95) == "large"     # P95 边界归大
-    assert classify_tick(11, p50, p80, p95) == "super"
+    p15, p40, p75, p95 = (2, 5, 8, 10)
+    assert classify_tick(1, p15, p40, p75, p95) == "xs"
+    assert classify_tick(2, p15, p40, p75, p95) == "xs"       # P15 边界归特小
+    assert classify_tick(3, p15, p40, p75, p95) == "small"
+    assert classify_tick(5, p15, p40, p75, p95) == "small"     # P40 边界归小
+    assert classify_tick(7, p15, p40, p75, p95) == "medium"
+    assert classify_tick(8, p15, p40, p75, p95) == "medium"    # P75 边界归中
+    assert classify_tick(9, p15, p40, p75, p95) == "large"
+    assert classify_tick(10, p15, p40, p75, p95) == "large"    # P95 边界归大
+    assert classify_tick(11, p15, p40, p75, p95) == "super"
 
 
 def test_high_price_stock_not_distorted():
@@ -41,30 +46,49 @@ def test_high_price_stock_not_distorted():
     random.seed(7)
     amounts = [random.uniform(100_000, 300_000) for _ in range(180)]
     amounts += [400_000, 500_000, 600_000, 800_000]  # 尾部大单
-    p50, p80, p95 = compute_quantiles(amounts)
-    cls = Counter(classify_tick(a, p50, p80, p95) for a in amounts)
-    # 各档都有分布，且小单占比约一半（不全是大单）
-    assert cls["small"] > 0 and cls["medium"] > 0 and cls["large"] > 0 and cls["super"] > 0
-    assert cls["small"] > len(amounts) * 0.4
+    p15, p40, p75, p95 = compute_quantiles(amounts)
+    cls = Counter(classify_tick(a, p15, p40, p75, p95) for a in amounts)
+    # 五档都有分布，且特小单占比约 15%（不全是大单）
+    assert cls["xs"] > 0 and cls["small"] > 0 and cls["medium"] > 0 and cls["large"] > 0 and cls["super"] > 0
+    assert cls["xs"] > len(amounts) * 0.1
+    assert cls["super"] >= 4     # 尾部四个大单都归特大
 
 
 # ---------- 方向符号与分钟聚合 ----------
 
 def test_aggregate_ticks_window1():
+    # 12 笔金额几何递增，分位 P15=40/P40=160/P75=2560/P95=10000：
+    # 特小 10/20/40、小单 80/160、中单 320/640/1280/2560、大单 5120/10000、特大 20000
     ticks = [
         ("09:31:05", 10, 1),
         ("09:31:50", 20, -1),
-        ("09:32:10", 100, 1),
-        ("09:32:40", 200, 1),
-        ("09:45:00", 500, -1),   # 中单净流出
-        ("09:45:30", 1000, -1),  # 大单净流出
+        ("09:31:55", 40, -1),
+        ("09:32:10", 80, 1),
+        ("09:32:20", 160, 1),
+        ("09:32:30", 320, -1),
+        ("09:32:40", 640, -1),
+        ("09:45:00", 1280, -1),
+        ("09:45:10", 2560, 1),
+        ("09:45:20", 5120, -1),
+        ("09:45:30", 10000, -1),
+        ("09:45:40", 20000, 1),
     ]
     points = aggregate_ticks(ticks, 1)
     assert [p.ts for p in points] == ["09:31", "09:32", "09:45"]
-    assert points[0].small_net == -10      # 10 买 - 20 卖
-    assert points[2].medium_net == -500
-    assert points[2].large_net == -1000
-    assert points[2].main_net == -1000     # 主力 = 大单净流出
+    # 09:31：特小 10-20-40 = -50（40 ≤ P15 边界归特小）；买盘 10 / 卖盘 60
+    assert points[0].xs_net == -50
+    assert points[0].buy_amount == 10
+    assert points[0].sell_amount == 60
+    # 09:32：小单 80+160 = 240；中单 -320-640 = -960
+    assert points[1].small_net == 240
+    assert points[1].medium_net == -960
+    assert points[1].buy_amount == 240
+    assert points[1].sell_amount == 960
+    # 09:45：中单 -1280+2560 = 1280；大单 -5120-10000 = -15120；特大 +20000
+    assert points[2].medium_net == 1280
+    assert points[2].large_net == -15120
+    assert points[2].super_large_net == 20000
+    assert points[2].main_net == 4880       # 主力 = 特大 + 大单
 
 
 def test_aggregate_ticks_neutral_ignored():
@@ -72,25 +96,36 @@ def test_aggregate_ticks_neutral_ignored():
     ticks = [("10:00:00", 100, 1), ("10:00:05", 100, 0)]
     points = aggregate_ticks(ticks, 1)
     assert len(points) == 1
-    assert points[0].small_net == 100
+    assert points[0].xs_net == 100
+    assert points[0].buy_amount == 100
+    assert points[0].sell_amount == 0
 
 
 # ---------- 重采样 ----------
 
 def test_resample_points():
     pts = [
-        FundflowPoint("09:31", 5, 0, 5, 0, 5),    # main=5 = 特大0 + 大单5
-        FundflowPoint("09:36", 8, 0, 8, 0, 0),    # 09:36 → 5 分钟桶 09:35
-        FundflowPoint("09:45", 0, 0, 0, 20, 0),   # 中单，main=0
+        FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
+                      medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6),
+        FundflowPoint(ts="09:36", main_net=8, super_large_net=0, large_net=8,
+                      medium_net=0, small_net=0, xs_net=1, buy_amount=8, sell_amount=0),
+        FundflowPoint(ts="09:45", main_net=0, super_large_net=0, large_net=0,
+                      medium_net=20, small_net=0, xs_net=0, buy_amount=0, sell_amount=20),
     ]
     r = resample_points(pts, 5)
     by_ts = {p.ts: p for p in r}
     assert by_ts["09:30"].small_net == 5
     assert by_ts["09:30"].large_net == 5
+    assert by_ts["09:30"].xs_net == 2
+    assert by_ts["09:30"].buy_amount == 10
+    assert by_ts["09:30"].sell_amount == 6
     assert by_ts["09:30"].main_net == 5          # main = 特大 + 大单
     assert by_ts["09:35"].large_net == 8
+    assert by_ts["09:35"].xs_net == 1
+    assert by_ts["09:35"].buy_amount == 8
     assert by_ts["09:35"].main_net == 8
     assert by_ts["09:45"].medium_net == 20
+    assert by_ts["09:45"].sell_amount == 20
     assert by_ts["09:45"].main_net == 0
     # 1 分钟 → 1 分钟不变
     assert len(resample_points(pts, 1)) == len(pts)
@@ -99,38 +134,39 @@ def test_resample_points():
 # ---------- 日级汇总 ----------
 
 def test_ticks_to_day():
-    # 12 笔金额单调递增，P50=100 / P80=800 / P95=1600：
-    # 小单 10~100（7 笔）、中单 200~800（3 笔）、大单 1600、特大 3200
+    # 12 笔金额几何递增，分位 P15=40/P40=160/P75=2560/P95=10000：
+    # 特小 10/20/40、小单 80/160、中单 320/640/1280/2560、大单 5120/10000、特大 20000
     ticks = [
-        ("09:31:05", 10, 1),     # 小单 +10
-        ("09:31:10", 20, 1),     # 小单 +20
-        ("09:31:20", 30, 1),     # 小单 +30
-        ("09:31:30", 40, 1),     # 小单 +40
-        ("09:31:40", 50, 1),     # 小单 +50
-        ("09:31:50", 60, 1),     # 小单 +60
-        ("09:32:00", 100, 1),    # 小单 +100
-        ("09:32:10", 200, -1),   # 中单 -200
-        ("09:32:20", 400, -1),   # 中单 -400
-        ("09:32:30", 800, -1),   # 中单 -800
-        ("09:45:00", 1600, -1),  # 大单 -1600
-        ("09:45:30", 3200, 1),   # 特大 +3200
+        ("09:31:05", 10, 1),      # 特小 +10
+        ("09:31:10", 20, 1),      # 特小 +20
+        ("09:31:20", 40, -1),     # 特小 -40
+        ("09:31:30", 80, 1),      # 小单 +80
+        ("09:31:40", 160, 1),     # 小单 +160
+        ("09:32:00", 320, -1),    # 中单 -320
+        ("09:32:10", 640, -1),    # 中单 -640
+        ("09:32:20", 1280, 1),    # 中单 +1280
+        ("09:32:30", 2560, 1),    # 中单 +2560
+        ("09:45:00", 5120, -1),   # 大单 -5120
+        ("09:45:10", 10000, -1),  # 大单 -10000
+        ("09:45:20", 20000, 1),   # 特大 +20000
     ]
     day = ticks_to_day(ticks, "2026-08-06")
     assert day.date == "2026-08-06"
-    assert day.small_net == 310            # 10+20+30+40+50+60+100
-    assert day.medium_net == -1400         # -200-400-800
-    assert day.large_net == -1600
-    assert day.super_large_net == 3200
-    assert day.main_net == 1600            # 主力 = 特大 + 大单 = 3200-1600
-    assert day.netamount == 510            # 310-1400-1600+3200
-    assert day.main_net_pct == round(1600 / 6510 * 100, 2)
+    assert day.xs_net == -10             # 10+20-40
+    assert day.small_net == 240          # 80+160
+    assert day.medium_net == 2880        # -320-640+1280+2560
+    assert day.large_net == -15120       # -5120-10000
+    assert day.super_large_net == 20000
+    assert day.main_net == 4880          # 主力 = 特大 + 大单 = 20000-15120
+    assert day.netamount == 7990         # -10+240+2880-15120+20000
+    assert day.main_net_pct == round(4880 / 40230 * 100, 2)
     assert ticks_to_day([], "2026-08-06") is None
 
 
 # ---------- 刷新落库 ----------
 
 def test_sync_fundflow_persists():
-    """sync_fundflow 用 MockSource 分笔聚合，落 daily_fundflow_cache + fundflow_15m_cache。"""
+    """sync_fundflow 用 MockProvider 分笔聚合，落 daily_fundflow_cache + fundflow_15m_cache。"""
     from app.data.cache import get_daily_fundflow, get_fundflow_min
     from app.services.refresh import sync_fundflow
 
@@ -138,10 +174,11 @@ def test_sync_fundflow_persists():
     assert r["reason"] == "ok"
     day = get_daily_fundflow("600036", "2026-08-06")
     assert day is not None
-    # 当日自适应分档阈值 P50/P80/P95 已落库（供前端展示各档组成条件）
-    assert all(day[k] is not None for k in ("p50", "p80", "p95"))
+    # 当日自适应分档阈值 P15/P40/P75/P95 已落库（供前端展示各档组成条件）
+    assert all(day[k] is not None for k in ("p15", "p40", "p75", "p95"))
     rows = get_fundflow_min("600036", "2026-08-06")
     assert rows and rows[0]["ts"].startswith("09:")
+    assert "xs_net" in rows[0] and "buy_amount" in rows[0] and "sell_amount" in rows[0]
 
 
 def test_sync_fundflow_skips_hk_and_weekend():
@@ -154,7 +191,7 @@ def test_sync_fundflow_skips_hk_and_weekend():
 # ---------- API ----------
 
 def test_stock_fundflow_api(client):
-    """GET /stocks/{code} 的 fundflow_15m 结构 + window 重采样 + 分档阈值。"""
+    """GET /stocks/{code} 的 fundflow_15m 结构 + 分档阈值；window 只回显、后端始终返回 1 分钟基础。"""
     from types import SimpleNamespace
 
     from app.data.cache import upsert_daily_fundflow, upsert_fundflow_min
@@ -162,14 +199,18 @@ def test_stock_fundflow_api(client):
 
     today = date.today().isoformat()
     upsert_fundflow_min("600000", today, [
-        FundflowPoint("09:31", 5, 0, 5, 0, 5),
-        FundflowPoint("09:36", 8, 0, 8, 0, 0),
-        FundflowPoint("09:45", 0, 0, 0, 20, 0),
+        FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
+                      medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6),
+        FundflowPoint(ts="09:36", main_net=8, super_large_net=0, large_net=8,
+                      medium_net=0, small_net=0, xs_net=1, buy_amount=8, sell_amount=0),
+        FundflowPoint(ts="09:45", main_net=0, super_large_net=0, large_net=0,
+                      medium_net=20, small_net=0, xs_net=0, buy_amount=0, sell_amount=20),
     ])
-    # 当日分档阈值（P50/P80/P95）落库 → API 应原样返回
+    # 当日分档阈值（P15/P40/P75/P95）落库 → API 应原样返回
     flow = SimpleNamespace(date=today, netamount=1, main_net=1, super_large_net=0,
-                           large_net=1, medium_net=0, small_net=0, main_net_pct=100)
-    upsert_daily_fundflow("600000", today, flow, {"p50": 10000, "p80": 50000, "p95": 200000})
+                           large_net=1, medium_net=0, small_net=0, xs_net=0, main_net_pct=100)
+    upsert_daily_fundflow("600000", today, flow,
+                          {"p15": 2000, "p40": 5000, "p75": 20000, "p95": 100000})
 
     r = client.get(f"/api/stocks/600000?window=1&partial=1")
     assert r.status_code == 200
@@ -177,12 +218,76 @@ def test_stock_fundflow_api(client):
     assert data["fundflow_windows"] == [1, 5, 15, 30]
     assert data["fundflow_window"] == 1
     assert len(data["fundflow_15m"]) == 3
-    assert data["fundflow_bands"] == {"p50": 10000, "p80": 50000, "p95": 200000}
+    assert data["fundflow_bands"] == {"p15": 2000, "p40": 5000, "p75": 20000, "p95": 100000}
+    p0 = data["fundflow_15m"][0]
+    assert p0["xs_net"] == 2 and p0["buy_amount"] == 10 and p0["sell_amount"] == 6
+    assert "main_net" not in p0     # 前端不再下主力
 
-    # window=15：09:31/09:36 → 09:30 桶（main = 5+8 = 13）
+    # window=15：后端始终返回 1 分钟基础粒度（前端本地重采样），只回显 window
     r2 = client.get(f"/api/stocks/600000?window=15&partial=1")
     assert r2.status_code == 200
-    pts = r2.json()["data"]["fundflow_15m"]
-    by_ts = {p["ts"]: p for p in pts}
-    assert by_ts["09:30"]["main_net"] == 13
-    assert by_ts["09:45"]["medium_net"] == 20
+    data2 = r2.json()["data"]
+    assert data2["fundflow_window"] == 15
+    assert [p["ts"] for p in data2["fundflow_15m"]] == ["09:31", "09:36", "09:45"]
+
+
+def test_portfolio_fundflow_aggregates(client):
+    """组合资金流穿透：多持仓按 ts/日级求和；单标签过滤；ETF 不计入。"""
+    from types import SimpleNamespace
+
+    from app.data.cache import upsert_daily_fundflow, upsert_fundflow_min
+    from app.data.fundflow import FundflowPoint
+    from app.models.db import get_conn
+
+    today = date.today().isoformat()
+    with get_conn() as c:
+        for code, name, tag, qty in (("600000", "浦发银行", "银行", 100),
+                                     ("600519", "贵州茅台", "白酒", 100),
+                                     ("510300", "沪深300ETF", "ETF", 100)):
+            c.execute(
+                "INSERT INTO stocks(code,name,market,tag) VALUES(?,?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name, tag=excluded.tag",
+                (code, name, "sh", tag),
+            )
+            c.execute(
+                """INSERT INTO holdings(code,quantity,avg_cost,total_buy,status)
+                   VALUES(?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET quantity=excluded.quantity""",
+                (code, qty, 10.0, qty * 10.0, "active"),
+            )
+    # 分时：600000 只 09:31；600519 有 09:31/09:36；ETF 无数据
+    upsert_fundflow_min("600000", today, [
+        FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
+                      medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6),
+    ])
+    upsert_fundflow_min("600519", today, [
+        FundflowPoint(ts="09:31", main_net=8, super_large_net=0, large_net=8,
+                      medium_net=0, small_net=0, xs_net=1, buy_amount=8, sell_amount=0),
+        FundflowPoint(ts="09:36", main_net=0, super_large_net=0, large_net=0,
+                      medium_net=20, small_net=0, xs_net=0, buy_amount=0, sell_amount=20),
+    ])
+    flow1 = SimpleNamespace(date=today, netamount=1, main_net=1, super_large_net=0,
+                            large_net=1, medium_net=0, small_net=0, xs_net=0, main_net_pct=100)
+    flow2 = SimpleNamespace(date=today, netamount=2, main_net=2, super_large_net=1,
+                            large_net=1, medium_net=0, small_net=0, xs_net=0, main_net_pct=100)
+    upsert_daily_fundflow("600000", today, flow1, None)
+    upsert_daily_fundflow("600519", today, flow2, None)
+
+    r = client.get("/api/portfolio/fundflow")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    # ETF 不计入：total/covered 只算 A 股（510300 排除）
+    assert d["total"] == 2 and d["covered"] == 2
+    # 09:31 求和：buy 10+8=18 / sell 6+0=6 / small_net 5+0=5
+    p31 = next(p for p in d["fundflow_15m"] if p["ts"] == "09:31")
+    assert p31["buy_amount"] == 18 and p31["sell_amount"] == 6 and p31["small_net"] == 5
+    assert d["fundflow_15m"][-1]["ts"] == "09:36"      # 升序
+    # 日级求和：large_net = 1+1 = 2, netamount = 1+2 = 3
+    assert d["fundflow_latest"]["large_net"] == 2
+    assert d["fundflow_latest"]["netamount"] == 3
+
+    # 单标签过滤：只聚合该标签
+    r2 = client.get("/api/portfolio/fundflow?tags=银行")
+    d2 = r2.json()["data"]
+    assert d2["total"] == 1 and d2["covered"] == 1
+    assert len(d2["fundflow_15m"]) == 1
+    assert d2["fundflow_15m"][0]["buy_amount"] == 10
+    assert d2["fundflow_latest"]["netamount"] == 1

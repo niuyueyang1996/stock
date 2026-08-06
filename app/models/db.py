@@ -74,18 +74,25 @@ CREATE TABLE IF NOT EXISTS daily_fundflow_cache (
     medium_net     REAL,                -- 中单净流入
     small_net      REAL,                -- 小单净流入
     main_net_pct   REAL,                -- 主力净流入占比(%)
-    p50            REAL,                -- 当日自适应分档阈值 P50（小单上界）
-    p80            REAL,                -- 当日自适应分档阈值 P80（中单上界）
-    p95            REAL,                -- 当日自适应分档阈值 P95（大单上界）
+    p50            REAL,                -- 旧自适应分档阈值 P50（弃用保留）
+    p80            REAL,                -- 旧自适应分档阈值 P80（弃用保留）
+    p95            REAL,                -- 当日自适应分档阈值 P95（特大单下界）
+    xs_net         REAL,                -- 特小单净流入
+    p15            REAL,                -- 当日自适应分档阈值 P15（特小单上界）
+    p40            REAL,                -- 当日自适应分档阈值 P40（小单上界）
+    p75            REAL,                -- 当日自适应分档阈值 P75（中单上界）
     PRIMARY KEY (code, trade_date)
 );
 
 CREATE TABLE IF NOT EXISTS fundflow_15m_cache (
     code       TEXT NOT NULL,
     trade_date TEXT NOT NULL,
-    ts         TEXT NOT NULL,           -- 'HH:MM' 15分钟刻度
+    ts         TEXT NOT NULL,           -- 'HH:MM' 1分钟刻度（1/5/15/30 由前端本地重采样）
     main_net   REAL, super_large_net REAL, large_net REAL,
     medium_net REAL, small_net REAL,
+    xs_net     REAL,                -- 特小单净流入
+    buy_amount REAL,                -- 买盘成交金额
+    sell_amount REAL,               -- 卖盘成交金额
     PRIMARY KEY (code, trade_date, ts)
 );
 
@@ -246,7 +253,7 @@ def get_conn() -> sqlite3.Connection:
 
 # 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
 SCHEMA_VERSION_KEY = "db_schema_version"
-_CURRENT_VERSION = 3
+_CURRENT_VERSION = 4
 
 # 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
 # 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
@@ -272,6 +279,15 @@ _MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
         ("p50", "ALTER TABLE daily_fundflow_cache ADD COLUMN p50 REAL"),
         ("p80", "ALTER TABLE daily_fundflow_cache ADD COLUMN p80 REAL"),
         ("p95", "ALTER TABLE daily_fundflow_cache ADD COLUMN p95 REAL"),
+    ],
+    4: [
+        ("xs_net", "ALTER TABLE daily_fundflow_cache ADD COLUMN xs_net REAL"),
+        ("p15", "ALTER TABLE daily_fundflow_cache ADD COLUMN p15 REAL"),
+        ("p40", "ALTER TABLE daily_fundflow_cache ADD COLUMN p40 REAL"),
+        ("p75", "ALTER TABLE daily_fundflow_cache ADD COLUMN p75 REAL"),
+        ("xs_net", "ALTER TABLE fundflow_15m_cache ADD COLUMN xs_net REAL"),
+        ("buy_amount", "ALTER TABLE fundflow_15m_cache ADD COLUMN buy_amount REAL"),
+        ("sell_amount", "ALTER TABLE fundflow_15m_cache ADD COLUMN sell_amount REAL"),
     ],
 }
 
@@ -392,6 +408,8 @@ def migrate_db() -> bool:
 def init_db() -> None:
     """建表并写入默认评分权重（幂等）。"""
     with get_conn() as conn:
+        # WAL 模式：读写并发不互相阻塞（全局刷新并行写各股缓存时避免偶发 database is locked）
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
         # 兼容旧库：补加缺失列
         for _col, _ddl in (

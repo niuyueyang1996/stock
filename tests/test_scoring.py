@@ -20,7 +20,7 @@ CALC = date.today().isoformat()
 PREV = (date.today() - timedelta(days=1)).isoformat()
 
 
-def _seed_data(code="600000", pe_pct=30.0, pb_pct=50.0, roe=10.0, dv=0.2, main_net_pct=2.0):
+def _seed_data(code="600000", pe_pct=30.0, pb_pct=50.0, roe=10.0, dv=0.2):
     """预置缓存数据。mock 行情 price=10.0，前收盘 9.95 → 涨跌 +0.5%。
 
     net_profit/eps 置空 → 实时值口径不可用，评分回退「每股股息/现价」旧口径（测试期望不变）。
@@ -34,13 +34,6 @@ def _seed_data(code="600000", pe_pct=30.0, pb_pct=50.0, roe=10.0, dv=0.2, main_n
     )
     upsert_financials(code, fin, dv_per_share=dv)
     upsert_daily_prices(code, [Bar(PREV, 10, 10, 10, 9.95, 100, 1000)], "mock")
-    with get_conn() as c:
-        c.execute(
-            """INSERT INTO daily_fundflow_cache
-               (code, trade_date, netamount, main_net, super_large_net, large_net, medium_net, small_net, main_net_pct)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (code, CALC, 100, 80, 50, 30, 10, 10, main_net_pct),
-        )
 
 
 def _snap(code, side, price=10.0, status="frozen", trade_time=None):
@@ -52,24 +45,25 @@ def _snap(code, side, price=10.0, status="frozen", trade_time=None):
 
 def test_buy_score_full_factors():
     """全部因子可用时按默认权重计算（coverage=1.0，评分=已知加权）：
-    pe 30→70·.25=17.5  pb 50→50·.2=10  dv 2%→50·.15=7.5
-    资金流2→70·.15=10.5  涨跌+0.5→95·.1=9.5  roe 10→66.7·.15=10  → 65.0 C
+    pe 30→70·.2941  pb 50→50·.2353  dv 2%→50·.1765
+    涨跌+0.5→95·.1176  roe 10→66.7·.1765  → 64.1 C（资金流因子已移除）
     """
     _seed_data()
     r = _snap("600000", "buy")
-    assert r["total_score"] == pytest.approx(65.0, abs=0.1)
+    assert r["total_score"] == pytest.approx(64.1, abs=0.1)
     assert r["rating"] == "C"
     assert r["status"] == "frozen"
     assert r["coverage"] == pytest.approx(1.0)
     scores = {f["key"]: f["score"] for f in r["factors"]}
     assert scores["pe_pct"] == pytest.approx(70)
-    assert scores["fund_flow"] == pytest.approx(70)
+    assert scores["roe"] == pytest.approx(66.7, abs=0.1)
+    assert "fund_flow" not in scores
     # 每个因子带数据日期
     assert all(f["data_date"] is not None for f in r["factors"] if f["used"])
 
 
 def test_buy_low_pct_gives_high_score():
-    """低分位 → 高分：pe_pct=5, pb_pct=5 → 明显高于默认，评级 B 以上。"""
+    """低分位 → 高分：pe_pct=5, pb_pct=5 → 明显高于默认（≈82），评级 B 以上。"""
     _seed_data(pe_pct=5.0, pb_pct=5.0)
     r = _snap("600000", "buy")
     assert r["total_score"] > 80
@@ -77,39 +71,38 @@ def test_buy_low_pct_gives_high_score():
 
 
 def test_missing_factor_shrinks_toward_50():
-    """资金流缺失：覆盖率 0.85，评分 = 50+(已知加权−50)×0.85，不再放大其他因子。"""
+    """ROE 缺失：覆盖率 = 1−0.1765 ≈ 0.824，评分 = 50+(已知加权−50)×覆盖率，不再放大其他因子。"""
     _seed_data()
-    with get_conn() as c:
-        c.execute("DELETE FROM daily_fundflow_cache")
-    r = _snap("600000", "buy")
-    assert "fund_flow" in [f["key"] for f in r["factors"] if not f["used"]]
-    assert r["coverage"] == pytest.approx(0.85)
-    # 已知加权 = (17.5+10+7.5+9.5+10)/0.85 ≈ 64.1；评分 = 50+(64.1−50)*0.85
-    known = (17.5 + 10 + 7.5 + 9.5 + 10) / 0.85
-    assert r["total_score"] == pytest.approx(50 + (known - 50) * 0.85, abs=0.2)
-
-
-def test_low_confidence_between_60_80():
-    """覆盖率 60%~80% → 低置信度标记。资金流 + ROE 缺失 → coverage=0.70。"""
-    _seed_data()
-    with get_conn() as c:
-        c.execute("DELETE FROM daily_fundflow_cache")
     with get_conn() as c:
         c.execute("UPDATE financial_cache SET roe=NULL")
     r = _snap("600000", "buy")
-    assert r["coverage"] == pytest.approx(0.70)
+    assert "roe" in [f["key"] for f in r["factors"] if not f["used"]]
+    assert r["coverage"] == pytest.approx(0.8235, abs=0.001)
+    # 已知加权 = (70·.2941+50·.2353+50·.1765+95·.1176)/覆盖率；评分 = 50+(已知−50)×覆盖率
+    coverage = r["coverage"]
+    known = (70 * 0.2941 + 50 * 0.2353 + 50 * 0.1765 + 95 * 0.1176) / coverage
+    assert r["total_score"] == pytest.approx(50 + (known - 50) * coverage, abs=0.2)
+
+
+def test_low_confidence_between_60_80():
+    """覆盖率 60%~80% → 低置信度标记。ROE + 股息缺失 → coverage=0.647。"""
+    _seed_data()
+    with get_conn() as c:
+        c.execute("UPDATE financial_cache SET roe=NULL, dv_per_share=NULL")
+    r = _snap("600000", "buy")
+    assert r["coverage"] == pytest.approx(0.647)
     assert r["low_confidence"] is True
     assert r["total_score"] is not None
 
 
 def test_single_factor_insufficient():
-    """单一 10% 因子（覆盖率 0.10 < 60%）→ 不评分不评级（不再放大单一因子产生 A 级）。"""
+    """单一 11.76% 因子（覆盖率 0.1176 < 60%）→ 不评分不评级（不再放大单一因子产生 A 级）。"""
     upsert_daily_prices("999999", [Bar(PREV, 10, 10, 10, 9.95, 100, 1000)], "mock")
     r = _snap("999999", "buy")
     assert r["status"] == "insufficient"
     assert r["total_score"] is None
     assert r["rating"] == "N/A"
-    assert r["coverage"] == pytest.approx(0.10)
+    assert r["coverage"] == pytest.approx(0.118)
 
 
 def test_sell_concentration_factor():
@@ -124,12 +117,12 @@ def test_sell_concentration_factor():
 
 
 def test_sell_direction_inverted():
-    """卖出方向：高 PE 分位、资金流出、上涨 → 高得分（该减仓）。"""
-    _seed_data(pe_pct=90.0, main_net_pct=-3.0)
+    """卖出方向：高 PE 分位、上涨 → 高得分（该减仓）。"""
+    _seed_data(pe_pct=90.0)
     r = _snap("600000", "sell")
     scores = {f["key"]: f["score"] for f in r["factors"]}
     assert scores["pe_pct"] == pytest.approx(90)          # 高分位=该卖
-    assert scores["fund_flow"] == pytest.approx(80)       # 流出=该卖
+    assert "fund_flow" not in scores                      # 资金流因子已移除
     assert scores["dv_ratio"] >= 50                       # 股息率低更该卖
 
 
@@ -162,7 +155,7 @@ def test_record_trade_rebuilds_daily_score():
 
 def test_daily_score_amount_weighted():
     """当日多笔综合 = 人民币金额加权平均：100@10 得 70 分 + 100@10 得 100 分 → 85。"""
-    _seed_data("600000", pe_pct=30.0)                     # buy 分 ≈65.0（见上）
+    _seed_data("600000", pe_pct=30.0)                     # buy 分 ≈56.2（见上）
     _seed_data("600519", pe_pct=5.0, pb_pct=5.0)          # 低分位 → 高分（>80）
     r1 = holdings.record_trade("600000", "buy", 10, 100, name="浦发银行", trade_time=f"{CALC} 10:00:00")
     r2 = holdings.record_trade("600519", "buy", 10, 100, name="贵州茅台", trade_time=f"{CALC} 10:00:01")
@@ -227,15 +220,9 @@ def test_daily_rating_gate_below_80():
 
 def test_backfill_snapshots_estimated():
     """无快照的交易回填 estimated（有足够数据时）；数据不足则 insufficient。"""
-    # as_of 及以前有分位/行情/资金流 → 覆盖率 0.70，回填后为 estimated 且有评分
+    # as_of 及以前有分位/行情 → 覆盖率 0.647（pe+pb+涨跌），回填后为 estimated 且有评分
     upsert_quantile("600000", "2026-01-04", "1y", 20.0, 20.0, 100)
     upsert_daily_prices("600000", [Bar("2026-01-04", 10, 10, 10, 9.9, 100, 1000)], "mock")
-    with get_conn() as c:
-        c.execute(
-            """INSERT INTO daily_fundflow_cache
-               (code, trade_date, netamount, main_net, super_large_net, large_net, medium_net, small_net, main_net_pct)
-               VALUES ('600000','2026-01-04',100,80,50,30,10,10,2.0)"""
-        )
     with get_conn() as c:
         c.execute(
             """INSERT INTO trades(code, side, price, quantity, amount, fee, trade_time, fx_rate, amount_cny)

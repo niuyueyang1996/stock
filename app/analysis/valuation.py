@@ -9,10 +9,11 @@
 - 预期增速默认 = 今年已出财报的净利同比，可在个股页覆盖并持久化
 - 百度历史序列仅用于画折线图 + 算分位（实时值/前瞻值在历史序列中的百分位）
 """
-from datetime import datetime
+from datetime import date, datetime
 
 from app.config import QUANTILE_MIN_SAMPLES
-from app.data.base import build_manager
+from app.data.base import build_manager, is_hk_code
+from app.services.fx import get_fx_rate_cny
 from app.data.cache import (
     get_expected_growth,
     get_expected_payout,
@@ -136,6 +137,56 @@ def ttm_pair(series: list, key: str = "net_profit") -> tuple[float, float] | Non
     return (cur, prev)
 
 
+def _series_last(code: str, indicator: str, period: str = "1y") -> float | None:
+    """百度估值序列末值（最新一期 PE/PB），无 A 股财务的港股回退用。"""
+    series = get_valuation_series(code, indicator, period)
+    return series[-1][1] if series else None
+
+
+def _series_last_any(code: str, indicator: str) -> tuple[float | None, str | None]:
+    """任一周期序列末值 + 对应周期（1y→3y→5y）。部分周期缺失（如港股无 pb 1y）时兜底。"""
+    for period in ("1y", "3y", "5y"):
+        v = _series_last(code, indicator, period)
+        if v is not None:
+            return v, period
+    return None, None
+
+
+def _compute_live_series_fallback(code: str, price: float | None) -> dict:
+    """无财务（或港股缺汇率）回退：序列末值给实时 PE/PB + 分位；财务在时补 ROE/股息率/市值。
+
+    序列也没有 → {}（ETF 无序列自然保持排除）。total_mv 港股用港币（前端按 fx 折人民币）。
+    每股股息财务侧已统一人民币 → 股息率按 price×fx 折人民币计算（比率同货币）。
+    """
+    from app.data.cache import get_latest_daily_price
+
+    pe, pe_period = _series_last_any(code, "pe")
+    pb, pb_period = _series_last_any(code, "pb")
+    if pe is None and pb is None:
+        return {}
+    if price is None:
+        row = get_latest_daily_price(code)
+        price = float(row["close"]) if row and row["close"] else None
+    out = {"price": round(price, 3) if price else None, "pe": pe, "pb": pb, "source": "series"}
+    fin = get_financials(code)
+    if fin:
+        shares = fin["total_shares"] if fin["total_shares"] else None
+        if shares and price:
+            out["total_shares"] = round(shares, 2)
+            out["total_mv"] = round(price * shares, 0)          # 原生币种（港股=港元，前端折人民币）
+        if fin["roe"] is not None:
+            out["roe_ttm"] = fin["roe"]                         # 东财 ROE_AVG
+        if fin["dv_per_share"] and price:
+            fx = get_fx_rate_cny("HKD" if is_hk_code(code) else "CNY", date.today().isoformat())
+            price_cny = price * fx if fx else None
+            if price_cny:
+                out["dv_ratio"] = round(fin["dv_per_share"] / price_cny * 100, 2)
+                out["dv_static"] = out["dv_ratio"]
+    out["pe_pct"] = percentile_in_series(code, "pe", pe_period or "1y", pe)
+    out["pb_pct"] = percentile_in_series(code, "pb", pb_period or "1y", pb)
+    return out
+
+
 def compute_live(code: str, price: float | None = None) -> dict:
     """实时估值全套（读缓存 + 本地计算，零网络）。
 
@@ -147,7 +198,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
 
     fin = get_financials(code)
     if not fin:
-        return {}
+        return _compute_live_series_fallback(code, price)
     if price is None:
         from app.data.cache import get_latest_daily_price
 
@@ -164,7 +215,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     total_shares = fin["total_shares"] if fin["total_shares"] else None
 
     if not net_profit or not eps:
-        return {"price": round(price, 3), "reason": "缺财务数据，无法计算实时估值"}
+        return _compute_live_series_fallback(code, price)
 
     if total_shares is None:
         total_shares = net_profit / eps      # 兜底：无总股本时用净利/EPS近似
@@ -172,8 +223,17 @@ def compute_live(code: str, price: float | None = None) -> dict:
     out = {
         "price": round(price, 3),
         "total_shares": round(total_shares, 2),
-        "total_mv": round(total_mv, 0),     # 元
+        "total_mv": round(total_mv, 0),     # 原生币种（A股=人民币；港股=港元，前端折人民币）
     }
+    # 货币统一：财务已由数据转换层折人民币；市值/股价按原生币种 → 比率计算须同货币。
+    # 港股市值=港元 → mv_cny = total_mv×fx；缺汇率 → 序列回退（与 missing_fx 同口径，不按 1:1）。
+    if is_hk_code(code):
+        fx = get_fx_rate_cny("HKD", date.today().isoformat())
+        if fx is None:
+            return _compute_live_series_fallback(code, price)
+        mv_cny = total_mv * fx
+    else:
+        mv_cny = total_mv
 
     series = []
     try:
@@ -195,15 +255,15 @@ def compute_live(code: str, price: float | None = None) -> dict:
     out["ttm_net_profit"] = round(ttm, 0) if ttm is not None else None
     out["ttm_revenue"] = round(ttm_revenue, 0) if ttm_revenue is not None else None
     # 亏损股显示负值（PE/PB/ROE/PS 分母为负时结果可为负）；仅分母为零或缺失才返回不适用
-    out["pe"] = round(total_mv / ttm, 2) if ttm is not None and ttm != 0 else None
-    out["pb"] = round(total_mv / net_assets, 2) if net_assets is not None and net_assets != 0 else None
-    out["pe_static"] = round(total_mv / net_profit, 2) if net_profit is not None and net_profit != 0 else None
-    out["pb_static"] = round(total_mv / net_assets, 2) if net_assets is not None and net_assets != 0 else None
+    out["pe"] = round(mv_cny / ttm, 2) if ttm is not None and ttm != 0 else None
+    out["pb"] = round(mv_cny / net_assets, 2) if net_assets is not None and net_assets != 0 else None
+    out["pe_static"] = round(mv_cny / net_profit, 2) if net_profit is not None and net_profit != 0 else None
+    out["pb_static"] = round(mv_cny / net_assets, 2) if net_assets is not None and net_assets != 0 else None
     out["roe_ttm"] = round(ttm / net_assets * 100, 2) if ttm is not None and net_assets is not None and net_assets != 0 else None
     out["profit_yoy_ttm"] = compute_ttm_growth(series, "net_profit")
     out["revenue_yoy_ttm"] = compute_ttm_growth(revenue_series, "revenue")
-    out["ps_static"] = round(out["total_mv"] / annual_revenue, 2) if annual_revenue is not None and annual_revenue != 0 else None
-    out["ps_ttm"] = round(out["total_mv"] / ttm_revenue, 2) if ttm_revenue is not None and ttm_revenue != 0 else None
+    out["ps_static"] = round(mv_cny / annual_revenue, 2) if annual_revenue is not None and annual_revenue != 0 else None
+    out["ps_ttm"] = round(mv_cny / ttm_revenue, 2) if ttm_revenue is not None and ttm_revenue != 0 else None
     out["roe_static"] = fin["roe_annual"] if fin["roe_annual"] is not None else fin["roe"]
     out["revenue_yoy_static"] = fin["revenue_yoy_annual"] if fin["revenue_yoy_annual"] is not None else fin["revenue_yoy"]
     out["profit_yoy_static"] = fin["profit_yoy_annual"] if fin["profit_yoy_annual"] is not None else fin["profit_yoy"]
@@ -213,7 +273,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     dividend = None
     if net_profit is not None and net_profit > 0 and payout is not None:
         dividend = net_profit * (payout / 100)
-    out["dv_ratio"] = round(dividend / total_mv * 100, 2) if dividend is not None else None
+    out["dv_ratio"] = round(dividend / mv_cny * 100, 2) if dividend is not None else None
     out["dv_static"] = out["dv_ratio"]
 
     # ---- 前瞻指标（修正口径，见 OPTIMIZATION_PLAN 第 4 节） ----
@@ -293,7 +353,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     # 前瞻 PE / PB / ROE / 股息率
     out["fwd_net_assets"] = round(fwd_net_assets, 0) if fwd_net_assets is not None else None
     out["fwd_net_profit"] = round(fwd_net_profit, 0) if fwd_net_profit is not None else None
-    out["fwd_pe"] = round(out["total_mv"] / fwd_net_profit, 2) if (fwd_net_profit is not None and fwd_net_profit != 0) else None
+    out["fwd_pe"] = round(mv_cny / fwd_net_profit, 2) if (fwd_net_profit is not None and fwd_net_profit != 0) else None
     # 前瞻 PB：预测净资产为零或不可得 → 不适用；为负 → 负数 + invalid
     if fwd_net_assets is None:
         out["fwd_pb"] = None
@@ -304,7 +364,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
         out["fwd_pb_confidence"] = "invalid"
         out["fwd_pb_reason"] = "预测净资产为零"
     else:
-        out["fwd_pb"] = round(out["total_mv"] / fwd_net_assets, 2)
+        out["fwd_pb"] = round(mv_cny / fwd_net_assets, 2)
         out["fwd_pb_confidence"] = "invalid" if fwd_net_assets < 0 else confidence
         out["fwd_pb_reason"] = "预测净资产为负" if fwd_net_assets < 0 else None
     # 前瞻 ROE = 预测净利润 ÷ 上年末与预测年末平均净资产
@@ -318,7 +378,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     out["fwd_revenue_yoy"] = round(expected_revenue_growth, 2) if expected_revenue_growth is not None else None
     if expected_revenue_growth is not None and annual_revenue:
         fwd_revenue = annual_revenue * (1 + expected_revenue_growth / 100)
-        out["ps_fwd"] = round(out["total_mv"] / fwd_revenue, 2) if fwd_revenue is not None and fwd_revenue != 0 else None
+        out["ps_fwd"] = round(mv_cny / fwd_revenue, 2) if fwd_revenue is not None and fwd_revenue != 0 else None
     else:
         out["ps_fwd"] = None
 

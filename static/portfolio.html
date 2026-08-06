@@ -6,157 +6,93 @@
   <title>组合分析 · 自建ETF</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
+  <style>
+    #tagSidebar { flex: 0 0 190px; position: sticky; top: 16px; align-self: flex-start;
+                  max-height: calc(100vh - 32px); overflow-y: auto; padding-right: 6px; }
+    #tagSidebar h3 { margin: 0 0 8px; font-size: 14px; }
+    #tagSidebar h3 .sub { font-size: 11px; color: var(--muted, #868e96); font-weight: 400; }
+    .tag-card { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 8px 10px;
+                margin-bottom: 8px; cursor: pointer; user-select: none;
+                transition: border-color .12s, background .12s, box-shadow .12s; }
+    .tag-card:hover { border-color: #b9cdff; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    .tag-card.on { border-color: #2563eb; background: rgba(37,99,235,.06);
+                   box-shadow: inset 0 0 0 1px rgba(37,99,235,.28); }
+    .tag-card .tc-head { display: flex; align-items: center; gap: 4px; }
+    .tag-card .tc-check { color: #2563eb; font-weight: 700; width: 12px; font-size: 12px; }
+    .tag-card .tc-name { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag-card .tc-count { font-size: 11px; color: var(--muted, #868e96); flex: none; }
+    .tag-card .tc-val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
+    .tag-card .tc-day { font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+    .tag-card.all { background: rgba(0,0,0,.02); }
+  </style>
 </head>
 <body>
   <nav></nav>
-  <div class="container">
-    <div class="cards" id="summary"></div>
-    <div class="period-tabs" id="tagTabs" style="justify-content:center"></div>
-    <div class="panel" id="pfGrowthPanel">
-      <h2>盈利与成长（组合） <span class="sub">静态 / TTM / 前瞻</span></h2>
-      <table>
-        <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
-        <tbody id="pfGrowthBody"></tbody>
-      </table>
-    </div>
-    <div class="panel" id="scorePanel" style="display:none">
-      <h2>组合动态打分 <span class="sub">界面指标加权，缺失因子自动归一化；分散度权重暂为 0</span></h2>
-      <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
-    </div>
-    <div class="panel" id="gaugePanel">
-      <h2>综合估值分位（1y，穿透式打包序列）</h2>
-      <div style="display:flex;gap:20px;flex-wrap:wrap">
-        <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
-        <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
-      </div>
-    </div>
-    <div class="panel" id="seriesPanel">
-      <h2>组合综合 PE/PB 序列 <span class="sub">市值加权打包 · 可拖动缩放，分位随可见窗口变化</span></h2>
-      <div id="seriesTabs"></div>
-      <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
-      <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
-      <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
-        暂无组合估值序列（请先「全量刷新」拉取历史序列）。
-      </div>
-    </div>
-    <div class="panel" id="chartRow">
-      <h2>权重分布（按标签）</h2>
-      <div class="chart sm" id="weightChart" style="height:340px"></div>
-    </div>
-    <div class="panel" id="peBarPanel">
-      <h2>各持仓估值分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75) · 无基本面(ETF/港股)不显示</span></h2>
-      <div class="row" style="align-items:stretch">
-        <div class="chart sm" id="peBars" style="flex:1;min-width:280px;height:420px"></div>
-        <div class="chart sm" id="pbBars" style="flex:1;min-width:280px;height:420px"></div>
-      </div>
-    </div>
-    <div class="panel" id="tablePanel">
-      <div class="row">
-        <h2 style="margin:0">逐股贡献</h2>
-        <select id="pfSortSel" title="排序">
-          <option value="weight_desc">权重降序</option>
-          <option value="weight_asc">权重升序</option>
-          <option value="tag">按标签</option>
-          <option value="code">按代码</option>
-        </select>
-      </div>
-      <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th>
-                <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr>
-          </thead>
-          <tbody id="stockBody"></tbody>
-        </table>
-      </div>
-      <div class="empty" id="emptyTip" style="display:none">
-        暂无数据。请先在交易页录入持仓并点「全量刷新」。
-      </div>
-    </div>
-    <div id="tagView" style="display:none"></div>
-  </div>
-
-  <script src="/static/js/api.js"></script>
-  <script src="/static/js/common.js"></script>
-  <script src="/static/js/charts.js"></script>
-  <script>
-    initNav('portfolio');
-    let activeTag = '全部';
-    let lastPortfolio = null;
-    let pfGrowthMode = 'ttm';
-    let tagGrowthMode = 'ttm';
-    let pfSortMode = 'weight_desc';
-    let tagSortMode = 'weight_desc';
-
-    async function loadPage() {
-      try {
-        const p = await api('/portfolio', { blocking: true });
-        lastPortfolio = p;
-        renderTagTabs(p);
-        renderSummary(p);
-        renderPfGrowth(p.portfolio);
-        renderScore(p);
-        renderGauges(p);
-        renderCharts(p);
-        renderTable(p);
-        renderSeries(p);
-        showView(activeTag);
-      } catch (e) {
-        document.getElementById('emptyTip').style.display = 'block';
-      }
-    }
-
-    function renderTagTabs(p) {
-      const wrap = document.getElementById('tagTabs');
-      wrap.innerHTML = '';
-      const tags = ['全部', ...(p.tags || []).map((t) => t.tag)];
-      tags.forEach((tag) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'ptab' + (tag === activeTag ? ' active' : '');
-        b.textContent = tag;
-        b.onclick = () => { activeTag = tag; loadPage(); };
-        wrap.appendChild(b);
-      });
-    }
-
-    function showView(tag) {
-      const all = tag === '全部';
-      ['pfGrowthPanel', 'scorePanel', 'gaugePanel', 'seriesPanel', 'chartRow', 'peBarPanel', 'tablePanel'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = all ? '' : 'none';
-      });
-      document.getElementById('summary').style.display = all ? '' : 'none';
-      document.getElementById('tagView').style.display = all ? 'none' : '';
-      if (!all) renderTagView(tag);
-    }
-
-    function renderTagView(tag) {
-      const p = lastPortfolio;
-      const section = (p.tags || []).find((t) => t.tag === tag);
-      if (!section) return;
-      const el = document.getElementById('tagView');
-      el.innerHTML = `
-        <div class="cards" id="tagCards"></div>
-        <div class="panel">
-          <h2>盈利与成长（${tag}） <span class="sub">静态 / TTM / 前瞻</span></h2>
+  <div class="container" style="display:flex; align-items:flex-start; gap:16px">
+    <aside id="tagSidebar">
+      <h3>标签 <span class="sub" id="tagCount"></span></h3>
+      <div id="tagAllCard" class="tag-card all" title="全选 / 全持仓（点击切换）"></div>
+      <div id="tagList"></div>
+    </aside>
+    <div style="flex:1; min-width:0">
+      <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个标签。</div>
+      <div id="rightContent">
+        <div class="cards" id="summary"></div>
+        <div class="panel" id="pfGrowthPanel">
+          <h2>盈利与成长（组合） <span class="sub">静态 / TTM / 前瞻</span></h2>
           <table>
             <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
-            <tbody id="tagGrowthBody"></tbody>
+            <tbody id="pfGrowthBody"></tbody>
           </table>
         </div>
-        <div class="panel">
-          <h2>权重分布（${tag}）</h2>
-          <div class="chart sm" id="tagWeightChart" style="height:340px"></div>
+        <div class="panel" id="scorePanel" style="display:none">
+          <h2>组合动态打分 <span class="sub">界面指标加权，缺失因子自动归一化；分散度权重暂为 0</span></h2>
+          <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
         </div>
-        <div class="panel">
-          <h2>各持仓 PE 分位（${tag}）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75)</span></h2>
-          <div class="chart sm" id="tagPeChart" style="height:420px"></div>
+        <div class="panel" id="gaugePanel">
+          <h2>综合估值分位（1y，穿透式打包序列）</h2>
+          <div style="display:flex;gap:20px;flex-wrap:wrap">
+            <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
+            <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
+          </div>
         </div>
-        <div class="panel">
+        <div class="panel" id="seriesPanel">
+          <h2>组合综合 PE/PB 序列 <span class="sub">市值加权打包 · 可拖动缩放，分位随可见窗口变化</span></h2>
+          <div id="seriesTabs"></div>
+          <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
+          <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
+          <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
+            暂无组合估值序列（请先「全量刷新」拉取历史序列）。
+          </div>
+        </div>
+        <div class="panel" id="fundflowPanel">
+          <h2>组合资金流 <span class="sub" id="pfFlowNote">穿透持仓：A股个股五档/买盘卖盘按持仓求和</span></h2>
+          <div id="pfFlowTabs"></div>
+          <div class="row" style="align-items:stretch">
+            <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:340px"></div>
+            <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:340px"></div>
+          </div>
+          <div class="row" style="align-items:stretch">
+            <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:260px"></div>
+            <div class="chart sm" id="pfFlowLine" style="flex:1;min-width:280px;height:260px"></div>
+          </div>
+          <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流（请先「全量刷新」，或今日非交易日）。</div>
+        </div>
+        <div class="panel" id="chartRow">
+          <h2>权重分布（按标签）</h2>
+          <div class="chart sm" id="weightChart" style="height:340px"></div>
+        </div>
+        <div class="panel" id="peBarPanel">
+          <h2>各持仓估值分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75) · 无基本面(ETF)不显示</span></h2>
+          <div class="row" style="align-items:stretch">
+            <div class="chart sm" id="peBars" style="flex:1;min-width:280px;height:420px"></div>
+            <div class="chart sm" id="pbBars" style="flex:1;min-width:280px;height:420px"></div>
+          </div>
+        </div>
+        <div class="panel" id="tablePanel">
           <div class="row">
-            <h2 style="margin:0">${tag} 明细</h2>
-            <select id="tagSortSel" title="排序">
+            <h2 style="margin:0">逐股贡献</h2>
+            <select id="pfSortSel" title="排序">
               <option value="weight_desc">权重降序</option>
               <option value="weight_asc">权重升序</option>
               <option value="tag">按标签</option>
@@ -165,89 +101,124 @@
           </div>
           <div style="overflow-x:auto">
             <table>
-              <thead><tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th><th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr></thead>
-              <tbody id="tagStockBody"></tbody>
+              <thead>
+                <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th>
+                    <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr>
+              </thead>
+              <tbody id="stockBody"></tbody>
             </table>
           </div>
-        </div>`;
+          <div class="empty" id="emptyTip" style="display:none">
+            暂无数据。请先在交易页录入持仓并点「全量刷新」。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-      const cards = [
-        ['标签', section.tag],
-        ['持仓数', section.stocks_count],
-        ['总市值', '¥' + fmtNum(section.total_value)],
-        ['总成本', '¥' + fmtNum(section.total_cost)],
-        ['盈亏', fmtNum(section.pnl) + ' 元', cls(section.pnl)],
-        ['盈亏%', fmtPct(section.pnl_pct), cls(section.pnl_pct)],
-        ['组合权重', fmtPct(section.weight)],
-        ['综合PE', fmtNum(section.pe)],
-        ['综合PB', fmtNum(section.pb)],
-        ['股息率', fmtPct(section.dv)],
-        ['ROE', fmtPct(section.roe)],
-        ['净利增长', fmtPct(section.profit_yoy)],
-      ];
-      document.getElementById('tagCards').innerHTML = cards.map(([l, v, c]) =>
-        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div></div>`).join('');
-      renderTagGrowth(section);
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('portfolio');
+    let lastPortfolio = null;
+    let pfSortMode = 'weight_desc';
+    let seriesPeriod = '3y';
+    // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
+    let allTags = [];
+    let tagCards = [];              // 全持仓按标签聚合（{tag,value_cny,day_pnl,count}，市值降序）
+    let selectedTags = new Set();
+    let tagsLoaded = false;
 
-      if (section.stocks.length) {
-        weightPie(
-          document.getElementById('tagWeightChart'),
-          section.stocks.map((s) => ({ name: s.name, value: s.value })),
-          '',
-        );
-      }
-      const peItems = section.stocks
-        .filter((s) => s.pe_pct !== null && s.pe_pct !== undefined)
-        .map((s) => ({ name: s.name, value: s.pe_pct }))
-        .sort((a, b) => b.value - a.value);
-      if (peItems.length) quantileBars(document.getElementById('tagPeChart'), peItems, 'PE 分位(1y)');
-
-      const table = el.querySelector('#tagStockBody').closest('table');
-      const body = document.getElementById('tagStockBody');
-      const rows = sortedStocks(section.stocks, tagSortMode);
-      body.innerHTML = rows.map((s) => `
-        <tr>
-          <td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} ${s.is_etf ? '<span class="tag-badge">ETF</span>' : ''}</td>
-          <td>${fmtNum(s.weight)}%</td>
-          <td>${fmtNum(s.value)}</td>
-          <td class="${cls(s.pnl)}">${signed(s.pnl)}</td>
-          <td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>
-          <td class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</td>
-          <td>${fmtNum(s.pe)}</td>
-          <td>${fmtNum(s.pb)}</td>
-          <td>${fmtNum(s.pe_pct)}%</td>
-          <td>${fmtNum(s.pb_pct)}%</td>
-          <td>${fmtNum(s.dv)}%</td>
-          <td>${fmtNum(s.roe)}%</td>
-        </tr>`).join('');
-      const oldFoot = table.querySelector('tfoot');
-      if (oldFoot) oldFoot.remove();
-      if (rows.length) table.appendChild(Object.assign(document.createElement('tfoot'), { innerHTML: sumRow(rows) }));
-      const sel = document.getElementById('tagSortSel');
-      if (sel) {
-        sel.addEventListener('change', (e) => {
-          tagSortMode = e.target.value;
-          renderTagView(activeTag);
-        });
-      }
+    function tagsQS() {
+      if (!allTags.length) return '';
+      if (selectedTags.size === allTags.length) return '';   // 全选 = 全持仓
+      return '?tags=' + encodeURIComponent([...selectedTags].join(','));
     }
 
-    function renderTagGrowth(section) {
-      const body = document.getElementById('tagGrowthBody');
-      if (!body) return;
-      const rows = [
-        ['ROE', section.roe_static, section.roe, section.fwd_roe, 'pct'],
-        ['营收增长', section.revenue_yoy_static, section.revenue_yoy, section.fwd_revenue_yoy, 'pct'],
-        ['净利增长', section.profit_yoy_static, section.profit_yoy, section.fwd_profit_yoy, 'pct'],
-        ['PE', section.pe_static, section.pe, section.fwd_pe, 'num'],
-        ['PB', section.pb_static, section.pb, section.fwd_pb, 'num'],
-        ['股息率', section.dv_static, section.dv, section.fwd_dv_ratio, 'pct'],
-        ['市销率', section.ps_static, section.ps_ttm, section.ps_fwd, 'num'],
-      ];
-      body.innerHTML = rows.map(([name, a, b, c, kind]) => {
-        const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
-        return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
+    // 顶部「全选」卡片：全持仓合计市值/今日盈亏 + 选择状态
+    function renderTagAll() {
+      const el = document.getElementById('tagAllCard');
+      const on = allTags.length > 0 && selectedTags.size === allTags.length;
+      const partial = selectedTags.size > 0 && !on;
+      const total = tagCards.reduce((s, c) => s + c.value_cny, 0);
+      const day = tagCards.reduce((s, c) => s + (c.day_pnl || 0), 0);
+      el.className = 'tag-card all' + (on ? ' on' : '');
+      el.innerHTML = `
+        <div class="tc-head">
+          <span class="tc-check">${on ? '✓' : partial ? '–' : ''}</span>
+          <span class="tc-name">全选</span>
+          <span class="tc-count">${selectedTags.size}/${allTags.length}</span>
+        </div>
+        <div class="tc-val">¥${fmtNum(total)}</div>
+        <div class="tc-day ${cls(day)}">${day == null ? '今 —' : '今 ' + signed(day)}</div>`;
+    }
+
+    function renderTagSidebar() {
+      const list = document.getElementById('tagList');
+      list.innerHTML = tagCards.map((c, i) => {
+        const on = selectedTags.has(c.tag);
+        const d = c.day_pnl;
+        return `
+        <div class="tag-card ${on ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
+          <div class="tc-head">
+            <span class="tc-check">${on ? '✓' : ''}</span>
+            <span class="tc-name">${c.tag}</span>
+            <span class="tc-count">${c.count}只</span>
+          </div>
+          <div class="tc-val">¥${fmtNum(c.value_cny)}</div>
+          <div class="tc-day ${cls(d)}">${d == null ? '今 —' : '今 ' + signed(d)}</div>
+        </div>`;
       }).join('');
+      list.querySelectorAll('.tag-card[data-i]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const tag = tagCards[+el.dataset.i].tag;
+          if (selectedTags.has(tag)) selectedTags.delete(tag); else selectedTags.add(tag);
+          renderTagSidebar();
+          loadPage();
+        });
+      });
+      document.getElementById('tagCount').textContent = `已选 ${selectedTags.size}/${allTags.length}`;
+      renderTagAll();
+    }
+
+    document.getElementById('tagAllCard').addEventListener('click', () => {
+      selectedTags = selectedTags.size === allTags.length ? new Set() : new Set(allTags);
+      renderTagSidebar();
+      loadPage();
+    });
+
+    async function loadPage() {
+      const right = document.getElementById('rightContent');
+      const noSel = document.getElementById('noSelection');
+      if (allTags.length && selectedTags.size === 0) {   // 空选择：占位提示，跳过请求
+        right.style.display = 'none';
+        noSel.style.display = 'block';
+        return;
+      }
+      right.style.display = '';
+      noSel.style.display = 'none';
+      try {
+        const p = await api('/portfolio' + tagsQS(), { blocking: true });
+        lastPortfolio = p;
+        if (!tagsLoaded) {                               // 首次加载后默认全选
+          tagsLoaded = true;
+          allTags = p.all_tags || [];
+          tagCards = p.tag_cards || [];
+          selectedTags = new Set(allTags);
+        }
+        renderTagSidebar();
+        renderSummary(p);
+        renderPfGrowth(p.portfolio);
+        renderScore(p);
+        renderGauges(p);
+        renderCharts(p);
+        renderTable(p);
+        renderSeries(p);
+        renderPfFlow();
+      } catch (e) {
+        document.getElementById('emptyTip').style.display = 'block';
+      }
     }
 
     function renderSummary(p) {
@@ -431,7 +402,6 @@
     }
 
     // 组合综合 PE/PB 序列折线：周期 tab + dataZoom 拖动分位联动
-    let seriesPeriod = '3y';
     function renderSeries(p) {
       const s = p.series;
       const empty = document.getElementById('seriesEmpty');
@@ -473,6 +443,61 @@
         title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
         marks: mk(d.cur_pb, fwd.fwd_pb),
       });
+    }
+
+    // 组合资金流：穿透持仓求和（A股个股；ETF/港股无资金流不参与）
+    // 序列号守卫：切标签会并发发多次请求，只认最新一次，防止旧的空态响应覆盖新数据
+    let pfFlowSeq = 0;
+    async function renderPfFlow() {
+      const seq = ++pfFlowSeq;
+      try {
+        const d = await api('/portfolio/fundflow' + tagsQS());
+        if (seq !== pfFlowSeq) return;                     // 过期响应丢弃
+        const panel = document.getElementById('fundflowPanel');
+        if (panel) panel.style.display = '';               // 成功渲染恢复面板可见（防先前失败隐藏后无法恢复）
+        const note = document.getElementById('pfFlowNote');
+        note.textContent = '穿透持仓：A股个股按持仓求和（覆盖 ' + d.covered + '/' + d.total + ' 持仓）';
+        const empty = document.getElementById('pfFlowEmpty');
+        const base = d.fundflow_15m || [];
+        const hist = d.fundflow_history || [];
+        const latest = d.fundflow_latest;
+        const hasBars = d.covered > 0 && latest;
+        const tabsEl = document.getElementById('pfFlowTabs');
+        const intraEl = document.getElementById('pfFlowIntraday');
+        const bsEl = document.getElementById('pfFlowBuySell');
+        const barsEl = document.getElementById('pfFlowBars');
+        const lineEl = document.getElementById('pfFlowLine');
+        if (!base.length && !hist.length && !hasBars) {
+          empty.style.display = 'block';
+          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = ''; barsEl.innerHTML = ''; lineEl.innerHTML = '';
+          return;
+        }
+        empty.style.display = 'none';
+        if (base.length) {
+          const windows = d.fundflow_windows || [1, 5, 15, 30];
+          const draw = (w) => {
+            const pts = resampleFlow(base, w);
+            fundflowIntraday(intraEl, pts, w);
+            fundflowBuySell(bsEl, pts, w);
+          };
+          tabsEl.innerHTML = '';
+          tabsEl.appendChild(periodTabs({
+            periods: windows.map((x) => x + '分钟'),
+            active: '15分钟',
+            onChange: (label) => { draw(parseInt(label, 10)); },
+          }));
+          draw(15);
+        } else {
+          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = '';
+        }
+        if (hasBars) fundflowBars(barsEl, latest); else barsEl.innerHTML = '';
+        if (hist.length) fundflowLine(lineEl, hist); else lineEl.innerHTML = '';
+      } catch (e) {
+        if (seq !== pfFlowSeq) return;                     // 过期失败也不隐藏面板
+        // 资金流请求失败：隐藏面板，不影响其余汇总
+        const p = document.getElementById('fundflowPanel');
+        if (p) p.style.display = 'none';
+      }
     }
 
     document.getElementById('pfSortSel').addEventListener('change', (e) => {

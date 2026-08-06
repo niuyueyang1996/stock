@@ -15,7 +15,7 @@
       <div class="row">
         <div id="searchBox"></div>
         <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
-        <button class="btn" onclick="document.getElementById('importFile').click()">📥 一键导入持仓Excel</button>
+        <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 一键导入持仓Excel</button>
         <select id="side">
           <option value="buy">买入</option>
           <option value="sell">卖出</option>
@@ -32,6 +32,13 @@
       </div>
       <div class="muted" id="formTip" style="margin-top:8px">
         录入买卖操作自动更新持仓（移动加权成本），并对当日所有交易金额加权综合评分。空仓时可用「📥 一键导入持仓Excel」从汇总持仓.xlsx 恢复持仓。
+      </div>
+      <div id="importProgress" style="display:none;margin-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
+          <span id="importProgressText">正在导入…</span>
+          <span id="importProgressPct" class="muted">0%</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="importProgressBar"></div></div>
       </div>
     </div>
 
@@ -124,20 +131,72 @@
       }
     }
 
+    // ============ Excel 导入进度条（同步阻塞 + NDJSON 流式） ============
+    function setImportBar(show, text, pct) {
+      const btn = document.getElementById('importBtn');
+      if (btn) btn.disabled = show;
+      const bar = document.getElementById('importProgress');
+      if (!bar) return;
+      bar.style.display = show ? 'block' : 'none';
+      document.getElementById('importProgressText').textContent = text || '';
+      document.getElementById('importProgressPct').textContent = pct == null ? '' : Math.round(pct) + '%';
+      const fill = document.getElementById('importProgressBar');
+      fill.style.width = (pct == null ? 0 : pct) + '%';
+      fill.classList.remove('error');
+    }
+
     async function importExcel() {
       const input = document.getElementById('importFile');
       const file = input.files && input.files[0];
       if (!file) return;
       const fd = new FormData();
       fd.append('file', file);
+      setImportBar(true, '正在上传解析 Excel…', 0);
       try {
-        const data = await api('/holdings/import-excel', { blocking: true, method: 'POST', body: fd });
-        const imported = (data.imported || []).length;
-        const skipped = (data.skipped || []).length;
-        toast(`已导入 ${imported} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''));
+        const res = await fetch('/api/holdings/import-excel', { method: 'POST', body: fd });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.detail || j.msg || `HTTP ${res.status}`);
+        }
+        // 逐行读 NDJSON 流，实时刷新进度（每行一只，done 从 0 数到 total）
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let doneMsg = null;
+        let errorMsg = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            let m;
+            try { m = JSON.parse(line); } catch (e) { continue; }
+            if (m.status === 'importing') {
+              const pct = m.total ? (m.done / m.total * 100) : 0;
+              setImportBar(true, `正在导入 ${m.done}/${m.total}${m.current ? '：' + m.current : ''}…`, pct);
+            } else if (m.status === 'done') {
+              doneMsg = m;
+            } else if (m.status === 'error') {
+              errorMsg = m;
+            }
+          }
+        }
         input.value = '';
+        setImportBar(false);
+        if (errorMsg) {
+          toast('导入失败：' + errorMsg.error, 5000);
+        } else if (doneMsg) {
+          const imported = doneMsg.imported || 0;
+          toast(`已导入 ${imported} 只持仓` + (doneMsg.skipped ? `，跳过 ${doneMsg.skipped} 只（非A股/无价格）` : ''), 3500);
+        }
         await loadPage();
       } catch (e) {
+        setImportBar(false);
+        input.value = '';
         toast('导入失败：' + e.message, 4000);
       }
     }

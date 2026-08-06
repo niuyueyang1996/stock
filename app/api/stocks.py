@@ -23,7 +23,7 @@ from app.data.cache import (
     upsert_expected_payout,
     upsert_expected_revenue_growth,
 )
-from app.data.fundflow import FUNDFLOW_WINDOWS, FundflowPoint, resample_points
+from app.data.fundflow import FUNDFLOW_WINDOWS
 from app.services.quote import get_quote
 from app.services.holdings import set_tag
 
@@ -399,38 +399,46 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         "default": DEFAULT_CHART_PERIOD,
     }
 
-    # 最新一天五档资金流 + 近30日主力净流入历史
-    flow_latest = dict(get_daily_fundflow(code)) if get_daily_fundflow(code) else None
+    # 最新一天五档资金流 + 近30日净流入历史
+    row = get_daily_fundflow(code)
+    flow_latest = dict(row) if row else None
+    # 当日自适应分档阈值 P15/P40/P75/P95（前端展示各档组成条件）
+    bands = {k: flow_latest[k] for k in ("p15", "p40", "p75", "p95")
+             if flow_latest and flow_latest.get(k) is not None} or None
+    if flow_latest:
+        # 前端五档柱只需各档净额 + 总净流入（主力由评分/AI 内部派生，不下发）
+        flow_latest = {
+            "trade_date": flow_latest["trade_date"],
+            "netamount": flow_latest["netamount"],
+            "super_large_net": flow_latest["super_large_net"],
+            "large_net": flow_latest["large_net"],
+            "medium_net": flow_latest["medium_net"],
+            "small_net": flow_latest["small_net"],
+            "xs_net": flow_latest.get("xs_net"),
+        }
     today = date.today().isoformat()
     flow_start = (date.today() - timedelta(days=45)).isoformat()
     flow_hist = [
-        {
-            "trade_date": r["trade_date"],
-            "main_net": r["main_net"],
-            "main_net_pct": r["main_net_pct"],
-            "netamount": r["netamount"],
-        }
+        {"trade_date": r["trade_date"], "netamount": r["netamount"]}
         for r in get_daily_fundflows(code, flow_start, today)
     ]
 
-    # 当日分时五档资金流（1 分钟基础缓存，按 window 重采样；仅当日，历史从接入日起累积）
+    # 当日分时五档资金流：始终返回 1 分钟基础粒度（前端本地按 1/5/15/30 重采样）
     fundflow_window = window if window in FUNDFLOW_WINDOWS else 15
     min_rows = get_fundflow_min(code, today)
-    if min_rows:
-        points = [
-            FundflowPoint(
-                ts=r["ts"], main_net=r["main_net"], super_large_net=r["super_large_net"],
-                large_net=r["large_net"], medium_net=r["medium_net"], small_net=r["small_net"],
-            )
-            for r in min_rows
-        ]
-        fundflow_15m = [
-            {"ts": p.ts, "main_net": p.main_net, "super_large_net": p.super_large_net,
-             "large_net": p.large_net, "medium_net": p.medium_net, "small_net": p.small_net}
-            for p in resample_points(points, fundflow_window)
-        ]
-    else:
-        fundflow_15m = []
+    fundflow_15m = [
+        {
+            "ts": r["ts"],
+            "super_large_net": r["super_large_net"],
+            "large_net": r["large_net"],
+            "medium_net": r["medium_net"],
+            "small_net": r["small_net"],
+            "xs_net": r["xs_net"],
+            "buy_amount": r["buy_amount"],
+            "sell_amount": r["sell_amount"],
+        }
+        for r in min_rows
+    ]
 
     return {
         "ok": True,
@@ -449,8 +457,7 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
             "financials": dict(fin) if fin else None,
             "dv_ratio": live.get("dv_ratio"),
             "fundflow_latest": flow_latest,
-            "fundflow_bands": {k: flow_latest[k] for k in ("p50", "p80", "p95")
-                               if flow_latest and flow_latest.get(k) is not None} or None,
+            "fundflow_bands": bands,
             "fundflow_history": flow_hist,
             "fundflow_15m": fundflow_15m,
             "fundflow_window": fundflow_window,

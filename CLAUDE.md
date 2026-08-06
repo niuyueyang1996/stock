@@ -3,6 +3,24 @@
 个人自建 ETF 持仓分析系统：把自己的一篮子持仓（A 股 + 港股 + 场内 ETF）当自建 ETF 分析。
 FastAPI + SQLite + 原生 JS/ECharts，无前端构建。数据源 akshare（新浪/百度/雪球/东财/中行）。
 
+## 数据分层原则（最高优先级，所有数据相关代码必须分层）
+
+数据接入统一三层结构，新增/修改任何数据相关代码必须遵守（用户明确要求，后续所有代码分层设计）：
+
+```
+app/data/
+  base.py          对外门面：DataSource 抽象 + SourceManager 降级链 + Financials 等标准模型
+  raw/             接口层：真实访问底层接口（akshare/原始 HTTP），只做请求与最小解析，返回原始 dict/DataFrame，无业务口径
+  providers.py     接口转换层：平台选择 + 降级链（哪平台先试、失败换下一个），调 raw 接口 + normalizer，返回标准模型
+  normalizers.py   数据转换层：raw → Financials/Quote/Bar/…，统一字段名、单位、货币、报告期口径
+  cache.py fx.py   （缓存/汇率，不变）
+```
+
+- **对外屏蔽**：唯一入口 `build_manager()` 返回的 SourceManager，外部（refresh/valuation/portfolio/api）只调 `manager.financials(code)`/`quote()` 等，**不直接依赖具体源或层**。
+- **货币统一在数据转换层**：各平台原始货币一律折算人民币（Financials 全是人民币口径）。港股财务接口返回的是**公司记账本位币（功能货币）**——青岛港=人民币、腾讯=港元；市值永远是港元。任何「市值÷净利」「每股股息÷股价」等比率**必须先同货币**，绝不允许混币计算（青岛港 PE 混币出 8.65 实为 7.7 的教训）。
+- **口径下沉**：TTM 计算、同比、货币折算、单位统一只允许在数据转换层做；上层只消费统一模型，不重复折算、不重复算口径。
+- **判定功能货币**：东财港股主指标 MAX 接口自带 EM 计算的 PE_TTM/PB_TTM（币种自洽），作锚点重算比对判定报表货币（见 normalizers.py `_detect_reporting_currency`）。`IS_CNY_CODE` 是交易计价币种非报表货币，不可用。
+
 ## 快速上手
 
 ```bash
@@ -18,12 +36,12 @@ app/
   config.py        DB_PATH/评分权重/评级阈值
   models/db.py     SQLite 建表 + 版本化迁移（migrate_db，迁移前备份）
   data/
-    base.py        数据源抽象（Quote/Bar/Financials）+ SourceManager 降级链
+    base.py        数据源抽象（Quote/Bar/Financials）+ SourceManager 降级链（对外门面）
+    raw/           接口层：真实访问底层接口，返回原始数据（raw_em/raw_sina/raw_tencent/raw_baidu/raw_mock）
+    providers.py   接口转换层：平台选择 + 降级链（EmProvider/SinaProvider/BaiduProvider/MockProvider）
+    normalizers.py 数据转换层：raw → 标准模型，统一字段/单位/货币（人民币）/口径
     cache.py       缓存 DAO（价格/估值/分位/财务/资金流/汇率）
     fx.py          汇率拉取（新浪实时 HKD/CNY）
-    source_sina.py 新浪源（行情/日K/财务/分红/港股）
-    source_baidu.py 百度源（估值分位历史序列）
-    source_mock.py 离线模拟源（测试）
   services/
     holdings.py    持仓/交易（重放法）、成本/股数调整、分红除权触发
     fx.py          汇率服务（折算/刷新/回填）
@@ -110,4 +128,4 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 
 ## 测试
 - 145 用例。重点：scoring（冻结快照/覆盖率/日聚合）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级）、api（409 CACHE_MISS/GET 零写入/名称回填）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
-- conftest：每测试独立临时 DB，mock build_manager 为 MockSource、quote 固定、列表为空。
+- conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。

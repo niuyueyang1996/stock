@@ -16,7 +16,6 @@ FACTOR_NAMES = {
     "pe_pct": "PE分位(1y)",
     "pb_pct": "PB分位(1y)",
     "dv_ratio": "股息率",
-    "fund_flow": "主力资金",
     "pct_chg": "当日涨跌",
     "roe": "ROE",
     "concentration": "组合集中度",

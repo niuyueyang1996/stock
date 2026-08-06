@@ -1,13 +1,36 @@
 """持仓路由：查询 + 批量初始化。"""
+import json
 import logging
+import threading
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.services import holdings as svc
 
 logger = logging.getLogger("api")
 router = APIRouter()
+
+# 导入互斥标志：同一时刻只允许一个 Excel 导入（防并发重复导入）
+_import_lock = threading.Lock()
+_importing = False
+
+
+def _try_begin_import() -> bool:
+    global _importing
+    with _import_lock:
+        if _importing:
+            return False
+        _importing = True
+        return True
+
+
+def _end_import() -> None:
+    global _importing
+    with _import_lock:
+        _importing = False
 
 
 class InitItem(BaseModel):
@@ -30,24 +53,59 @@ class CostAdjustBody(BaseModel):
     is_dividend: bool = False
 
 
+def _import_one(item: dict) -> None:
+    """录入单只持仓（含新股数据同步、评分快照、组合序列重算），阻塞式。"""
+    svc.record_trade(
+        code=item["code"], side="buy", price=item["price"], quantity=item["quantity"],
+        fee=item.get("fee", 0.0), name=item.get("name"),
+    )
+
+
+def _line(status: str, **kw) -> str:
+    """NDJSON 进度行。"""
+    return json.dumps({"status": status, **kw}, ensure_ascii=False) + "\n"
+
+
 @router.post("/holdings/import-excel")
 async def import_holdings_excel(file: UploadFile = File(...)):
-    """一键导入「汇总持仓.xlsx」；仅空仓时允许。"""
-    data = await file.read()
+    """一键导入「汇总持仓.xlsx」；仅空仓时允许。
+
+    同步阻塞导入：请求保持打开，逐只录入时流式输出 NDJSON 进度行（done/total/current），
+    前端逐行读实时刷新进度条；流结束即导入完成。阻塞网络同步放线程池，不卡事件循环。
+    """
+    if not _try_begin_import():
+        raise HTTPException(409, "已有导入任务进行中，请稍候")
     try:
-        items, skipped = svc.parse_holdings_excel(data)
-    except Exception as e:  # noqa: BLE001 Excel 结构错误统一转 400
-        raise HTTPException(400, f"Excel 解析失败: {e}")
-    if svc.get_holdings(active_only=True):
-        raise HTTPException(400, "当前非空仓，请先清仓后再一键导入")
-    if not items:
-        raise HTTPException(400, "Excel 中没有可导入的 A 股持仓")
-    try:
-        results = svc.init_holdings(items)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    logger.info("[持仓导入] 一键导入 %d 只，跳过 %d 只", len(results), len(skipped))
-    return {"ok": True, "data": {"imported": results, "skipped": skipped}}
+        data = await file.read()
+        try:
+            items, skipped = svc.parse_holdings_excel(data)
+        except Exception as e:  # noqa: BLE001 Excel 结构错误统一转 400
+            raise HTTPException(400, f"Excel 解析失败: {e}")
+        if svc.get_holdings(active_only=True):
+            raise HTTPException(400, "当前非空仓，请先清仓后再一键导入")
+        if not items:
+            raise HTTPException(400, "Excel 中没有可导入的 A 股持仓")
+    except HTTPException:
+        _end_import()
+        raise
+
+    async def gen():
+        total = len(items)
+        try:
+            for i, it in enumerate(items, 1):
+                yield _line("importing", done=i - 1, total=total, current=f"{it['code']} {it.get('name','')}".strip())
+                try:
+                    await run_in_threadpool(_import_one, it)
+                except ValueError as e:
+                    logger.warning("[持仓导入] 第 %d 只 %s 失败：%s", i, it["code"], e)
+                    yield _line("error", done=i - 1, total=total, error=str(e))
+                    return
+            yield _line("done", done=total, total=total, imported=total, skipped=len(skipped))
+            logger.info("[持仓导入] 一键导入 %d 只，跳过 %d 只", total, len(skipped))
+        finally:
+            _end_import()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @router.get("/holdings")

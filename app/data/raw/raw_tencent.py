@@ -1,0 +1,135 @@
+"""接口层：腾讯原始接口。港股行情（qt.gtimg.cn）+ 当日分笔（stock.gtimg.cn detail）。
+
+只做请求与最小解析（原始字符串 → 结构化字段），不做业务口径/聚合——聚合在
+normalizers 与 app/data/fundflow.py。
+"""
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+
+import requests
+
+from app.config import HTTP_HEADERS, REQUEST_TIMEOUT
+from app.data.base import is_hk_code, to_symbol
+
+# 当日已拉分笔快照与翻页游标（内存缓存，进程重启即失效，下次首次全量重拉）。
+# key=(code, 日期)；快照元素为 (time 'HH:MM:SS', amount, sign)；sign: +1买/-1卖/0中性。
+# 全局刷新并发时会多只股票并行拉分笔，锁保护「读游标 → 合并快照」内存序列，
+# 防同股并发重复合并快照、撕裂读写。
+_TICK_LOCK = threading.Lock()
+_TICK_SNAPSHOT: dict[tuple[str, str], list[tuple[str, float, int]]] = {}
+_TICK_CURSOR: dict[tuple[str, str], dict] = {}
+
+# 腾讯 detail 接口每页约 70 条（约 5 分钟成交）；全天约 35 页。
+_TICK_PAGE_SIZE = 70
+_TICK_MAX_PAGE = 200
+
+
+def _parse_tick_page(text: str) -> list[tuple[str, float, int]]:
+    """解析腾讯分笔一页。格式 `1500,"序号/时间/价格/变动/量/金额/性质|..."`。"""
+    i = text.find("[")
+    j = text.rfind("]")
+    if i < 0 or j <= i:
+        return []
+    inner = text[i + 1 : j]
+    parts = inner.split(",", 1)
+    if len(parts) < 2:
+        return []
+    raw = parts[1].strip().strip('"').strip("'")
+    out = []
+    for line in raw.split("|"):
+        f = line.split("/")
+        if len(f) < 7:
+            continue
+        try:
+            amount = float(f[5])
+        except (TypeError, ValueError):
+            continue
+        prop = f[6]
+        sign = 1 if prop == "B" else (-1 if prop == "S" else 0)
+        out.append((f[1], amount, sign))
+    return out
+
+
+def _fetch_tick_page(symbol: str, page: int) -> list[tuple[str, float, int]]:
+    """拉取第 page 页分笔（腾讯正序：p=0 最早、新分笔追加在尾部页）。空页返回 []。"""
+    resp = requests.get(
+        "http://stock.gtimg.cn/data/index.php",
+        params={"appn": "detail", "action": "data", "c": symbol, "p": page},
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return _parse_tick_page(resp.text)
+
+
+def fetch_ticks(code: str) -> list[tuple[str, float, int]]:
+    """拉当日分笔（港股返回空）。首次并发翻全量，后续增量只翻新增页，并入内存快照。"""
+    if is_hk_code(code):
+        return []
+    symbol = to_symbol(code)
+    today = date.today().isoformat()
+    key = (code, today)
+    with _TICK_LOCK:
+        cursor = _TICK_CURSOR.get(key)
+        start_page = cursor["page"] if cursor else 0
+        after_ts = cursor["ts"] if cursor else None
+
+    rows_by_page: dict[int, list] = {}
+    if start_page == 0:
+        # 首次：并发翻一批，批尾空页则结束
+        batch = 40
+        p = 0
+        while p < _TICK_MAX_PAGE:
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                results = list(ex.map(lambda pg: (pg, _fetch_tick_page(symbol, pg)), range(p, p + batch)))
+            batch_pages = {pg: rows for pg, rows in results if rows}
+            rows_by_page.update(batch_pages)
+            if (p + batch - 1) not in batch_pages:
+                break  # 批尾为空页 → 翻完
+            p += batch
+    else:
+        # 增量：从上次页号串行翻新增页（盘中几页）
+        p = start_page
+        while p < _TICK_MAX_PAGE:
+            rows = _fetch_tick_page(symbol, p)
+            if not rows:
+                break
+            rows_by_page[p] = rows
+            p += 1
+
+    if not rows_by_page:
+        with _TICK_LOCK:
+            return _TICK_SNAPSHOT.get(key, [])
+
+    last_page = max(rows_by_page)
+    merged = [r for pg in sorted(rows_by_page) for r in rows_by_page[pg]]
+    if after_ts:
+        merged = [r for r in merged if r[0] > after_ts]
+    if not merged:
+        with _TICK_LOCK:
+            return _TICK_SNAPSHOT.get(key, [])
+
+    with _TICK_LOCK:
+        # 防同股并发：已有线程把游标推进到本次末页之后 → 本次结果已被合并，直接返回现快照
+        cur = _TICK_CURSOR.get(key)
+        if cur and cur["page"] >= last_page + 1:
+            return _TICK_SNAPSHOT.get(key, [])
+        snap = _TICK_SNAPSHOT.setdefault(key, [])
+        snap.extend(merged)
+        _TICK_CURSOR[key] = {"page": last_page + 1, "ts": snap[-1][0]}
+        return snap
+
+
+def hk_quote_raw(code: str) -> list[str] | None:
+    """港股实时行情原始字段（腾讯 qt.gtimg.cn，~分隔）。失败返回 None。"""
+    resp = requests.get(
+        f"https://qt.gtimg.cn/q=hk{code}",
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    text = resp.content.decode("gbk", errors="replace")
+    if "=" not in text:
+        return None
+    return text.split("=", 1)[1].strip('";').split("~")

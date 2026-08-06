@@ -39,6 +39,39 @@ body {
 a { color: var(--primary); text-decoration: none; }
 a:hover { color: var(--primary-deep); }
 
+/* ============ 启动预热提示条（全页通用，导航下方） ============ */
+.prewarm-bar {
+  padding: 7px 16px;
+  text-align: center;
+  font-size: 13px;
+  background: #fff8e1;
+  color: #7a5b00;
+  border-bottom: 1px solid #f0e0b0;
+}
+.prewarm-bar.done {
+  background: #e8f5e9;
+  color: #1b5e20;
+  border-bottom-color: #c8e6c9;
+}
+
+/* ============ Excel 导入进度条（交易页） ============ */
+.progress-track {
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 4px;
+  background: var(--primary);
+  transition: width .3s ease;
+}
+.progress-fill.error {
+  background: #e03131;
+}
+
 /* ============ 导航（磨砂） ============ */
 nav {
   position: sticky; top: 0; z-index: 10;

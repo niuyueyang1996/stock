@@ -99,6 +99,42 @@ function initNav(active) {
   const status = document.createElement('span');
   status.id = 'statusText';
   nav.appendChild(status);
+
+  setupPrewarmBar(nav);
+}
+
+// 启动后台预热提示条（全页通用）：轮询 /status/prewarm，预热中显示当前步骤，刚完成时短暂展示结果。
+// 预热是启动后台线程执行的（拉汇率/查除权/缓存市场列表），不提示会让用户误以为程序没反应。
+let _prewarmSeen = false;
+function setupPrewarmBar(nav) {
+  if (!nav || document.getElementById('prewarmBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'prewarmBar';
+  bar.className = 'prewarm-bar';
+  bar.style.display = 'none';
+  const txt = document.createElement('span');
+  txt.id = 'prewarmText';
+  bar.appendChild(txt);
+  nav.insertAdjacentElement('afterend', bar);
+
+  async function checkPrewarm() {
+    try {
+      const p = await api('/status/prewarm', { silent: true });
+      if (p.running) {
+        _prewarmSeen = true;
+        bar.classList.remove('done');
+        bar.style.display = 'block';
+        txt.textContent = p.step ? '后台预热中：' + p.step + '…' : '后台预热中…';
+        setTimeout(checkPrewarm, 3000);
+      } else if (_prewarmSeen && p.done.length) {
+        // 页面加载时预热进行中，现已完成 → 展示一次结果后隐藏
+        bar.classList.add('done');
+        txt.textContent = '后台预热完成：' + p.done.join(' / ') + '，数据已就绪';
+        setTimeout(() => { bar.style.display = 'none'; }, 5000);
+      }
+    } catch (e) { /* 预热接口查询失败静默 */ }
+  }
+  checkPrewarm();
 }
 
 // 刷新内容项（与后端 DYNAMIC_ITEMS / FULL_ITEMS / STOCK_*_ITEMS 对应）

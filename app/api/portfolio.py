@@ -6,11 +6,18 @@ from app.analysis.portfolio import compute_portfolio
 router = APIRouter()
 
 
+def _tag_list(tags: str | None) -> list[str] | None:
+    """tags 逗号分隔 → 列表；未传返回 None（全选/全持仓），传了可为空列表（空子集）。"""
+    if tags is None:
+        return None
+    return [t for t in tags.split(",") if t]
+
+
 @router.get("/portfolio")
-def portfolio(code: str | None = None):
-    """整体组合分析；带 code 则返回该股在组合内的贡献与上下文。"""
+def portfolio(code: str | None = None, tags: str | None = None):
+    """整体组合分析；tags=标签子集（逗号分隔，缺省全选）；带 code 则返回该股在组合内的贡献与上下文。"""
     try:
-        p = compute_portfolio()
+        p = compute_portfolio(tags=_tag_list(tags))
     except Exception as e:
         raise HTTPException(500, f"组合分析失败: {e}")
 
@@ -38,3 +45,14 @@ def portfolio_weights():
     """仅权重分布（按权重降序）。"""
     p = compute_portfolio()
     return {"ok": True, "data": p["weights"]}
+
+
+@router.get("/portfolio/fundflow")
+def portfolio_fundflow(tags: str | None = None):
+    """组合资金流穿透：按选中 A 股个股持仓求和（tags 逗号分隔，缺省全选）。ETF/港股不参与。"""
+    try:
+        from app.analysis.portfolio import portfolio_fundflow as _pf
+
+        return {"ok": True, "data": _pf(tags=_tag_list(tags))}
+    except Exception as e:
+        raise HTTPException(500, f"组合资金流失败: {e}")

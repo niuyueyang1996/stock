@@ -69,6 +69,32 @@ def test_status(client):
     assert "trade_day" in body and "source_status" in body
 
 
+def test_prewarm_status(client):
+    """启动预热进度接口：结构完整。"""
+    r = client.get("/api/status/prewarm")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert set(data) >= {"running", "step", "done", "updated_at"}
+
+
+def test_prewarm_state_machine():
+    """预热状态机：begin→mark→complete→finish 逐步骤推进，状态正确。"""
+    from app import prewarm
+
+    prewarm.begin()
+    assert prewarm.snapshot()["running"] is True
+    prewarm.mark("拉取港股汇率")
+    assert prewarm.snapshot()["step"] == "拉取港股汇率"
+    prewarm.complete("港股汇率")
+    s = prewarm.snapshot()
+    assert s["step"] == "" and s["done"] == ["港股汇率"]
+    prewarm.mark("缓存全市场列表")
+    prewarm.complete("全市场列表")
+    assert prewarm.snapshot()["done"] == ["港股汇率", "全市场列表"]
+    prewarm.finish()
+    assert prewarm.snapshot()["running"] is False
+
+
 def test_init_and_list_holdings(client):
     r = client.post("/api/holdings", json={"items": [{"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100}]})
     assert r.status_code == 200
@@ -279,8 +305,9 @@ def test_stock_tag_crud(client):
 
 
 def test_import_excel_holdings(client):
-    """一键导入持仓Excel：空仓时成功，非空仓时拒绝。"""
+    """一键导入持仓Excel：同步阻塞流式导入成功，非空仓时拒绝。"""
     import io
+    import json
 
     from openpyxl import Workbook
 
@@ -300,7 +327,10 @@ def test_import_excel_holdings(client):
     }
     r = client.post("/api/holdings/import-excel", files=files)
     assert r.status_code == 200
-    assert len(r.json()["data"]["imported"]) == 1
+    # 响应为 NDJSON 流：先 importing（0/1）后 done（1/1）
+    lines = [json.loads(l) for l in r.text.strip().splitlines() if l.strip()]
+    assert lines[0]["status"] == "importing" and lines[0]["done"] == 0 and lines[0]["total"] == 1
+    assert lines[-1]["status"] == "done" and lines[-1]["imported"] == 1
     assert len(client.get("/api/holdings").json()["data"]) == 1
 
     r2 = client.post("/api/holdings/import-excel", files=files)
@@ -423,6 +453,34 @@ def test_refresh_dynamic_items_filter(client):
     s = data["stocks"][0]
     assert "daily" in s and "valuation" in s
     assert s["valuation"]["reason"] == "skipped"  # 未勾选 valuation → 跳过
+
+
+def test_refresh_full_concurrent_order_preserved(client):
+    """全局全量刷新并发执行：多持仓结果保序、无单股失败、并发写不报 database is locked。"""
+    from app.models.db import get_conn
+
+    items = [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+        {"code": "600519", "name": "贵州茅台", "price": 1500, "quantity": 10},
+        {"code": "600036", "name": "招商银行", "price": 40, "quantity": 100},
+        {"code": "000001", "name": "平安银行", "price": 12, "quantity": 100},
+        {"code": "510300", "name": "300ETF", "price": 4, "quantity": 100},
+    ]
+    client.post("/api/holdings", json={"items": items})
+    r = client.post("/api/refresh/full")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["mode"] == "full"
+    # 并发结果按输入顺序保序返回
+    assert [s["code"] for s in data["stocks"]] == [i["code"] for i in items]
+    # 无单股失败（并发写冲突会以 error 形式露出，如 database is locked）
+    assert all("error" not in s for s in data["stocks"]), data["stocks"]
+    # 每只股票原始缓存都已写入（并发写落库完整）
+    with get_conn() as c:
+        for code in ("600000", "000001", "510300"):
+            for tbl in ("daily_price_cache", "financial_cache", "daily_valuation_cache"):
+                n = c.execute(f"SELECT COUNT(*) FROM {tbl} WHERE code=?", (code,)).fetchone()[0]
+                assert n > 0, f"{tbl} 应并发写入 {code}"
 
 
 def test_data_reset_requires_confirm(client):

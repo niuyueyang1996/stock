@@ -81,6 +81,14 @@ def status():
     }
 
 
+@router.get("/status/prewarm")
+def prewarm_status():
+    """启动后台预热进度（前端首页提示条轮询用）。"""
+    from app.prewarm import snapshot
+
+    return {"ok": True, "data": snapshot()}
+
+
 @router.post("/refresh")
 def refresh(body: RefreshBody | None = None):
     """动态刷新：按 items 选择内容（实时价格/当前估值/评分重建），items 空=全部。"""

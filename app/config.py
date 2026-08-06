@@ -59,20 +59,18 @@ QUANTILE_MIN_SAMPLES = 60
 
 # 评分模型：买入/卖出因子权重（和=1），可经 /api/scoring/rules 修改
 BUY_WEIGHTS = {
-    "pe_pct": 0.25,      # PE分位低 → 得分高
-    "pb_pct": 0.20,      # PB分位低
-    "dv_ratio": 0.15,    # 股息率
-    "fund_flow": 0.15,   # 主力资金净流入
-    "pct_chg": 0.10,     # 当日涨跌（回踩得分高）
-    "roe": 0.15,         # ROE质量
+    "pe_pct": 0.2941,    # PE分位低 → 得分高
+    "pb_pct": 0.2353,    # PB分位低
+    "dv_ratio": 0.1765,  # 股息率
+    "pct_chg": 0.1176,   # 当日涨跌（回踩得分高）
+    "roe": 0.1765,       # ROE质量
 }
 SELL_WEIGHTS = {
-    "pe_pct": 0.25,      # PE分位高 → 得分高
-    "pb_pct": 0.20,      # PB分位高
-    "dv_ratio": 0.10,    # 股息率低
-    "fund_flow": 0.15,   # 主力净流出
-    "pct_chg": 0.10,     # 当日涨幅大
-    "concentration": 0.20,  # 组合集中度（仓位>20%该减仓）
+    "pe_pct": 0.2941,    # PE分位高 → 得分高
+    "pb_pct": 0.2353,    # PB分位高
+    "dv_ratio": 0.1176,  # 股息率低
+    "pct_chg": 0.1176,   # 当日涨幅大
+    "concentration": 0.2354,  # 组合集中度（仓位>20%该减仓）
 }
 
 # 评级阈值

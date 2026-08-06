@@ -365,3 +365,76 @@ def test_negative_pe_ascending_is_rejected():
     segmented = sorted([-100.0, -20.0, -5.0, 8.0, 15.0, 30.0, 0.0], key=_segmented_key)
     assert segmented.index(0.0) > segmented.index(30.0)   # 0 在正 PE 之后
     assert segmented.index(-100.0) > segmented.index(0.0)  # 负 PE 在 0 之后
+
+
+# ---------- 标签多选子集 ----------
+
+def test_compute_portfolio_tag_subset():
+    """标签子集过滤：全部汇总只按选中标签重算；空子集为空；all_tags 常驻。"""
+    from app.analysis.portfolio import compute_portfolio
+
+    _seed_holdings([("600000", 100), ("600519", 200)])
+    with get_conn() as c:
+        c.execute("UPDATE stocks SET tag='银行' WHERE code='600000'")
+        c.execute("UPDATE stocks SET tag='白酒' WHERE code='600519'")
+
+    full = compute_portfolio()
+    assert full["all_tags"] == ["白酒", "银行"]
+    # 全选默认（无 tags）→ 总市值 = 1000 + 2000
+    assert full["portfolio"]["total_value"] == pytest.approx(3000.0)
+
+    sub = compute_portfolio(tags=["银行"])
+    assert [s["code"] for s in sub["stocks"]] == ["600000"]
+    assert sub["portfolio"]["total_value"] == pytest.approx(1000.0)
+    assert [w["tag"] for w in sub["tag_weights"]] == ["银行"]
+    assert sub["all_tags"] == ["白酒", "银行"]     # 全量标签常驻，与子集无关
+
+    empty = compute_portfolio(tags=[])
+    assert empty["stocks"] == []
+    assert empty["portfolio"]["total_value"] == 0
+
+
+def test_compute_portfolio_tag_cards():
+    """标签卡片：全持仓口径聚合市值/今日盈亏，与当前子集无关（左侧侧栏常驻）。"""
+    from app.analysis.portfolio import compute_portfolio
+
+    _seed_holdings([("600000", 100), ("600519", 200)])
+    with get_conn() as c:
+        c.execute("UPDATE stocks SET tag='银行' WHERE code='600000'")
+        c.execute("UPDATE stocks SET tag='白酒' WHERE code='600519'")
+
+    full = compute_portfolio()
+    cards = {c["tag"]: c for c in full["tag_cards"]}
+    assert set(cards) == {"白酒", "银行"}
+    assert cards["银行"]["value_cny"] == pytest.approx(1000.0)   # 100 × 现价10
+    assert cards["白酒"]["value_cny"] == pytest.approx(2000.0)   # 200 × 现价10
+    assert cards["银行"]["count"] == 1 and cards["白酒"]["count"] == 1
+    assert full["tag_cards"][0]["tag"] == "白酒"                 # 市值降序
+
+    # 与当前子集无关：选「银行」后 tag_cards 仍是全部持仓口径
+    sub = compute_portfolio(tags=["银行"])
+    sub_cards = {c["tag"]: c for c in sub["tag_cards"]}
+    assert set(sub_cards) == {"白酒", "银行"}
+    assert sub_cards["白酒"]["value_cny"] == pytest.approx(2000.0)
+
+    # 卡片今日盈亏合计 = 逐股（全选口径）合计
+    full_day = sum(s["day_pnl"] for s in full["stocks"] if s.get("day_pnl") is not None)
+    assert sum(c["day_pnl"] for c in full["tag_cards"]) == pytest.approx(full_day)
+
+
+def test_compute_portfolio_series_subset_weights():
+    """子集权重实时打包序列：只反映传入子集的综合值（A+B，不含 C）。"""
+    _seed_holdings([("A", 100), ("B", 200), ("C", 300)])
+    for code in ("A", "B", "C"):
+        _seed_fin(code)
+    for code, pe in (("A", 10.0), ("B", 20.0), ("C", 50.0)):
+        _seed_series(code, "pe", [("2026-01-01", pe), ("2026-01-02", pe)])
+        _seed_series(code, "pb", [("2026-01-01", 2.0), ("2026-01-02", 2.0)])
+
+    # 子集 A+B：市值 1000/2000 → 权重 1/3, 2/3
+    s = compute_portfolio_series({"A": 1000.0, "B": 2000.0})
+    d = s["3y"]
+    denom = (1 / 3) / 10 + (2 / 3) / 20
+    assert d["pe"][0] == pytest.approx(round(1 / denom, 2), abs=0.01)
+    # C 的 PE=50 被排除（否则 1/6,2/6,3/6 会得到 23.08）
+    assert d["pe"][0] != pytest.approx(23.08, abs=0.01)

@@ -71,6 +71,7 @@ class FundflowDay:
     medium_net: float
     small_net: float
     main_net_pct: float        # 主力净流入占比 %
+    xs_net: float = 0.0        # 特小单净流入
 
 
 class DataSource:
@@ -189,14 +190,13 @@ class SourceManager:
 
 
 def build_manager() -> SourceManager:
-    """按 config.SOURCE 构建数据源管理器。"""
+    """按 config.SOURCE 构建数据源管理器（三层门面：providers 组合 raw + normalizer）。"""
     from app.config import SOURCE
 
     if SOURCE == "mock":
-        from app.data.source_mock import MockSource
+        from app.data.providers import MockProvider
 
-        return SourceManager([MockSource()])
-    from app.data.source_baidu import BaiduSource
-    from app.data.source_sina import SinaSource
+        return SourceManager([MockProvider()])
+    from app.data.providers import BaiduProvider, EmProvider, SinaProvider
 
-    return SourceManager([SinaSource(), BaiduSource()])
+    return SourceManager([EmProvider(), SinaProvider(), BaiduProvider()])

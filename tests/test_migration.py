@@ -59,11 +59,15 @@ def test_migration_v1_to_v2(tmp_path, monkeypatch):
         # daily_scores.total_score 可空（覆盖不足）
         info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_scores)").fetchall()}
         assert info["total_score"]["notnull"] == 0
-        # 版本号升级到当前版本（3：新增资金流分档阈值列）
+        # 版本号升级到当前版本（4：五档资金流 + 自适应分档 P15/P40/P75）
         ver = c.execute("SELECT value FROM config WHERE key='db_schema_version'").fetchone()[0]
-        assert ver == "3"
+        assert ver == "4"
         info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_fundflow_cache)").fetchall()}
-        assert info["p50"]["name"] == "p50" and info["p80"]["name"] == "p80" and info["p95"]["name"] == "p95"
+        for col in ("p50", "p80", "p95", "xs_net", "p15", "p40", "p75"):
+            assert info[col]["name"] == col
+        minfo = {r["name"]: r for r in c.execute("PRAGMA table_info(fundflow_15m_cache)").fetchall()}
+        for col in ("xs_net", "buy_amount", "sell_amount"):
+            assert minfo[col]["name"] == col
 
 
 def test_migration_backup_created(tmp_path, monkeypatch):
