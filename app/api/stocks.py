@@ -1,6 +1,7 @@
 """个股分析路由：分位/估值/财务/资金流详情 + 股票搜索 + 个股刷新 + 缓存状态。"""
 import json
 from datetime import date, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -60,19 +61,13 @@ def _cache_status(code: str) -> dict:
 
 
 def _resolve_stock_name(code: str) -> str | None:
-    """从全市场列表（A股本地缓存 + 港股）查询代码对应的名称。"""
-    try:
-        for r in _load_stock_list():
-            if r["code"] == code:
-                return r["name"]
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        for r in _load_hk_stock_list():
-            if r["code"] == code:
-                return r["name"]
-    except Exception:  # noqa: BLE001
-        pass
+    """从全市场列表（A股本地缓存 + 港股）查询代码对应的名称。只读本地缓存，绝不联网。"""
+    for r in _read_stock_list_cache():
+        if r["code"] == code:
+            return r["name"]
+    for r in _read_hk_stock_list_cache():
+        if r["code"] == code:
+            return r["name"]
     return None
 
 
@@ -91,23 +86,60 @@ class TagBody(BaseModel):
 DEFAULT_CHART_PERIOD = "3y"
 
 # 股票名称列表缓存（首次经 akshare 全量拉取，存本地文件）
+# 约定：搜索 / 名称回填只读本地缓存（GET 零网络）；只有启动预热 preload_market_lists 才联网下载。
 _STOCK_LIST_FILE = None
 _HK_STOCK_LIST_FILE = None
 
 
-def _load_stock_list() -> list[dict]:
-    """全市场 A 股代码+名称。本地文件缓存，每日刷新。"""
+def _stock_list_path() -> Path:
     from app.config import DATA_DIR
-    import os
 
     global _STOCK_LIST_FILE
-    _STOCK_LIST_FILE = _STOCK_LIST_FILE or (DATA_DIR / "stock_list.json")
-    path = _STOCK_LIST_FILE
+    if _STOCK_LIST_FILE is None:
+        _STOCK_LIST_FILE = DATA_DIR / "stock_list.json"
+    return _STOCK_LIST_FILE
+
+
+def _hk_stock_list_path() -> Path:
+    from app.config import DATA_DIR
+
+    global _HK_STOCK_LIST_FILE
+    if _HK_STOCK_LIST_FILE is None:
+        _HK_STOCK_LIST_FILE = DATA_DIR / "hk_stock_list.json"
+    return _HK_STOCK_LIST_FILE
+
+
+def _read_stock_list_cache() -> list[dict]:
+    """只读 A 股全市场列表缓存（文件不存在/损坏返回空）。绝不联网。"""
+    try:
+        path = _stock_list_path()
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:  # noqa: BLE001 缓存损坏按空处理
+        pass
+    return []
+
+
+def _read_hk_stock_list_cache() -> list[dict]:
+    """只读港股列表缓存（文件不存在/损坏返回空）。绝不联网。"""
+    try:
+        path = _hk_stock_list_path()
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:  # noqa: BLE001 缓存损坏按空处理
+        pass
+    return []
+
+
+def _load_stock_list() -> list[dict]:
+    """全市场 A 股代码+名称。本地文件缓存每日刷新；仅启动预热时联网下载。"""
+    path = _stock_list_path()
     if path.exists():
         mtime = path.stat().st_mtime
         if (date.today() - date.fromtimestamp(mtime)).days < 1:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
+            return _read_stock_list_cache()
 
     import akshare as ak
 
@@ -120,18 +152,12 @@ def _load_stock_list() -> list[dict]:
 
 
 def _load_hk_stock_list() -> list[dict]:
-    """港股代码/中文名称列表（新浪源，慢接口，缓存 7 天）。"""
-    from app.config import DATA_DIR
-    import os
-
-    global _HK_STOCK_LIST_FILE
-    _HK_STOCK_LIST_FILE = _HK_STOCK_LIST_FILE or (DATA_DIR / "hk_stock_list.json")
-    path = _HK_STOCK_LIST_FILE
+    """港股代码/中文名称列表（新浪源，慢接口，缓存 7 天）。仅启动预热时联网。"""
+    path = _hk_stock_list_path()
     if path.exists():
         mtime = path.stat().st_mtime
         if (date.today() - date.fromtimestamp(mtime)).days < 7:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
+            return _read_hk_stock_list_cache()
     try:
         import akshare as ak
 
@@ -180,19 +206,30 @@ def _fetch_hk_names(codes: list[str]) -> list[dict]:
     return rows
 
 
+def preload_market_lists() -> None:
+    """启动后台预热：确保 A 股 + 港股全市场列表已缓存。
+
+    幂等：缓存新鲜时直接读文件不发网络；单个数据源失败不影响另一个，也不影响服务启动。
+    搜索 / 名称回填只读本地缓存，因此列表只能由这里（或旧版自动下载）填充。
+    """
+    for loader in (_load_stock_list, _load_hk_stock_list):
+        try:
+            loader()
+        except Exception:  # noqa: BLE001 预热失败仅本次缺列表，不影响服务
+            pass
+
+
 @router.get("/stocks/search")
 def search_stocks(q: str, limit: int = 10):
-    """按代码前缀或名称模糊搜索 A 股。"""
+    """按代码前缀或名称模糊搜索 A 股/港股。
+
+    只读本地缓存（列表由启动预热维护），绝不联网、不阻塞；缓存缺失时返回空。
+    """
     q = q.strip()
     if not q:
         return {"ok": True, "data": []}
-    try:
-        rows = _load_stock_list()
-    except Exception:
-        rows = []
-    hits = [r for r in rows if r["code"].startswith(q) or q in r["name"]]
-    hk_rows = _load_hk_stock_list()
-    hk_hits = [r for r in hk_rows if r["code"].startswith(q) or q in r["name"]]
+    hits = [r for r in _read_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
+    hk_hits = [r for r in _read_hk_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     return {"ok": True, "data": (hits + hk_hits)[:limit]}
 
 

@@ -180,8 +180,8 @@ def test_stock_detail_backfills_name_from_list(client, monkeypatch):
     """stocks 表缺名称时，从全市场列表回填名称（并写入 stocks 表）。"""
     import app.api.stocks as smod
 
-    monkeypatch.setattr(smod, "_load_stock_list", lambda: [{"code": "601728", "name": "中国电信"}])
-    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
+    monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [{"code": "601728", "name": "中国电信"}])
+    monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [])
     _seed_stock_cache(client, "601728")
     r = client.get("/api/stocks/601728")
     assert r.status_code == 200
@@ -192,6 +192,60 @@ def test_stock_detail_backfills_name_from_list(client, monkeypatch):
     with get_conn() as c:
         row = c.execute("SELECT name FROM stocks WHERE code='601728'").fetchone()
     assert row["name"] == "中国电信"
+
+
+def test_search_reads_cache_and_never_downloads(client, monkeypatch):
+    """搜索只读本地缓存：绝不触发联网下载（_load_* 被调用则报错）。"""
+    import app.api.stocks as smod
+
+    def _explode(*_a, **_k):
+        raise AssertionError("搜索不应触发全市场下载")
+
+    monkeypatch.setattr(smod, "_load_stock_list", _explode)
+    monkeypatch.setattr(smod, "_load_hk_stock_list", _explode)
+    monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [
+        {"code": "600519", "name": "贵州茅台"},
+        {"code": "601728", "name": "中国电信"},
+        {"code": "000858", "name": "五粮液"},
+    ])
+    monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [
+        {"code": "00700", "name": "腾讯控股", "market": "hk"},
+    ])
+    # 按代码前缀
+    r = client.get("/api/stocks/search?q=600")
+    assert r.status_code == 200
+    assert any(x["code"] == "600519" for x in r.json()["data"])
+    # 按名称模糊（含港股）
+    r2 = client.get("/api/stocks/search?q=腾讯")
+    assert any(x["code"] == "00700" for x in r2.json()["data"])
+    # 空查询直接返回空，不读列表
+    assert client.get("/api/stocks/search?q=").json()["data"] == []
+
+
+def test_search_without_cache_returns_empty(client):
+    """缓存缺失（预热尚未完成）时搜索快速返回空，不阻塞、不报错。"""
+    r = client.get("/api/stocks/search?q=600000")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "data": []}
+
+
+def test_preload_market_lists_warms_both(monkeypatch):
+    """启动预热依次拉取 A 股与港股；单个源失败不影响另一个。"""
+    import app.api.stocks as smod
+
+    calls = []
+    monkeypatch.setattr(smod, "_load_stock_list", lambda: calls.append("a"))
+    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: calls.append("hk"))
+    smod.preload_market_lists()
+    assert calls == ["a", "hk"]
+
+    def _boom():
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(smod, "_load_stock_list", _boom)
+    calls.clear()
+    smod.preload_market_lists()
+    assert calls == ["hk"]
 
 
 def test_expected_growth_crud(client):

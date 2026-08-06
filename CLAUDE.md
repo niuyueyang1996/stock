@@ -104,7 +104,7 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - SQLite 写事务内不要再开连接写（如汇率落库）会 "database is locked"——汇率计算移到事务外。
 - `_MIGRATE_COLUMNS` 加新列后，旧库需手动 `ALTER TABLE`（migrate 只在版本落后时跑；已到目标版本不会重跑）。
 - daily_scores.total_score 可空（覆盖不足无分）；旧表 NOT NULL 需 `_recreate_daily_scores_nullable`。
-- 全市场列表 `_load_stock_list` 首次联网下载代码名称（本地缓存）；测试在 conftest mock 为空防联网。
+- 全市场列表只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
 - Windows 跑 pytest 需 `--basetemp`（默认临时目录权限失败）。
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 

@@ -39,9 +39,11 @@ def temp_db(monkeypatch, tmp_path):
     import app.api.stocks as smod
 
     monkeypatch.setattr(smod, "get_quote", _mock_quote)
-    # 全市场代码名称列表：测试打桩为空，避免 detail 名称回填触发联网
+    # 全市场代码名称列表：测试打桩为空，避免名称回填/搜索读开发机真实列表文件
     monkeypatch.setattr(smod, "_load_stock_list", lambda: [])
     monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
+    monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [])
+    monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [])
     yield
 
 

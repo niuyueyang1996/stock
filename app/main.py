@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     # 启动后后台任务（不阻塞启动）：
     #   1) 强制拉一遍港股汇率（只有「全量刷新」才会再拉）
     #   2) 今天有分红除权的持仓自动摊薄成本（幂等）
+    #   3) 预热 A股+港股全市场列表（搜索/名称回填只读缓存，绝不联网）
     try:
         import threading
 
@@ -44,6 +45,12 @@ def create_app() -> FastAPI:
 
                 apply_dividend_adjustments()
             except Exception:  # noqa: BLE001 除权检查失败不影响服务
+                pass
+            try:
+                from app.api.stocks import preload_market_lists
+
+                preload_market_lists()
+            except Exception:  # noqa: BLE001 市场列表预热失败不影响服务
                 pass
 
         threading.Thread(target=_startup_tasks, daemon=True).start()
