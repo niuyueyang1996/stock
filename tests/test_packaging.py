@@ -132,6 +132,42 @@ def test_packaged_smoke_test_starts_checks_and_stops(monkeypatch):
     ]
 
 
+def test_server_controller_passes_imported_app_to_uvicorn(monkeypatch, tmp_path):
+    import uvicorn
+
+    from app import windows_launcher as launcher
+    from app.main import app as fastapi_app
+
+    captured = {}
+
+    class FakeConfig:
+        def __init__(self, application, **kwargs):
+            captured["application"] = application
+            captured["kwargs"] = kwargs
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+            self.force_exit = False
+
+        def run(self):
+            return None
+
+    monkeypatch.setattr(uvicorn, "Config", FakeConfig)
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(launcher, "find_available_port", lambda **_kwargs: 8004)
+    monkeypatch.setattr(launcher, "wait_until_healthy", lambda *_args, **_kwargs: True)
+
+    controller = launcher.ServerController(state_file=tmp_path / "launcher.json")
+    assert controller.start() is True
+    controller.stop()
+
+    assert captured["application"] is fastapi_app
+    assert captured["kwargs"]["host"] == "127.0.0.1"
+    assert captured["kwargs"]["port"] == 8004
+
+
 def test_static_pages_use_pinned_local_echarts():
     root = Path(__file__).resolve().parent.parent
     vendor = root / "static" / "vendor" / "echarts.min.js"

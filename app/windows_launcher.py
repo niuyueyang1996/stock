@@ -269,6 +269,7 @@ class ServerController:
 
     def start(self) -> bool:
         import uvicorn
+        from app.main import app as fastapi_app
 
         with self.lock:
             if self.port and is_our_server(self.port):
@@ -281,7 +282,7 @@ class ServerController:
                     break
                 remaining = [candidate for candidate in remaining if candidate > port]
                 config = uvicorn.Config(
-                    "app.main:app",
+                    fastapi_app,
                     host=HOST,
                     port=port,
                     log_config=None,
