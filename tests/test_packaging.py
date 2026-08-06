@@ -112,3 +112,9 @@ def test_static_pages_use_pinned_local_echarts():
         html = (root / "static" / name).read_text(encoding="utf-8")
         assert 'src="/static/vendor/echarts.min.js"' in html
         assert "cdn.jsdelivr.net/npm/echarts" not in html
+
+
+def test_windows_powershell_build_script_is_ascii():
+    """Windows PowerShell 5.1 misreads BOM-less UTF-8 and can corrupt quotes."""
+    root = Path(__file__).resolve().parent.parent
+    assert (root / "packaging" / "windows" / "build.ps1").read_bytes().isascii()
