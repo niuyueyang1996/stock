@@ -1,0 +1,35 @@
+packaging/windows/README.md
+  s_0e9a490e4e5bf6::t_7c865daf6bcf71 22-27
+packaging/windows/build.ps1
+  s_0e9a490e4e5bf6::t_2f1dea8265961e 97-116,138,145-180,185-193
+  s_0e9a490e4e5bf6::t_7c865daf6bcf71 181-184
+tests/test_packaging.py
+  s_0e9a490e4e5bf6::t_2f1dea8265961e 105-134,186-196
+  s_0e9a490e4e5bf6::t_360f6258ced3e4 207
+  s_0e9a490e4e5bf6::t_7c865daf6bcf71 197-206
+app/windows_launcher.py
+  s_0e9a490e4e5bf6::t_2f1dea8265961e 389-408,521,531-532
+.github/workflows/windows-installer.yml
+  s_0e9a490e4e5bf6::t_7c865daf6bcf71 72-85
+  s_0e9a490e4e5bf6::t_360f6258ced3e4 6-7,10-19
+  s_0e9a490e4e5bf6::t_ce3e35d009f363 71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "7099a5a0f8447beee786f863a7293dd5852658ae",
+  "prompts": {},
+  "logical_commit_id": "7099a5a0f8447beee786f863a7293dd5852658ae",
+  "sessions": {
+    "s_0e9a490e4e5bf6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd4d1-d913-7501-ad60-957977067f54",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 179,
+      "total_deletions": 8
+    }
+  }
+}
