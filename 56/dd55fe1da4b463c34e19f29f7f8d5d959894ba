@@ -1,0 +1,24 @@
+app/analysis/portfolio.py
+  s_3bf583a0a22969::t_e9915e86d8d69b 226-228
+app/data/normalizers.py
+  s_3bf583a0a22969::t_c34527133fe329 343-345,355-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "56dd55fe1da4b463c34e19f29f7f8d5d959894ba",
+  "prompts": {},
+  "logical_commit_id": "56dd55fe1da4b463c34e19f29f7f8d5d959894ba",
+  "sessions": {
+    "s_3bf583a0a22969": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "95358ee7-2c01-4e67-8ec0-c727136ffd89",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 3380,
+      "total_deletions": 1022
+    }
+  }
+}
