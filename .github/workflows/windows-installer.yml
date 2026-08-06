@@ -3,8 +3,20 @@ name: Build Windows installer
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "main"
     tags:
       - "v*"
+    paths:
+      - ".gitattributes"
+      - ".github/workflows/windows-installer.yml"
+      - "app/**"
+      - "packaging/windows/**"
+      - "static/**"
+      - "tests/**"
+      - "requirements*.txt"
+      - "start.cmd"
+      - "run.sh"
 
 permissions:
   contents: write
@@ -56,6 +68,20 @@ jobs:
       - name: Test and build installer
         shell: pwsh
         run: ./packaging/windows/build.ps1
+
+      - name: Upload build diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: StockAnalyzer-Windows-build-diagnostics
+          path: |
+            build/windows/work/StockAnalyzer/warn-StockAnalyzer.txt
+            build/windows/work/StockAnalyzer/xref-StockAnalyzer.html
+            build/windows/bundle-smoke-home/logs/
+            build/windows/installed-smoke-home/logs/
+            build/windows/StockAnalyzer.iss
+            build/windows/ChineseSimplified.isl
+          if-no-files-found: ignore
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

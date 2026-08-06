@@ -19,7 +19,12 @@ powershell -ExecutionPolicy Bypass -File .\packaging\windows\build.ps1
 ```
 
 脚本会创建独立构建虚拟环境、安装锁定依赖、运行测试、生成 PyInstaller
-`onedir` 程序目录，再编译出：
+`onedir` 程序目录，再执行两层 Windows 验收：
+
+1. 启动 PyInstaller 产物并验证本地健康接口后退出。
+2. 静默安装最终安装包、启动已安装程序并验证健康接口，再静默卸载。
+
+全部通过后才会输出：
 
 ```text
 dist\windows\StockAnalyzer-Setup-<version>-x64.exe

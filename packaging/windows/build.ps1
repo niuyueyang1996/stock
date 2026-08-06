@@ -30,7 +30,6 @@ $IconFile = Join-Path $PSScriptRoot 'stock-analyzer.ico'
 $EChartsFile = Join-Path $Root 'static\vendor\echarts.min.js'
 $EChartsSha256 = 'bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1'
 $LanguageFileSha256 = 'e0b0b350e2245f3c5e65586dfe43d574f6e7f06f2261149aba284954b3fc9a8d'
-$ExpectedInnoVersion = '6.7.1'
 
 New-Item -ItemType Directory -Force -Path $BuildRoot, $OutputDir | Out-Null
 
@@ -95,6 +94,26 @@ try {
         throw "The application bundle contains personal data or cache files: $($Forbidden.FullName -join ', ')"
     }
 
+    $BundleExe = Join-Path $BundleDir 'StockAnalyzer.exe'
+    $BundleSmokeHome = Join-Path $BuildRoot 'bundle-smoke-home'
+    if (Test-Path $BundleSmokeHome) { Remove-Item -Recurse -Force $BundleSmokeHome }
+    $PreviousAppHome = [Environment]::GetEnvironmentVariable('STOCK_APP_HOME')
+    try {
+        $env:STOCK_APP_HOME = $BundleSmokeHome
+        $BundleSmoke = Start-Process -FilePath $BundleExe -ArgumentList '--smoke-test' -Wait -PassThru
+        if ($BundleSmoke.ExitCode -ne 0) {
+            throw "Packaged application smoke test failed with exit code $($BundleSmoke.ExitCode)."
+        }
+    }
+    finally {
+        if ($null -eq $PreviousAppHome) {
+            Remove-Item Env:STOCK_APP_HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STOCK_APP_HOME = $PreviousAppHome
+        }
+    }
+
     $Version = (& $VenvPython -c "from app.version import APP_VERSION; print(APP_VERSION)").Trim()
     if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid application version: $Version" }
 
@@ -116,16 +135,62 @@ try {
     if (-not $Iscc) {
         throw 'Inno Setup 6 was not found. Install it from https://jrsoftware.org/isdl.php'
     }
-    $InnoVersion = (Get-Item $Iscc).VersionInfo.ProductVersion
-    if (-not $InnoVersion.StartsWith($ExpectedInnoVersion)) {
-        throw "Inno Setup version $InnoVersion was found; version $ExpectedInnoVersion is required."
-    }
+    Write-Host "Inno Setup compiler: $Iscc"
 
     & $Iscc "/DMyAppVersion=$Version" "/DSourceDir=$BundleDir" "/DOutputDir=$OutputDir" "/DIconFile=$IconFile" "/DLanguageFile=$CompiledLanguageFile" $CompiledIssFile
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
 
     $Installer = Join-Path $OutputDir "StockAnalyzer-Setup-$Version-x64.exe"
     if (-not (Test-Path $Installer)) { throw "Installer output was not found: $Installer" }
+
+    $InstallSmokeDir = Join-Path $BuildRoot 'installed-smoke'
+    $InstallSmokeHome = Join-Path $BuildRoot 'installed-smoke-home'
+    if (Test-Path $InstallSmokeDir) { Remove-Item -Recurse -Force $InstallSmokeDir }
+    if (Test-Path $InstallSmokeHome) { Remove-Item -Recurse -Force $InstallSmokeHome }
+    $PreviousAppHome = [Environment]::GetEnvironmentVariable('STOCK_APP_HOME')
+    try {
+        $InstallArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=`"$InstallSmokeDir`""
+        $InstallProcess = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru
+        if ($InstallProcess.ExitCode -ne 0) {
+            throw "Silent installer smoke test failed with exit code $($InstallProcess.ExitCode)."
+        }
+
+        $InstalledExe = Join-Path $InstallSmokeDir 'StockAnalyzer.exe'
+        if (-not (Test-Path $InstalledExe)) {
+            throw "Installed executable was not found: $InstalledExe"
+        }
+        $env:STOCK_APP_HOME = $InstallSmokeHome
+        $InstalledSmoke = Start-Process -FilePath $InstalledExe -ArgumentList '--smoke-test' -Wait -PassThru
+        if ($InstalledSmoke.ExitCode -ne 0) {
+            throw "Installed application smoke test failed with exit code $($InstalledSmoke.ExitCode)."
+        }
+
+        $Uninstaller = Get-ChildItem $InstallSmokeDir -Filter 'unins*.exe' -File | Select-Object -First 1
+        if (-not $Uninstaller) {
+            throw 'Silent installer smoke test did not create an uninstaller.'
+        }
+        $UninstallProcess = Start-Process -FilePath $Uninstaller.FullName -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+        if ($UninstallProcess.ExitCode -ne 0) {
+            throw "Silent uninstaller smoke test failed with exit code $($UninstallProcess.ExitCode)."
+        }
+        if (Test-Path $InstalledExe) {
+            throw 'Silent uninstaller smoke test left the installed executable behind.'
+        }
+    }
+    finally {
+        $FallbackUninstaller = Get-ChildItem $InstallSmokeDir -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($FallbackUninstaller) {
+            Start-Process -FilePath $FallbackUninstaller.FullName -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait | Out-Null
+        }
+        if ($null -eq $PreviousAppHome) {
+            Remove-Item Env:STOCK_APP_HOME -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:STOCK_APP_HOME = $PreviousAppHome
+        }
+        if (Test-Path $InstallSmokeDir) { Remove-Item -Recurse -Force $InstallSmokeDir }
+    }
+
     $Hash = (Get-FileHash -Algorithm SHA256 $Installer).Hash.ToLowerInvariant()
     $HashFile = "$Installer.sha256"
     Set-Content -Path $HashFile -Encoding Ascii -Value "$Hash  $([IO.Path]::GetFileName($Installer))"

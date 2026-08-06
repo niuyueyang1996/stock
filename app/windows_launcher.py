@@ -386,6 +386,26 @@ def open_existing_instance() -> bool:
     return True
 
 
+def run_smoke_test(controller_factory=ServerController) -> int:
+    """Start the packaged backend, verify its identity, then stop cleanly."""
+    setup_logging()
+    controller = controller_factory(state_file=RUNTIME_DIR / "smoke-test.json")
+    try:
+        if not controller.start():
+            logger.error("Packaged application smoke test could not start the server")
+            return 1
+        if controller.port is None or not is_our_server(controller.port):
+            logger.error("Packaged application smoke test health check failed")
+            return 1
+        logger.info("Packaged application smoke test passed")
+        return 0
+    except Exception:  # noqa: BLE001 smoke test must return a useful process exit code
+        logger.exception("Packaged application smoke test crashed")
+        return 1
+    finally:
+        controller.stop()
+
+
 def run_primary(mutex_handle: int) -> int:
     import ctypes
 
@@ -498,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--open", action="store_true")
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--shutdown", action="store_true")
+    parser.add_argument("--smoke-test", action="store_true")
     args = parser.parse_args(argv)
 
     if os.name != "nt":
@@ -507,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
         return _control_existing("shutdown")
     if args.restart:
         return _control_existing("restart")
+    if args.smoke_test:
+        return run_smoke_test()
 
     mutex_handle, is_primary = create_singleton_mutex()
     if not is_primary:

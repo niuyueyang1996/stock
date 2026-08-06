@@ -102,6 +102,36 @@ def test_duplicate_launch_opens_existing_server(monkeypatch):
     assert opened == [("http://127.0.0.1:8002/", 2)]
 
 
+def test_packaged_smoke_test_starts_checks_and_stops(monkeypatch):
+    from app import windows_launcher as launcher
+
+    events = []
+
+    class FakeController:
+        port = 8003
+
+        def __init__(self, state_file):
+            events.append(("init", state_file.name))
+
+        def start(self):
+            events.append(("start", self.port))
+            return True
+
+        def stop(self):
+            events.append(("stop", self.port))
+
+    monkeypatch.setattr(launcher, "setup_logging", lambda: events.append(("logging", None)))
+    monkeypatch.setattr(launcher, "is_our_server", lambda port: port == 8003)
+
+    assert launcher.run_smoke_test(FakeController) == 0
+    assert events == [
+        ("logging", None),
+        ("init", "smoke-test.json"),
+        ("start", 8003),
+        ("stop", 8003),
+    ]
+
+
 def test_static_pages_use_pinned_local_echarts():
     root = Path(__file__).resolve().parent.parent
     vendor = root / "static" / "vendor" / "echarts.min.js"
@@ -153,3 +183,25 @@ def test_workflow_pins_inno_setup_version():
     )
     assert "choco install innosetup --version=6.7.1" in workflow
     assert "--allow-downgrade" in workflow
+
+
+def test_windows_build_runs_end_to_end_smoke_tests():
+    root = Path(__file__).resolve().parent.parent
+    script = (root / "packaging" / "windows" / "build.ps1").read_text(
+        encoding="ascii"
+    )
+    assert "VersionInfo.ProductVersion" not in script
+    assert "--smoke-test" in script
+    assert "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" in script
+    assert "Silent uninstaller smoke test" in script
+
+
+def test_workflow_uploads_failure_diagnostics():
+    root = Path(__file__).resolve().parent.parent
+    workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "if: failure()" in workflow
+    assert "warn-StockAnalyzer.txt" in workflow
+    assert "bundle-smoke-home/logs/" in workflow
+    assert 'branches:\n      - "main"' in workflow
