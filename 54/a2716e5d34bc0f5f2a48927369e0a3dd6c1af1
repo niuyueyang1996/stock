@@ -1,0 +1,42 @@
+.gitattributes
+  s_0e9a490e4e5bf6::t_6fd5f46bbb0711 6
+.github/workflows/windows-installer.yml
+  s_0e9a490e4e5bf6::t_e1c2fb6f86b203 24-26,28-32
+  s_0e9a490e4e5bf6::t_22bac86aa1561d 45
+  s_0e9a490e4e5bf6::t_7ee0b1837f3e6f 33
+packaging/windows/languages/ChineseSimplified.isl
+  s_0e9a490e4e5bf6::t_9bd2edde5d84ee 1-417
+packaging/windows/languages/README.md
+  s_0e9a490e4e5bf6::t_6fd5f46bbb0711 3-4,6,8-9
+  s_0e9a490e4e5bf6::t_d3123e0b6c5aea 12-15
+  s_0e9a490e4e5bf6::t_511a091adb39b9 1-2,5,7,10-11
+packaging/windows/build.ps1
+  s_0e9a490e4e5bf6::t_6fd5f46bbb0711 26-27,32-33,77-80,106-107,118-119,121,124
+  s_0e9a490e4e5bf6::t_d3123e0b6c5aea 120
+tests/test_packaging.py
+  s_0e9a490e4e5bf6::t_6fd5f46bbb0711 127-154
+  s_0e9a490e4e5bf6::t_22bac86aa1561d 155
+packaging/windows/README.md
+  s_0e9a490e4e5bf6::t_e1c2fb6f86b203 12
+packaging/windows/StockAnalyzer.iss
+  s_0e9a490e4e5bf6::t_6fd5f46bbb0711 13-15,43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "54a2716e5d34bc0f5f2a48927369e0a3dd6c1af1",
+  "prompts": {},
+  "logical_commit_id": "54a2716e5d34bc0f5f2a48927369e0a3dd6c1af1",
+  "sessions": {
+    "s_0e9a490e4e5bf6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd4d1-d913-7501-ad60-957977067f54",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 497,
+      "total_deletions": 14
+    }
+  }
+}
