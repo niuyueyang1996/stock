@@ -223,14 +223,11 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
     tag = tag or auto_tag(code, name)
     is_etf = is_etf or is_etf_code(code) or tag in ("ETF",)
 
-    # 前瞻净利/净资产：港股原币(港元) → 人民币（组合前瞻 PE/PB 穿透须统一口径）
+    # 前瞻净利/净资产：compute_live 的财务口径已由数据转换层统一人民币
+    # （normalize_financials_hk 把港元报表 ×fx 折成人民币），港股持仓**不得再乘汇率**——
+    # 乘了就是对人民币报表股二次折算（06198 曾被 0.86 折掉 13.9%）。与 _passthrough 口径一致。
     fwd_net_profit = live.get("fwd_net_profit")
     fwd_net_assets = live.get("fwd_net_assets")
-    if currency != "CNY" and rate:
-        if fwd_net_profit is not None:
-            fwd_net_profit = round(fwd_net_profit * rate, 0)
-        if fwd_net_assets is not None:
-            fwd_net_assets = round(fwd_net_assets * rate, 0)
 
     return {
         "code": code,

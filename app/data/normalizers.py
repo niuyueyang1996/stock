@@ -340,18 +340,20 @@ def normalize_ashare_financials(df, total_shares: float | None,
     if bps is None:
         bps = cell("每股净资产")
     net_assets = round(bps * total_shares, 2) if (bps is not None and total_shares) else cell("股东权益合计(净资产)")
-    # 上年末归母净资产：优先年报「归母净资产」指标，兜底「股东权益合计(净资产)」或 上年每股净资产×股本
+    # 上年末归母净资产：新浪摘要无「归母净资产」指标，须用「上年年报每股净资产 × 总股本」推算
+    # （每股净资产为归母口径）。「股东权益合计(净资产)」含少数股东权益，仅作最后兜底——
+    # 少数股东占比大的公司（平安/招商港口/招行）取它会虚高净资产、压低前瞻 PB。
     last_year_net_assets = None
     if last_annual:
         last_year_net_assets = cell("归母净资产", last_annual)
-        if last_year_net_assets is None:
-            last_year_net_assets = cell("股东权益合计(净资产)", last_annual)
         if last_year_net_assets is None:
             ly_bps = cell("每股净资产", last_annual)
             if ly_bps is None:
                 ly_bps = cell("每股净资产_最新股数", last_annual)
             if ly_bps is not None and total_shares:
                 last_year_net_assets = round(ly_bps * total_shares, 2)
+        if last_year_net_assets is None:
+            last_year_net_assets = cell("股东权益合计(净资产)", last_annual)
 
     return Financials(
         report_date=str(latest),
