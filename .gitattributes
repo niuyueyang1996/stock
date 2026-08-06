@@ -1,0 +1,7 @@
+# Release assets must keep byte-for-byte contents on every checkout platform.
+static/vendor/echarts.min.js -text
+
+# Keep automation sources predictable; build.ps1 is intentionally ASCII-only.
+packaging/windows/build.ps1 text eol=lf
+.github/workflows/*.yml text eol=lf
+

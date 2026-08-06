@@ -118,3 +118,9 @@ def test_windows_powershell_build_script_is_ascii():
     """Windows PowerShell 5.1 misreads BOM-less UTF-8 and can corrupt quotes."""
     root = Path(__file__).resolve().parent.parent
     assert (root / "packaging" / "windows" / "build.ps1").read_bytes().isascii()
+
+
+def test_echarts_is_marked_binary_for_cross_platform_checkout():
+    root = Path(__file__).resolve().parent.parent
+    attributes = (root / ".gitattributes").read_text(encoding="ascii")
+    assert "static/vendor/echarts.min.js -text" in attributes.splitlines()
