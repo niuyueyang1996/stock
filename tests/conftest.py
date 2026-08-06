@@ -44,6 +44,11 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
     monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [])
     monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [])
+    # AI 自动打分后台线程在测试环境会逃逸：monkeypatch 还原后可能打到真实库/真实网络。
+    # 测试里 maybe_auto_score_daily 退化为「只失效、不后台打分」，打分一律由测试显式调用。
+    import app.services.ai_scoring as aisc
+
+    monkeypatch.setattr(aisc, "maybe_auto_score_daily", lambda d: aisc.invalidate_daily(d))
     yield
 
 

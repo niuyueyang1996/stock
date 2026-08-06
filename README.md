@@ -1,6 +1,6 @@
 # 个人自建 ETF 持仓分析
 
-把自己的一篮子持仓（A 股 + 港股 + 场内 ETF）当成一个「自建 ETF」来整体分析与拆分分析：录入持仓、记录买卖、自动移动加权成本、每日操作合理性评分（冻结快照）、穿透式组合估值与分位、港股人民币折算、分红除权自动处理与累计分红。
+把自己的一篮子持仓（A 股 + 港股 + 场内 ETF）当成一个「自建 ETF」来整体分析与拆分分析：录入持仓、记录买卖、自动移动加权成本、每日操作 AI 评分（组合 + 交易均由 AI 打分）、穿透式组合估值与分位、港股人民币折算、分红除权自动处理与累计分红。
 
 > 数据来自 akshare（新浪行情/财务、雪球总股本、百度估值分位、东财分红、中行汇率）。项目详情见 [CLAUDE.md](CLAUDE.md)（含架构与核心口径）。
 
@@ -26,7 +26,7 @@
 **持仓与交易**
 - 批量初始化持仓，移动加权成本（费用计入成本）；空仓时可导入 `汇总持仓.xlsx`
 - 交易增删改查；重放法保证持仓一致；卖出超量自动拒绝
-- 每次交易自动生成**冻结评分快照** + 当日综合评分
+- 每次交易自动触发**当日 AI 评分**（也可手动「🤖 AI 打分」）
 - **持仓调整**（💰）：调整成本（补记/摊薄）与/或股数（拆股/送股）
 - **分红除权自动处理**：启动/全量刷新时扫描，今天除权自动摊薄成本（幂等），并累计个股与组合分红
 
@@ -46,16 +46,17 @@
 **组合分析（穿透式，人民币口径）**
 - 综合 PE/PB/ROE（归属利润/净资产汇总，`ROE% = PB/PE×100`）、净利/营收增长、股息率（`Σ分红÷总市值`）、波动率（人民币复权，纳入股票/ETF/港股）
 - 首页 PE/PB 分位 = 打包组合历史序列分位；分段排序；覆盖率门槛
-- 组合动态打分（穿透式指标加权，覆盖不足的指标不参与）
+- **AI 组合打分**（得分 + 评级 + 分析/建议/风险，支持标签筛选打分）
 - 权重分布、累计分红、港股 `missing_fx` 剔除
 
-**评分模型（冻结快照）**
-- 买入/卖出六因子，评分 = `50 + (已知因子得分−50)×覆盖率`；覆盖率 <60% 不评级
-- 快照不可变：刷新行情/财务/改权重不改变历史快照；日评分按人民币金额加权
+**AI 评分（公式评分已彻底移除）**
+- 组合打分 + 每笔交易/每日打分均由 AI 产出；**评级由 AI 直接给出（A/B/C/D）**，后端仅格式校验
+- **标签偏好**：每标签输入简短偏好 → 保存自动 AI 补全成完整「评分指引」→ 确认后才用于打分
+- 每日打分按标签偏好逐笔评分再汇总（偏好去重：50 笔同标签也只带 1 条指引）
 
 **前端**：持仓 / 组合分析 / 个股 / 交易评分 四页，原生 JS + ECharts，无构建步骤
 - **港股券商口径**：现价/成本显示港币（交易单价），市值/盈亏/成交金额显示人民币（看资产/收益）
-- **交易评分**：左侧可滚动日期目录 + 右侧选中日详情（自适应 70vh、各自内部滚动），综合因子图 + 每笔明细
+- **交易评分**：左侧可滚动日期目录 + 右侧选中日详情（自适应 70vh、各自内部滚动），AI 综合分 + 每笔 AI 评论 + 分析
 - **全局加载**：耗时操作（页面加载/刷新/导入/下载）显示全屏 spinner 屏障，快速操作不打扰
 
 ---
@@ -118,9 +119,9 @@ pip install -r requirements.txt
 > 任何 GET 都只读缓存、零网络。想更新就点刷新。
 
 - **持仓页 `/`**：指标卡（市值/成本/盈亏/PE/PB 分位/股息率/ROE/增长/波动率/累计分红）、明细表、权重环形图
-- **组合分析页 `/static/portfolio.html`**：PE/PB 分位仪表盘、打包序列折线、穿透式盈利与成长、动态打分横柱状图（标签与条形严格对应）、权重/逐股贡献
+- **组合分析页 `/static/portfolio.html`**：PE/PB 分位仪表盘、打包序列折线、穿透式盈利与成长、AI 组合打分（得分/评级/分析，含标签偏好编辑与标签筛选打分）、权重/逐股贡献
 - **个股页 `/static/stock.html`**：搜索切换、缓存缺失下载弹窗、行情卡、分位条形、历史折线、前瞻指标、预期增速/支付率、资金流
-- **交易评分页 `/static/trade.html`**：录入/改/删交易、调整成本/股数（含分红除权按钮）、当日综合评分与历史、交易流水（显示名称）
+- **交易评分页 `/static/trade.html`**：录入/改/删交易、调整成本/股数（含分红除权按钮）、当日 AI 评分与历史、每笔 AI 评论、交易流水（显示名称）
 
 ---
 
@@ -128,15 +129,16 @@ pip install -r requirements.txt
 
 ### 数据层：缓存优先 + 手动刷新
 - GET 只读缓存，绝不联网/写库；缺失返回 HTTP 409 CACHE_MISS。
-- 缓存三类：原始缓存（长期保留）、不可变快照（评分）、派生缓存（组合序列，带 `portfolio_hash`）。
+- 缓存三类：原始缓存（长期保留）、AI 评分报告（`ai_*_reports`，手动触发落库）、派生缓存（组合序列，带 `portfolio_hash`）。
 - 清仓只改状态不删原始缓存；再次开仓复用。
 - 刷新增量：日K 只拉上次缓存+1 至今；收盘定格二次刷新零请求。
 
-### 评分模型（冻结快照）
-- 每笔交易生成不可变快照（因子原值/数据日期/权重/模型版本/覆盖率/状态 frozen|estimated|insufficient）。
-- `评分 = 50 + (已知因子得分−50)×覆盖率`；覆盖率 60%~80% 低置信度，<60% 不评级。
-- 历史回填只用交易日及以前数据；改权重生成新模型版本只作用于之后交易；`/scoring/rebuild` 只重建日聚合。
-- 当日综合分 = 快照按人民币金额加权；可评分金额 <80% 当日不评级。
+### AI 评分（公式评分已彻底移除）
+- 组合打分 + 每笔交易/每日打分全部由 AI 产出（得分 + 评级 + 详细分析/建议/风险）。
+- **评级由 AI 直接给出（A/B/C/D）**，后端仅格式校验；得分 0-100。
+- 每标签可设**偏好**：输入简短偏好 → 保存自动 AI 补全成完整「评分指引」→ 确认后才用于打分。
+- 组合打分支持标签筛选（`?tags=红利,科技`）；每日打分按标签偏好逐笔评分再汇总，偏好去重。
+- 手动「AI 打分」按钮触发，结果落库；未配置 AI 时显示「未配置 AI」。
 
 ### 港股折算
 - 五位代码 → HKD；港股不再复用 ETF 分类。
@@ -179,7 +181,7 @@ pip install -r requirements.txt
 | POST | `/holdings` | 批量初始化 |
 | POST | `/holdings/import-excel` | 一键导入持仓 Excel |
 | POST | `/holdings/{code}/cost-adjust` | 调整成本/股数（is_dividend 标记除权） |
-| POST | `/trades` | 录入交易（+冻结快照+当日评分） |
+| POST | `/trades` | 录入交易（触发当日 AI 评分） |
 | GET | `/trades` | 交易流水（含名称） |
 | PUT | `/trades/{id}` | 修改交易 |
 | DELETE | `/trades/{id}` | 撤销交易 |
@@ -194,12 +196,12 @@ pip install -r requirements.txt
 | PUT | `/stocks/{code}/tag` | 个股标签 |
 | GET | `/portfolio` | 组合整体+逐股（穿透式指标/coverage/missing_fx/累计分红） |
 | GET | `/portfolio/weights` | 权重分布 |
-| GET | `/scoring/rules` | 评分权重 + 模型版本 |
-| PUT | `/scoring/rules` | 更新权重（生成新版本） |
-| GET | `/scoring/daily?date=` | 某日综合评分 |
-| GET | `/scoring/history` | 评分历史 |
-| POST | `/scoring/rebuild` | 只重建日聚合 |
-| POST | `/data/reset` | 一键清空（含汇率/快照/预期表/除权记录） |
+| GET/PUT/DELETE | `/ai-scoring/prefs[/{tag}]` | 标签偏好（保存自动 AI 补全） |
+| POST | `/ai-scoring/prefs/{tag}/expand` / `confirm` | AI 补全指引 / 确认生效 |
+| GET/POST | `/ai-scoring/portfolio?tags=` | 组合 AI 报告（读）/ 触发打分 |
+| GET | `/ai-scoring/daily-reports` | 交易日目录（含 AI 摘要） |
+| GET/POST | `/ai-scoring/daily?date=` | 某日详情 / 触发该日 AI 打分 |
+| POST | `/data/reset` | 一键清空（含 AI 报告/偏好/缓存/预期表/除权记录） |
 
 ---
 
@@ -220,11 +222,12 @@ pip install -r requirements.txt
 | `valuation_history_cache` | 百度 PE/PB 历史序列（updated_at 作版本） |
 | `portfolio_valuation_cache` | 组合打包序列（coverage、portfolio_hash） |
 | `fx_rate_cache` | 汇率 |
-| `trade_score_snapshots` | 评分冻结快照 |
-| `daily_scores` | 每日综合评分 |
+| `tag_prefs` | 标签偏好（raw + AI 补全指引 + draft/confirmed） |
+| `ai_portfolio_reports` | 组合 AI 报告（profile_hash 键，含 stale） |
+| `ai_daily_reports` | 每日 AI 报告（逐笔 + 汇总） |
 | `dividend_adjustments` | 已自动除权记录（幂等） |
 | `stock_expected_*` | 用户预期增速/支付率 |
-| `config` | 权重/模型版本/schema 版本 |
+| `config` | schema 版本等 |
 
 ---
 
@@ -240,13 +243,13 @@ stock/
 │   ├── models/db.py          # SQLite + 版本化迁移
 │   ├── data/                 # base/cache/fx/source_*
 │   ├── market/calendar.py    # 交易日历 + 收盘判断
-│   ├── services/             # holdings/fx/dividend/quote/refresh
-│   ├── analysis/             # valuation/scoring/portfolio/volatility
-│   ├── api/                  # system/holdings/trades/stocks/portfolio/scoring
+│   ├── services/             # holdings/fx/dividend/quote/refresh/ai_scoring
+│   ├── analysis/             # valuation/portfolio/volatility
+│   ├── api/                  # system/holdings/trades/stocks/portfolio/ai/ai_scoring
 │   └── scripts/              # 数据源探测
 ├── static/                   # 前端（index/portfolio/stock/trade + js/）
 ├── data/etf.db               # SQLite 数据库
-└── tests/                    # pytest 145 用例（离线）
+└── tests/                    # pytest 190 用例（离线）
 ```
 
 ---
@@ -257,7 +260,7 @@ stock/
 python -m pytest tests/ -q -p no:cacheprovider --basetemp=.tmp_test
 ```
 
-覆盖：移动加权成本、评分冻结快照（不可变/estimated/覆盖率公式/日聚合门槛）、港股折算（币种/汇率/双币种成本/missing_fx）、组合穿透式（ROE=PB/PE、亏损负贡献、分段分位、覆盖门槛、今日盈亏、股息率稀释）、前瞻 PB（降级链/置信度/负净资产）、成本调整与分红除权（幂等/累计分红）、缓存生命周期（清仓保留/GET 零写入/409 CACHE_MISS）、数据库迁移。
+覆盖：AI 评分（标签偏好 draft/confirmed、组合画像哈希与 stale、每日偏好去重与 trade_id 对齐、无模型降级）、移动加权成本、港股折算（币种/汇率/双币种成本/missing_fx）、组合穿透式（ROE=PB/PE、亏损负贡献、分段分位、覆盖门槛、今日盈亏、股息率稀释）、前瞻 PB（降级链/置信度/负净资产）、成本调整与分红除权（幂等/累计分红）、缓存生命周期（清仓保留/GET 零写入/409 CACHE_MISS）、数据库迁移（v5 移除公式评分表）。
 
 ---
 

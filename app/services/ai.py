@@ -35,7 +35,7 @@ _SYSTEM_PROMPT = (
     "   c) 无法确认时效时明确说明。\n"
     "3. 系统提供数据缺失时，在该维度 analysis 中注明「（系统数据缺失，以下为补充）」。\n"
     "4. data_source 字段：provided=基于系统数据；supplemented=AI 补充/推断。\n"
-    "5. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、detail、"
+    "5. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、html、"
     "预期增速依据）一律使用简体中文，禁止混入英文单词；若在正文中提及维度，用中文名"
     "（周期性、护城河、基本面、增长、股息、估值、同业竞争），不要写 growth/fundamentals 等英文。\n"
     "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 7 个键固定为 "
@@ -53,6 +53,12 @@ _SYSTEM_PROMPT = (
     "需结合派息率、盈利趋势、现金流判断；若分红不可持续，股息维度评分应下调。\n"
     "2. cross_analysis 输出每个陷阱是否识别、对得分的调整量（impact_score 负数=下调）、以及识别依据（结合哪些维度数据）。\n"
     "3. 最终 rating / risk_score / summary 必须综合陷阱判断，不可仅按孤立维度加权。\n"
+    "额外要求：生成一份完整、独立、可读性强的 HTML 诊股报告（字段 html），供用户新开页面查看。"
+    "已提供的行情/财务/估值等原始数据用户在本应用已可查看，HTML 中**不要原样罗列数据表格**；"
+    "把篇幅全部用于**深入分析**：商业模式与护城河、竞争格局、盈利质量、增长驱动、估值判断、"
+    "主要风险与陷阱、买卖逻辑与操作建议，多给有洞察力的判断与推演而非数据复述。"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
     "严格输出 JSON，不要输出任何额外文字。"
 )
 
@@ -81,7 +87,7 @@ _OUTPUT_SCHEMA = {
     },
     "summary": "一句话总体结论（需综合陷阱判断）",
     "reasons": ["买入/回避的主要理由数组"],
-    "detail": "详细报告正文（markdown，覆盖各维度与陷阱分析）",
+    "html": "完整独立 HTML 诊股报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文，聚焦深入分析，不罗列原始数据）",
 }
 
 
@@ -166,8 +172,26 @@ def list_available_models(base_url: str, api_key: str) -> list[str]:
 AI_REQUEST_TIMEOUT = 180
 
 
+def get_reasoning_effort() -> str:
+    """当前 AI 思考级别（config 表 ai_reasoning_effort，缺省 high=最高）。"""
+    try:
+        from app.config import AI_REASONING_EFFORT
+
+        with get_conn() as c:
+            row = c.execute("SELECT value FROM config WHERE key='ai_reasoning_effort'").fetchone()
+        if row and str(row["value"] or "").strip():
+            return str(row["value"]).strip()
+        return AI_REASONING_EFFORT
+    except Exception:  # noqa: BLE001 读配置失败不影响调用
+        return ""
+
+
 def chat_json(model_cfg: dict, system: str, user: str) -> dict:
-    """调 OpenAI 兼容接口并解析 JSON 输出。失败抛 ValueError。输入输出均打印日志。"""
+    """调 OpenAI 兼容接口并解析 JSON 输出。失败抛 ValueError。输入输出均打印日志。
+
+    - 附带 reasoning_effort（思考级别，默认 high 最高）；provider 不支持会被忽略。
+    - 降级路径（json_object / reasoning_effort 失败）会移除两者重试。
+    """
     import requests
 
     base_url = model_cfg["base_url"].rstrip("/")
@@ -181,9 +205,12 @@ def chat_json(model_cfg: dict, system: str, user: str) -> dict:
         "temperature": 0.4,
         "response_format": {"type": "json_object"},
     }
+    effort = get_reasoning_effort()
+    if effort:
+        payload["reasoning_effort"] = effort
     # 打印输入日志（截断超长）
-    logger.info("[AI] 请求 %s model=%s | system=%s | user=%s",
-                url, model_cfg["model"], system[:300], user[:2000])
+    logger.info("[AI] 请求 %s model=%s | reasoning=%s | system=%s | user=%s",
+                url, model_cfg["model"], effort or "-", system[:300], user[:2000])
     headers = {**HTTP_HEADERS, "Authorization": f"Bearer {model_cfg['api_key']}"}
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
@@ -193,6 +220,7 @@ def chat_json(model_cfg: dict, system: str, user: str) -> dict:
         logger.warning("[AI] json_object 调用失败，降级普通文本：%s", e)
         try:
             payload.pop("response_format", None)
+            payload.pop("reasoning_effort", None)   # provider 不支持时一并移除
             resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
@@ -378,7 +406,7 @@ def _normalize_report(data: dict) -> dict:
         "expected_growth": exp_growth,
         "summary": str(data.get("summary", "")),
         "reasons": reasons,
-        "detail": str(data.get("detail", "")),
+        "html": str(data.get("html") or ""),   # AI 生成的完整 HTML 诊股报告（可空 → 前端不显示入口）
     }
 
 

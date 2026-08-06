@@ -1,4 +1,4 @@
-"""全局配置：路径、收盘确认、评分权重、数据源开关。"""
+"""全局配置：路径、收盘确认、数据源开关。"""
 import os
 import sys
 from pathlib import Path
@@ -57,26 +57,7 @@ SOURCE = "sina"
 # 估值分位样本不足阈值（天）
 QUANTILE_MIN_SAMPLES = 60
 
-# 评分模型：买入/卖出因子权重（和=1），可经 /api/scoring/rules 修改
-BUY_WEIGHTS = {
-    "pe_pct": 0.2941,    # PE分位低 → 得分高
-    "pb_pct": 0.2353,    # PB分位低
-    "dv_ratio": 0.1765,  # 股息率
-    "pct_chg": 0.1176,   # 当日涨跌（回踩得分高）
-    "roe": 0.1765,       # ROE质量
-}
-SELL_WEIGHTS = {
-    "pe_pct": 0.2941,    # PE分位高 → 得分高
-    "pb_pct": 0.2353,    # PB分位高
-    "dv_ratio": 0.1176,  # 股息率低
-    "pct_chg": 0.1176,   # 当日涨幅大
-    "concentration": 0.2354,  # 组合集中度（仓位>20%该减仓）
-}
-
-# 评级阈值
-RATING_LEVELS = [
-    (85, "A", "优秀"),
-    (70, "B", "良好"),
-    (55, "C", "一般"),
-    (0, "D", "较差"),
-]
+# AI 思考级别（OpenAI 兼容 reasoning_effort：low/medium/high/max）
+# 默认 high；用户可在「🤖 AI」设置弹窗里自行选择（写 config 表 ai_reasoning_effort）
+# provider 不支持该参数时会被忽略
+AI_REASONING_EFFORT = "high"

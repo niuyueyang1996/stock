@@ -21,12 +21,14 @@ class ResetBody(BaseModel):
 
 
 # 一键清空涉及的业务/缓存表（trades 先删，再删引用它的 stocks/holdings）
-# 保留 config（评分权重配置）与 trade_calendar（市场日历，静态公开数据）
+# 保留 config（模型配置等）与 trade_calendar（市场日历，静态公开数据）
 _RESET_TABLES = [
     "trades",
     "holdings",
     "stocks",
-    "daily_scores",
+    "tag_prefs",
+    "ai_portfolio_reports",
+    "ai_daily_reports",
     "daily_price_cache",
     "daily_valuation_cache",
     "valuation_quantile_cache",
@@ -36,7 +38,6 @@ _RESET_TABLES = [
     "valuation_history_cache",
     "portfolio_valuation_cache",
     "fx_rate_cache",
-    "trade_score_snapshots",
     "stock_expected_growth",
     "stock_expected_revenue_growth",
     "stock_expected_payout",

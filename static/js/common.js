@@ -138,7 +138,7 @@ function setupPrewarmBar(nav) {
 }
 
 // 刷新内容项（与后端 DYNAMIC_ITEMS / FULL_ITEMS / STOCK_*_ITEMS 对应）
-// 综合评分重建不在刷新项里：由评分页独立触发（/scoring/rebuild）
+// AI 打分不在刷新项里：由组合页/交易页手动触发（POST /api/ai-scoring/*）
 const REFRESH_OPTIONS = {
   dynamic: [
     ['price', '实时价格（分钟级）'],
@@ -282,6 +282,15 @@ async function openAiSettings() {
     <div class="modal" style="width:620px;max-width:94vw">
       <h3>🤖 AI 诊股模型</h3>
       <div id="aiActive" class="muted" style="margin-bottom:10px;font-size:12px"></div>
+      <div class="row" style="align-items:center;gap:8px;margin-bottom:12px">
+        <span class="muted" style="font-size:12px">思考级别（打分/诊股用，越高越深入但更慢更贵）</span>
+        <select id="aiReasoning" style="width:140px" title="OpenAI 兼容 reasoning_effort（low/high/max），provider 不支持时自动忽略">
+          <option value="low">低</option>
+          <option value="medium">中</option>
+          <option value="high">高</option>
+          <option value="max">最高（max）</option>
+        </select>
+      </div>
       <div id="aiModelList" style="max-height:220px;overflow-y:auto;margin-bottom:12px"></div>
       <div style="border-top:1px solid var(--border);padding-top:12px">
         <div style="font-size:13px;font-weight:700;margin-bottom:8px" id="aiFormTitle">新增模型</div>
@@ -320,6 +329,20 @@ async function openAiSettings() {
   const close = () => mask.remove();
   mask.querySelector('#aiCancel').onclick = close;
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+
+  // 思考级别：读当前值并保存（默认 high，用户可在弹窗自行选到 max）
+  const reasoningSel = mask.querySelector('#aiReasoning');
+  api('/ai/reasoning', { silent: true })
+    .then((d) => { reasoningSel.value = d.effort || 'high'; })
+    .catch(() => { reasoningSel.value = 'high'; });
+  reasoningSel.onchange = async () => {
+    try {
+      await api('/ai/reasoning', { method: 'PUT', body: { effort: reasoningSel.value } });
+      toast('思考级别已设为 ' + (reasoningSel.selectedOptions[0] ? reasoningSel.selectedOptions[0].textContent : reasoningSel.value));
+    } catch (e) {
+      toast('保存失败：' + e.message, 4000);
+    }
+  };
 
   mask.querySelector('#aiNew').onclick = () => {
     _aiEditingId = null;
@@ -413,4 +436,163 @@ async function loadAiModels(mask) {
   } catch (e) {
     wrap.innerHTML = '<div class="muted" style="font-size:12px">加载失败：' + e.message + '</div>';
   }
+}
+
+
+// ============ AI 评分共享渲染助手 + 标签偏好弹窗 ============
+
+// HTML 转义（AI 文本/标签名进入 innerHTML 前必须转义，防破坏布局）
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function aiNotConfiguredHtml() {
+  return '<div class="empty" style="padding:16px;margin:0">未配置 AI（点右上角「🤖 AI」配置模型）</div>';
+}
+
+// AI 报告头部：大分 + 评级徽章 + 一句话结论
+function aiScoreHeader(r) {
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:42px;font-weight:700;line-height:1">${r.score == null ? '—' : fmtNum(r.score)}</span>
+      <span class="badge ${r.rating || 'N'}">${r.rating || 'N/A'} ${esc(r.rating_name || '')}</span>
+      ${r.summary ? `<div class="muted" style="font-size:13px;flex:1;min-width:200px">${esc(r.summary)}</div>` : ''}
+    </div>`;
+}
+
+// AI 报告正文：HTML 报告入口 + 建议/风险/理由（详细分析在 HTML 报告里，不再内联展示）
+function renderAiReportBlock(r) {
+  const list = (title, arr) => (arr && arr.length) ? `
+    <div style="margin:6px 0">
+      <div style="font-size:12px;font-weight:700;color:var(--muted,#868e96)">${title}</div>
+      <ul style="margin:4px 0 0 18px;font-size:13px">${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+    </div>` : '';
+  const htmlBtn = r.html ? aiHtmlButton() : '';
+  return `
+    ${htmlBtn}
+    ${list('💡 建议', r.advice)}
+    ${list('⚠️ 风险', r.risks)}
+    ${list('核心理由', r.reasons)}`;
+}
+
+// AI 打分按钮（innerHTML 注入后由调用方 querySelector('[data-aiscore-btn]') 绑定 onclick）
+function aiScoreButtonHtml(label) {
+  return `<button class="btn primary" data-aiscore-btn>${label}</button>`;
+}
+
+// AI 生成的 HTML 详细报告：按钮 + 在新窗口打开（innerHTML 注入后由 wireAiHtmlButton 绑定）
+function aiHtmlButton() {
+  return `<button class="btn" data-ai-html title="AI 生成的完整 HTML 详细报告">📄 查看详细报告</button>`;
+}
+
+function openAiHtmlReport(html) {
+  if (!html) return toast('该报告没有 HTML 版');
+  const w = window.open('', '_blank');
+  if (!w) return toast('浏览器拦截了弹窗，请允许本站弹窗', 3500);
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
+function wireAiHtmlButton(container, report) {
+  const b = container && container.querySelector('[data-ai-html]');
+  if (b && report && report.html) b.onclick = () => openAiHtmlReport(report.html);
+}
+
+// 标签偏好弹窗：输入简短偏好 → 保存自动 AI 补全（draft）→ 确认后生效
+async function openTagPrefModal(tag, onSaved) {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `
+    <div class="modal" style="width:580px;max-width:94vw">
+      <h3>标签偏好：${esc(tag)}</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">输入你的偏好（如「喜欢低估值高股息」）。保存时自动请求 AI 补全成完整评分指引并展示，<strong>确认后才用于该标签的打分</strong>。</div>
+      <label class="muted" style="font-size:11px;display:block;margin-bottom:4px">你的偏好（简短描述）</label>
+      <textarea id="prefRaw" rows="2" style="width:100%;box-sizing:border-box" placeholder="如：喜欢低估值、高股息、现金流稳定的公司"></textarea>
+      <label class="muted" style="font-size:11px;display:block;margin:10px 0 4px">AI 补全的评分指引（可编辑）</label>
+      <textarea id="prefPrompt" rows="6" style="width:100%;box-sizing:border-box" placeholder="点「🤖 AI 补全」生成，或手动填写"></textarea>
+      <div id="prefHint" class="muted" style="font-size:12px;margin-top:6px"></div>
+      <div class="modal-actions">
+        <button class="btn" id="prefCancel">取消</button>
+        <button class="btn" id="prefExpand">🤖 AI 补全</button>
+        <span class="grow" style="flex:1"></span>
+        <button class="btn primary" id="prefSave">保存并生效</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.querySelector('#prefCancel').onclick = close;
+  mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+  const enc = encodeURIComponent(tag);
+
+  // 预填已有偏好
+  try {
+    const p = await api('/ai-scoring/prefs/' + enc, { silent: true });
+    if (p) {
+      mask.querySelector('#prefRaw').value = p.raw_pref || '';
+      mask.querySelector('#prefPrompt').value = p.prompt || '';
+      mask.querySelector('#prefHint').textContent = p.status === 'confirmed'
+        ? '当前为【已确认】状态，已用于打分。修改后需重新确认。'
+        : '当前为【待确认】状态，确认后才用于打分。';
+    }
+  } catch (e) { /* 无则空 */ }
+
+  mask.querySelector('#prefExpand').onclick = async () => {
+    const raw = mask.querySelector('#prefRaw').value.trim();
+    if (!raw) return toast('请先输入偏好描述');
+    const btn = mask.querySelector('#prefExpand');
+    btn.disabled = true;
+    try {
+      const d = await api('/ai-scoring/prefs/' + enc + '/expand', { method: 'POST', body: { raw_pref: raw } });
+      mask.querySelector('#prefPrompt').value = d.prompt || '';
+      mask.querySelector('#prefHint').textContent = '已由 AI 补全（待确认），点击「保存并生效」后用于打分。';
+      toast('AI 已补全评分指引');
+    } catch (e) {
+      toast('补全失败：' + e.message, 4000);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  mask.querySelector('#prefSave').onclick = async () => {
+    const raw = mask.querySelector('#prefRaw').value.trim();
+    if (!raw) return toast('请填写偏好描述');
+    const prompt = mask.querySelector('#prefPrompt').value.trim();
+    const btn = mask.querySelector('#prefSave');
+    btn.disabled = true;
+    try {
+      if (btn.dataset.confirm === '1') {
+        await api('/ai-scoring/prefs/' + enc + '/confirm', { method: 'POST' });
+        toast('已确认生效');
+        close();
+        if (typeof onSaved === 'function') onSaved();
+        return;
+      }
+      const d = await api('/ai-scoring/prefs/' + enc, {
+        method: 'PUT',
+        body: prompt ? { raw_pref: raw, prompt } : { raw_pref: raw, auto_expand: true },
+      });
+      if (d.status === 'draft' && d.prompt) {
+        // 自动补全成草稿：展示并引导确认
+        mask.querySelector('#prefPrompt').value = d.prompt;
+        mask.querySelector('#prefHint').textContent = '已保存为【待确认】。AI 已补全指引，点击「确认生效」后用于打分。';
+        btn.textContent = '确认生效';
+        btn.dataset.confirm = '1';
+        return;
+      }
+      if (d.status === 'draft') {
+        mask.querySelector('#prefHint').textContent = '已保存为【待确认】，请 AI 补全或手动填写评分指引。';
+        return;
+      }
+      toast('已保存并生效');
+      close();
+      if (typeof onSaved === 'function') onSaved();
+    } catch (e) {
+      toast('保存失败：' + e.message, 4000);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }

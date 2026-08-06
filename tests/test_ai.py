@@ -132,15 +132,18 @@ def test_analyze_no_active_model():
 
 def test_normalize_handles_bad_input():
     """AI 输出缺失/越界 → 规整到合法范围；非列表 reasons 保留为单条。"""
-    bad = {"rating": "X", "risk_score": 999, "dimensions": {}, "reasons": "not-a-list"}
+    bad = {"rating": "X", "risk_score": 999, "dimensions": {}, "reasons": "not-a-list",
+           "html": "<html>诊股报告</html>"}
     n = ai_svc._normalize_report(bad)
     assert n["rating"] == "C"
     assert n["risk_score"] == 100
     assert n["reasons"] == ["not-a-list"]
-    # 缺失 reasons → 空列表
+    assert n["html"] == "<html>诊股报告</html>"    # AI 生成的 HTML 报告原样透传
+    # 缺失 reasons → 空列表；缺 html → 空
     n2 = ai_svc._normalize_report({"rating": "B", "risk_score": 0})
     assert n2["reasons"] == []
     assert n2["dimensions"]["moat"]["risk"] == "medium"
+    assert n2["html"] == ""
 
 
 def test_normalize_expected_growth():
@@ -222,3 +225,32 @@ def test_ai_report_api_success(client, monkeypatch):
     r2 = client.get("/api/stocks/600000/ai-report")
     assert r2.status_code == 200
     assert r2.json()["data"]["report"]["rating"] == "A"
+
+
+def test_reasoning_effort_default_and_config():
+    """思考级别缺省 high（用户可在 AI 配置里选到 max），可经 config 表 ai_reasoning_effort 覆盖。"""
+    from app.models.db import get_conn
+
+    assert ai_svc.get_reasoning_effort() == "high"
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO config(key,value) VALUES('ai_reasoning_effort','max') "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        )
+    assert ai_svc.get_reasoning_effort() == "max"
+    with get_conn() as c:
+        c.execute("DELETE FROM config WHERE key='ai_reasoning_effort'")
+    assert ai_svc.get_reasoning_effort() == "high"
+
+
+def test_reasoning_api(client):
+    """思考级别 GET/PUT：默认 high，可改 low/high/max，非法值 400。"""
+    g = client.get("/api/ai/reasoning").json()["data"]
+    assert g["effort"] == "high"
+    r = client.put("/api/ai/reasoning", json={"effort": "max"})
+    assert r.status_code == 200
+    assert r.json()["data"]["effort"] == "max"
+    r2 = client.put("/api/ai/reasoning", json={"effort": "ultra"})
+    assert r2.status_code == 400
+    r3 = client.put("/api/ai/reasoning", json={"effort": "high"})
+    assert r3.json()["data"]["effort"] == "high"

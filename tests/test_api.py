@@ -39,7 +39,7 @@ class _WriteDetector:
 
 
 def test_get_endpoints_no_db_writes(client):
-    """GET /portfolio /stocks/{code} /holdings 全程无数据库写入（只读缓存）。"""
+    """GET /portfolio /stocks/{code} /holdings /ai-scoring/* 全程无数据库写入（只读缓存）。"""
     from unittest import mock
 
     import sqlite3
@@ -58,6 +58,11 @@ def test_get_endpoints_no_db_writes(client):
         assert client.get("/api/stocks/600000").status_code == 200
         assert client.get("/api/holdings").status_code == 200
         assert client.get("/api/portfolio/weights").status_code == 200
+        # AI 评分读路径：组合报告/日目录/某日详情/标签偏好 全部零写
+        assert client.get("/api/ai-scoring/portfolio").status_code == 200
+        assert client.get("/api/ai-scoring/daily-reports").status_code == 200
+        assert client.get("/api/ai-scoring/daily", params={"date": "2026-01-01"}).status_code == 200
+        assert client.get("/api/ai-scoring/prefs").status_code == 200
     assert detector["d"].writes == []
 
 
@@ -100,7 +105,7 @@ def test_init_and_list_holdings(client):
     assert r.status_code == 200
     data = r.json()["data"]
     assert data[0]["trade_id"] > 0
-    assert data[0]["daily_score"] is not None  # 自动重算当日综合评分
+    assert "holding" in data[0]  # 返回持仓（AI 评分另由 /api/ai-scoring 提供）
 
     r = client.get("/api/holdings")
     holdings = r.json()["data"]
@@ -108,30 +113,36 @@ def test_init_and_list_holdings(client):
     assert holdings[0]["code"] == "600000"
 
 
-def test_trade_crud_and_daily_score(client):
+def test_trade_crud_and_ai_daily(client):
     r = client.post("/api/trades", json={"code": "600000", "side": "buy", "price": 10, "quantity": 100, "name": "浦发银行"})
     trade_id = r.json()["data"]["trade_id"]
-    assert r.json()["data"]["daily_score"]["trades_count"] == 1
 
     # 卖出超量 → 400
     r = client.post("/api/trades", json={"code": "600000", "side": "sell", "price": 11, "quantity": 999})
     assert r.status_code == 400
 
-    # 当日综合评分
-    r = client.get("/api/scoring/daily")
-    assert r.json()["data"]["trades_count"] == 1
+    # 当日 AI 评分目录（无模型 → ai=null, configured=false）
+    r = client.get("/api/ai-scoring/daily-reports")
+    data = r.json()["data"]
+    assert data["configured"] is False
+    days = data["days"]
+    assert len(days) == 1
+    assert days[0]["trades_count"] == 1
+    assert days[0]["ai"] is None
+    score_date = days[0]["score_date"]
+
+    # 该日详情：交易表有 1 笔，无 AI 报告
+    r = client.get("/api/ai-scoring/daily", params={"date": score_date})
+    d = r.json()["data"]
+    assert d["configured"] is False
+    assert d["day"]["trades_count"] == 1
+    assert len(d["day"]["trades"]) == 1
+    assert d["report"] is None
 
     # 修改交易（数量 100→50）
     r = client.put(f"/api/trades/{trade_id}", json={"quantity": 50})
     assert r.status_code == 200
     assert r.json()["data"]["holding"]["quantity"] == pytest.approx(50)
-    # 修改后综合分重算
-    r = client.get("/api/scoring/daily")
-    assert r.json()["data"]["trades_count"] == 1
-
-    # 历史
-    r = client.get("/api/scoring/history")
-    assert len(r.json()["data"]) == 1
 
     # 流水
     r = client.get("/api/trades")
@@ -143,8 +154,9 @@ def test_trade_crud_and_daily_score(client):
     r = client.delete(f"/api/trades/{trade_id}")
     assert r.status_code == 200
     assert client.get("/api/trades").json()["data"] == []
-    # 当日无交易 → 综合分删除
-    assert client.get("/api/scoring/daily").json()["data"] is None
+    # 该日无交易 → 不再出现在 AI 评分目录
+    days2 = client.get("/api/ai-scoring/daily-reports").json()["data"]["days"]
+    assert not any(x["score_date"] == score_date for x in days2)
 
 
 def test_portfolio(client):
@@ -338,23 +350,6 @@ def test_import_excel_holdings(client):
     assert "空仓" in r2.json()["detail"]
 
 
-def test_scoring_rules(client):
-    r = client.get("/api/scoring/rules")
-    data = r.json()["data"]
-    assert abs(sum(data["buy_weights"].values()) - 1.0) < 1e-6
-    assert abs(sum(data["sell_weights"].values()) - 1.0) < 1e-6
-
-    # 权重和不为1 → 400
-    r = client.put("/api/scoring/rules", json={"buy_weights": {"pe_pct": 0.5, "roe": 0.3}})
-    assert r.status_code == 400
-
-    # 合法更新
-    r = client.put("/api/scoring/rules", json={"buy_weights": {"pe_pct": 0.6, "pb_pct": 0.4}})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["buy_weights"] == {"pe_pct": 0.6, "pb_pct": 0.4}
-
-
 def test_unhandled_exception_returns_clear_detail(client, monkeypatch):
     """未捕获异常 → HTTP 500 + 明确 detail（前端 api.js 读 detail 展示，便于定位）。"""
     from app.services import holdings as hmod
@@ -433,14 +428,6 @@ def test_stock_refresh_full(client):
     assert "daily" in data and "valuation" in data and "financials" in data
 
 
-def test_scoring_rebuild(client):
-    """POST /scoring/rebuild：重建全部有交易日的综合评分，返回重建日数。"""
-    client.post("/api/trades", json={"code": "600000", "side": "buy", "price": 10, "quantity": 100, "name": "浦发银行"})
-    r = client.post("/api/scoring/rebuild")
-    assert r.status_code == 200
-    assert r.json()["data"]["rebuilt_days"] >= 1
-
-
 def test_refresh_dynamic_items_filter(client):
     """POST /refresh 按 items 过滤：只刷指定内容项（价格），其余 skip。"""
     client.post("/api/holdings", json={"items": [{"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100}]})
@@ -493,30 +480,32 @@ def test_data_reset_requires_confirm(client):
 
 
 def test_data_reset_clears_all(client):
-    """一键清空：删除全部业务数据与缓存，保留评分权重配置（config）。"""
+    """一键清空：删除全部业务数据与缓存，保留 config（schema 版本）与交易日历。"""
     client.post("/api/holdings", json={"items": [{"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100}]})
     # 确认已写入业务数据
     assert len(client.get("/api/trades").json()["data"]) == 1
-    assert client.get("/api/scoring/daily").json()["data"] is not None
+    assert client.get("/api/ai-scoring/daily-reports").json()["data"]["days"] != []
 
     r = client.post("/api/data/reset", json={"confirm": True})
     assert r.status_code == 200
     assert r.json()["data"]["deleted_rows"] >= 3  # trades + holdings + stocks
 
-    # 业务数据全空
+    # 业务数据全空（含 AI 评分）
     assert client.get("/api/trades").json()["data"] == []
     assert client.get("/api/holdings").json()["data"] == []
-    assert client.get("/api/scoring/daily").json()["data"] is None
+    assert client.get("/api/ai-scoring/daily-reports").json()["data"]["days"] == []
 
-    # 评分权重配置保留
-    rules = client.get("/api/scoring/rules").json()["data"]
-    assert abs(sum(rules["buy_weights"].values()) - 1.0) < 1e-6
-
-    # 清空后缓存表同步清掉（录交易+刷新产生的日K等）
+    # config 保留（schema 版本等）
     from app.models.db import get_conn
 
     with get_conn() as c:
+        row = c.execute("SELECT value FROM config WHERE key='db_schema_version'").fetchone()
+        assert row is not None
+
+    # 清空后缓存表同步清掉（录交易+刷新产生的日K等）
+    with get_conn() as c:
         for tbl in ("daily_price_cache", "daily_valuation_cache", "financial_cache",
-                    "valuation_history_cache", "portfolio_valuation_cache", "daily_scores"):
+                    "valuation_history_cache", "portfolio_valuation_cache",
+                    "ai_daily_reports", "ai_portfolio_reports", "tag_prefs"):
             n = c.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
             assert n == 0, f"{tbl} 应已清空"

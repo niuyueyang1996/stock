@@ -111,9 +111,9 @@ def create_app() -> FastAPI:
     )
 
     # API 路由
-    from app.api import ai, scoring, stocks, system, trades, portfolio, holdings
+    from app.api import ai, ai_scoring, stocks, system, trades, portfolio, holdings
 
-    for mod in (system, holdings, trades, stocks, portfolio, scoring, ai):
+    for mod in (system, holdings, trades, stocks, portfolio, ai, ai_scoring):
         app.include_router(mod.router, prefix="/api")
 
     # 全局异常兜底：未捕获异常 → HTTP 500 + 明确原因（前端 api.js 读 detail 展示），并打印完整堆栈

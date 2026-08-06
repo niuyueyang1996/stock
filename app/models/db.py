@@ -139,22 +139,6 @@ CREATE TABLE IF NOT EXISTS portfolio_valuation_cache (
     PRIMARY KEY (period, calc_date, trade_date)
 );
 
-CREATE TABLE IF NOT EXISTS daily_scores (
-    score_date   TEXT PRIMARY KEY,   -- 'YYYY-MM-DD' 当日综合评分
-    total_score  REAL,               -- 当日所有交易金额加权综合分 0-100（可 NULL：覆盖不足/无可评分交易）
-    rating       TEXT NOT NULL,      -- A/B/C/D 或 N/A（覆盖不足）
-    rating_name  TEXT,               -- 优秀/良好/一般/较差/覆盖不足
-    factors_json TEXT,               -- 综合因子聚合（按金额加权的因子分）
-    detail_json  TEXT,               -- 每笔明细 [{trade_id,code,name,side,amount,score,rating,factors}]
-    trades_count INTEGER,
-    net_amount   REAL,               -- 当日净成交额（买入正、卖出负）
-    coverage     REAL,               -- 综合覆盖率（可评分快照平均）
-    status       TEXT,               -- rated / low_coverage / no_scoreable
-    model_version TEXT,              -- 快照模型版本
-    estimated_count INTEGER DEFAULT 0, -- 当日 estimated 快照数
-    updated_at   TEXT
-);
-
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -218,25 +202,32 @@ CREATE TABLE IF NOT EXISTS fx_rate_cache (
     PRIMARY KEY (rate_date, currency)
 );
 
-CREATE TABLE IF NOT EXISTS trade_score_snapshots (
-    trade_id       INTEGER PRIMARY KEY, -- 与 trades.id 一一对应
-    code           TEXT NOT NULL,
-    side           TEXT NOT NULL,       -- buy/sell
-    score_date     TEXT NOT NULL,       -- 'YYYY-MM-DD'
-    total_score    REAL,
-    rating         TEXT,
-    rating_name    TEXT,
-    status         TEXT NOT NULL DEFAULT 'frozen',  -- frozen/estimated/insufficient
-    coverage       REAL,                -- 有效因子权重覆盖率(0~1)
-    model_version  TEXT,                -- 生成快照的模型版本
-    factors_json   TEXT,                -- 因子明细 [{key,name,raw,score,weight,used,data_date}]
-    price          REAL,
-    quantity       REAL,
-    amount         REAL,                -- 原币成交金额
-    amount_cny     REAL,                -- 人民币成交金额（港股按交易日汇率折算）
-    fx_rate        REAL,                -- 交易日汇率（原币→人民币）
-    created_at     TEXT,
-    updated_at     TEXT
+CREATE TABLE IF NOT EXISTS tag_prefs (
+    tag        TEXT PRIMARY KEY,           -- 与 stocks.tag 对应（港股/ETF/个股/自定义）
+    raw_pref   TEXT NOT NULL DEFAULT '',   -- 用户原始简短偏好（如「喜欢低估值高股息」）
+    prompt     TEXT,                       -- 完整评分指引（AI 补全或用户手填）
+    status     TEXT NOT NULL DEFAULT 'draft',  -- draft=待确认 / confirmed=已确认；仅 confirmed 用于打分
+    model_name TEXT,                       -- 生成 prompt 的模型名
+    created_at TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_portfolio_reports (
+    profile_hash TEXT PRIMARY KEY,         -- 稳定画像哈希：持仓(代码,量,币种)+已确认偏好+标签筛选+模型
+    tags_json    TEXT,                     -- 打分的标签组合（JSON 数组；[] = 全部）；不同组合各自存一份
+    report_json  TEXT NOT NULL,            -- {score,rating,rating_name,summary,advice,risks,reasons,analysis}
+    model_name   TEXT,
+    created_at   TEXT,
+    updated_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ai_daily_reports (
+    score_date   TEXT PRIMARY KEY,         -- 'YYYY-MM-DD'
+    report_json  TEXT NOT NULL,            -- 规整后 AI 报告（含 trades 数组：每笔 score/rating/comment/analysis）
+    model_name   TEXT,
+    trades_count INTEGER,
+    created_at   TEXT,
+    updated_at   TEXT
 );
 """
 
@@ -253,7 +244,7 @@ def get_conn() -> sqlite3.Connection:
 
 # 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
 SCHEMA_VERSION_KEY = "db_schema_version"
-_CURRENT_VERSION = 4
+_CURRENT_VERSION = 6
 
 # 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
 # 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
@@ -288,6 +279,9 @@ _MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
         ("xs_net", "ALTER TABLE fundflow_15m_cache ADD COLUMN xs_net REAL"),
         ("buy_amount", "ALTER TABLE fundflow_15m_cache ADD COLUMN buy_amount REAL"),
         ("sell_amount", "ALTER TABLE fundflow_15m_cache ADD COLUMN sell_amount REAL"),
+    ],
+    6: [
+        ("tags_json", "ALTER TABLE ai_portfolio_reports ADD COLUMN tags_json TEXT"),
     ],
 }
 
@@ -375,6 +369,16 @@ def _migrate_data_v2(conn) -> None:
     _recreate_daily_scores_nullable(conn)
 
 
+def _drop_formula_scoring(conn) -> None:
+    """v5 迁移：彻底移除公式评分（trade_score_snapshots / daily_scores）。
+
+    这两张表是公式评分派生数据，AI 打分上线后不再需要。旧库有表则 DROP；
+    新库从未建表，DROP IF EXISTS 为空操作。
+    """
+    conn.execute("DROP TABLE IF EXISTS trade_score_snapshots")
+    conn.execute("DROP TABLE IF EXISTS daily_scores")
+
+
 def migrate_db() -> bool:
     """版本化迁移：从当前版本依次升级到 _CURRENT_VERSION。
 
@@ -394,14 +398,9 @@ def migrate_db() -> bool:
                     pass  # 列已存在
             if target == 2:
                 _migrate_data_v2(conn)
+            if target == 5:
+                _drop_formula_scoring(conn)
             _set_db_version(conn, target)
-    # 迁移后：为旧交易回填评分快照（estimated/insufficient），失败不阻断迁移
-    try:
-        from app.analysis.scoring import backfill_snapshots
-
-        backfill_snapshots()
-    except Exception:  # noqa: BLE001
-        pass
     return True
 
 
@@ -431,17 +430,5 @@ def init_db() -> None:
                 conn.execute(_ddl)
             except sqlite3.OperationalError:
                 pass
-        # 默认评分权重写入 config（不覆盖已有）
-        from app.config import BUY_WEIGHTS, SELL_WEIGHTS
-        import json
-
-        conn.execute(
-            "INSERT OR IGNORE INTO config(key, value) VALUES('buy_weights', ?)",
-            (json.dumps(BUY_WEIGHTS),),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO config(key, value) VALUES('sell_weights', ?)",
-            (json.dumps(SELL_WEIGHTS),),
-        )
     # 版本化迁移（建表之后，新列/数据迁移）
     migrate_db()

@@ -240,22 +240,6 @@ def test_record_trade_triggers_rebuild():
     assert n >= 1
 
 
-def test_portfolio_dynamic_score():
-    """组合动态打分：分散度满分、因子加权、总分 0-100。"""
-    _seed_holdings([("A", 100), ("B", 100), ("C", 100)])
-    for code in ("A", "B", "C"):
-        _seed_fin(code)
-    from app.analysis.portfolio import compute_portfolio
-
-    pf = compute_portfolio()["portfolio"]
-    assert pf["score"] is not None and 0 <= pf["score"] <= 100
-    assert pf["score_rating"] in ("A", "B", "C", "D")
-    factors = {f["key"]: f for f in pf["score_factors"]}
-    assert "diversity" in factors
-    assert factors["diversity"]["weight"] == 0.0
-    assert factors["diversity"]["score"] is None  # 权重 0，不参与总分
-
-
 def test_portfolio_etf_counts_in_assets_no_fundamentals():
     """ETF 计入持仓市值/权重/资产；无财务数据则不参与 PE/PB 等基本面统计。"""
     _seed_holdings([("600000", 100), ("510300", 100)])

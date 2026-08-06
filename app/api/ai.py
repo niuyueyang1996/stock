@@ -23,6 +23,10 @@ class AvailableBody(BaseModel):
     api_key: str
 
 
+class ReasoningBody(BaseModel):
+    effort: str
+
+
 @router.get("/ai/models")
 def list_models():
     """模型配置列表 + 当前激活。"""
@@ -53,9 +57,21 @@ def save_model(body: ModelBody):
     return {"ok": True, "data": row}
 
 
+def _invalidate_ai_scores():
+    """切换/删除模型后：今日打分失效并后台重打分（组合报告靠画像哈希变 stale，各组合独立保留）。"""
+    try:
+        from datetime import date
+        from app.services import ai_scoring
+
+        ai_scoring.maybe_auto_score_daily(date.today().isoformat())
+    except Exception:  # noqa: BLE001 失效失败不影响模型操作
+        pass
+
+
 @router.delete("/ai/models/{model_id}")
 def delete_model(model_id: int):
     ai_svc.delete_model(model_id)
+    _invalidate_ai_scores()
     return {"ok": True, "data": {"deleted": model_id}}
 
 
@@ -66,7 +82,31 @@ def activate_model(model_id: int):
         row = ai_svc.activate_model(model_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _invalidate_ai_scores()
     return {"ok": True, "data": row}
+
+
+@router.get("/ai/reasoning")
+def get_reasoning():
+    """当前 AI 思考级别（默认 high=最高）。"""
+    return {"ok": True, "data": {"effort": ai_svc.get_reasoning_effort()}}
+
+
+@router.put("/ai/reasoning")
+def set_reasoning(body: ReasoningBody):
+    """设置 AI 思考级别（low/medium/high/max）。"""
+    effort = (body.effort or "").strip().lower()
+    if effort not in ("low", "medium", "high", "max"):
+        raise HTTPException(400, "思考级别仅支持 low/medium/high/max")
+    from app.models.db import get_conn
+
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO config(key, value) VALUES('ai_reasoning_effort', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (effort,),
+        )
+    return {"ok": True, "data": {"effort": effort}}
 
 
 @router.get("/stocks/{code}/ai-report")

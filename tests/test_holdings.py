@@ -44,17 +44,6 @@ def test_cost_adjust_replay_consistent():
     assert h["avg_cost"] == pytest.approx(10.5)
 
 
-def test_cost_adjust_no_snapshot():
-    """adjust 不生成评分快照。"""
-    from app.models.db import get_conn
-
-    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
-    r = holdings.adjust_cost("600000", amount=100, note="补记")
-    with get_conn() as c:
-        n = c.execute("SELECT COUNT(*) FROM trade_score_snapshots WHERE trade_id=?", (r["trade_id"],)).fetchone()[0]
-    assert n == 0
-
-
 def test_cost_adjust_delete_reverts():
     """删除调整记录 → 成本恢复原值。"""
     holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")

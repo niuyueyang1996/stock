@@ -33,7 +33,7 @@ app/data/
 ```
 app/
   main.py          FastAPI 入口：init_db、启动后台自动除权线程、路由挂载
-  config.py        DB_PATH/评分权重/评级阈值
+  config.py        DB_PATH/网络/数据源开关
   models/db.py     SQLite 建表 + 版本化迁移（migrate_db，迁移前备份）
   data/
     base.py        数据源抽象（Quote/Bar/Financials）+ SourceManager 降级链（对外门面）
@@ -48,12 +48,12 @@ app/
     dividend.py    分红除权自动调整（幂等）
     quote.py       纯缓存行情读取（零网络）
     refresh.py     刷新编排（动态/全量/单股）
+    ai_scoring.py  AI 评分：标签偏好(补全/确认) + 组合/每日 AI 打分（复用 services/ai.py）
   analysis/
     valuation.py   实时估值 + 前瞻 PB（修正口径）+ 分位（分段排序）
-    scoring.py     交易评分冻结快照 + 日聚合
     portfolio.py   组合穿透式指标 + 打包序列
     volatility.py  人民币波动率（前向填充 3 日 + 95% 覆盖门槛）
-  api/             system/holdings/trades/stocks/portfolio/scoring
+  api/             system/holdings/trades/stocks/portfolio/ai/ai_scoring
 static/            前端 4 页 + js/（api.js common.js charts.js）
 packaging/windows/ Windows 托盘程序 + PyInstaller/Inno Setup 构建链
 tests/             pytest（含 Windows 打包支持测试，全程离线，conftest 打桩网络）
@@ -63,29 +63,32 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 
 ### 数据层：缓存优先 + 手动刷新
 - **GET 只读缓存，零网络、零数据库写入**。唯一数据入口是右上角刷新按钮。
-- 缓存分三类：原始缓存（行情/财务/估值/汇率，长期保留）、不可变快照（评分）、派生缓存（组合序列+分位，带 `portfolio_hash` 可失效重建）。
+- 缓存分三类：原始缓存（行情/财务/估值/汇率，长期保留）、AI 评分报告（`ai_*_reports`，手动 POST 触发落库）、派生缓存（组合序列+分位，带 `portfolio_hash` 可失效重建）。
 - 清仓只改持仓状态，**不删原始缓存**（再次开仓复用）。
 - GET 缓存缺失返回 HTTP 409 CACHE_MISS（个股详情），前端弹窗询问下载。
 
-### 评分快照（scoring.py）
-- 每笔交易生成**冻结快照**（trade_score_snapshots）：因子原值/数据日期/权重/模型版本/覆盖率/状态。
-- 状态：`frozen`（交易时正式）/ `estimated`（旧交易回填）/ `insufficient`（覆盖率<60% 不评级）。
-- 评分 = `50 + (已知因子得分 − 50) × 覆盖率`；覆盖率 60%~80% 低置信度，>80% 正常。
-- 历史回填只用交易日及以前数据（消除时间穿越）；`/api/scoring/rebuild` 只重建日聚合，不重算冻结快照。
-- 日评分聚合快照、按人民币金额加权；可评分金额 <80% 当日不评级。
-- 权重修改生成新模型版本，只作用于之后交易。
+### AI 评分（services/ai_scoring.py，公式评分已彻底移除）
+- 组合打分 + 每笔交易/每日打分**全部由 AI 产出**（得分 + 评级 + 分析）；**公式评分已移除**（`trade_score_snapshots`/`daily_scores` 表 v5 迁移 DROP，`scoring.py`/`/api/scoring/*` 删除）。
+- **评级由 AI 直接给出**（A/B/C/D），后端只做格式校验（非法兜底 C），**不做 score→grade 转换**；中文名（优秀/良好/一般/较差）仅作显示标签。
+- **标签偏好（tag_prefs）**：每标签用户输入简短偏好 → 保存时自动请求 AI 补全成完整「评分指引」（draft），确认后（confirmed）才用于打分；提供手动「AI 补全」。
+- **组合打分跟随标签筛选 + 按组合分开存储**：`POST /api/ai-scoring/portfolio?tags=红利,科技` 只打该子组合（只带这些持仓汇总 + 这些标签指引）；「全部」= 全持仓 + 全部已确认偏好。**每个标签组合各存一份**（`ai_portfolio_reports.tags_json` 记录组合），打个股不覆盖 个股+港股，也不覆盖 全部；同一组合画像变化标 `stale` 保留旧分，另一组合不受影响。持仓页（index.html）不打分。
+- **每日打分偏好去重**：一天 50 笔时 `tag_prefs` 只放当天涉及的标签各一份，每笔交易只带 `tag` 名 + 该股因子（`compute_live` 现取）；AI 按 tag 匹配指引逐笔打分再汇总。
+- **触发**：组合 = 手动按钮（GET 读最新报告，`stale`=画像哈希变化提示重新打分）；新交易 = 录入时 `maybe_auto_score_daily` 失效并后台线程重打分（无激活模型/当日无交易不起线程）。
+- **HTML 详细报告**：组合/每日/个股诊股三种打分，AI 都会额外生成一份**自包含 HTML 报告**（`report.html`，内联 CSS、无外部依赖、禁止 `<script>`）；前端「📄 查看详细报告」按钮用 `openAiHtmlReport` 在新窗口打开。**HTML 聚焦深入分析，不罗列用户已可见的原始数据表**（持仓明细/标签板块/交易明细/估值）；内联 `analysis`/`detail` 详细分析文字已去掉（不再生成），详细分析全在 HTML 里，summary/advice/risks/reasons 内联保留。规整函数缺省把 html 置空串（AI 未生成时按钮不显示）。
+- **思考级别**：`chat_json` 附带 `reasoning_effort`（默认 `high`，`config.py AI_REASONING_EFFORT`；用户可在「🤖 AI」弹窗选 low/medium/high/max，写 config 表 `ai_reasoning_effort`，端点 `GET/PUT /api/ai/reasoning`）。provider 不支持时 `chat_json` 降级重试会移除该参数。
+- `profile_hash` 只基于持仓(筛选内 code/qty/currency) + 已确认偏好(筛选内) + 标签筛选 + 模型——**绝不含时间戳/价格**。
 
 ### 港股折算
 - 五位代码（06198/00700）→ `currency='HKD'`；港股**不再复用 ETF 分类**（is_etf 仅按场内基金代码/ETF 标签）。
 - **汇率新浪实时** `hq.sinajs.cn/list=HKDCNY`（1 HKD = 买卖价中点 CNY）。中行 `ak.currency_boc_sina` 在本环境仅返回 2023 历史不可用。缓存 fx_rate_cache；交易存 `fx_rate/amount_cny`，持仓双币种成本。
 - 缺汇率**绝不按 1:1**：返回 `missing_fx`，从人民币汇总剔除。
 - **汇率时机**：启动进程强制拉一次 + 仅「全量刷新」重拉；动态刷新不拉。汇率可用后自动回填缺失的港股 `amount_cny`（`backfill_trade_cny`）。
-- **港股显示口径（券商方式，用户确认）**：单价（现价/成本）显示港币，金额（市值/盈亏/成交金额）显示人民币；个股页现价/市值卡 + 买卖弹窗显示 `≈¥` 人民币换算。交易流水/评分明细金额用 `amount_cny`。
+- **港股显示口径（券商方式，用户确认）**：单价（现价/成本）显示港币，金额（市值/盈亏/成交金额）显示人民币；个股页现价/市值卡 + 买卖弹窗显示 `≈¥` 人民币换算。交易流水/AI 评分明细金额用 `amount_cny`。
 
 ### 组合穿透式指标（portfolio.py）
 - 全部人民币口径；股票/ETF/港股都参与资产与风险指标。
 - `归属利润 = 持股数÷总股本×公司TTM利润`；综合 PE = Σ市值/Σ归属利润；PB/ROE 同口径，**ROE% = PB/PE×100**。
-- 每指标返回 `coverage_weight`，<70% 前端显示"覆盖不足"且不进组合打分。
+- 每指标返回 `coverage_weight`，<70% 前端显示"覆盖不足"（仅提示，不作打分硬约束）。
 - **亏损股负值全程参与**（负 PE/PB/ROE/利润/预测利润）；仅分母为零才"不适用"。
 - 首页 pe_pct/pb_pct 来自打包组合历史序列分位（`portfolio_valuation_cache`），非个股加权。
 - 分段排序分位：正小→大 → 0 → 负（绝对值大→小），如 `8,15,30,0,-100,-20,-5`。
@@ -101,7 +104,7 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - 组合前瞻 PE/PB 用**穿透汇总**（Σ市值/Σ归属预测净利/净资产），不做个股加权。
 
 ### 成本调整与分红除权（holdings.py / dividend.py）
-- `POST /holdings/{code}/cost-adjust`：amount（成本，正=加 负=减）+ delta_qty（股数，拆股/送股）；插入 `adjust` 交易，重放只改成本/股数，不生成评分快照。
+- `POST /holdings/{code}/cost-adjust`：amount（成本，正=加 负=减）+ delta_qty（股数，拆股/送股）；插入 `adjust` 交易，重放只改成本/股数（adjust 不参与 AI 打分）。
 - 分红除权：启动进程/全量刷新时扫描持仓，今天除权的自动按 `每股分红×持仓` 摊薄成本；`dividend_adjustments` 表幂等。
 - 手动「📅 分红除权」按钮查最近除权（东财）填入；`is_dividend=1` 标记计入**累计分红**。
 - 累计分红 = trades 中 `side='adjust' AND is_dividend=1` 的 `SUM(-amount)`。
@@ -113,7 +116,7 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 ### 前端约定（static/）
 - **api.js**：所有请求经 `api()`；全屏 loading 屏障**仅** `opts.blocking:true` 的耗时请求（页面加载/刷新/导入/下载）显示，快速操作默认不弹；搜索联想用 `silent:true`。支持 FormData（不 JSON.stringify、不手动 Content-Type）。
 - **交易评分页（trade.html）**：左目录 + 右详情布局。`.row` 高度 `70vh` + `flex-wrap:nowrap`；`day-dir`/`day-detail` 需 `min-height:0` 才让 `overflow-y:auto` 生效（flex 子项默认 min-height:auto 会阻止滚动，踩过坑）。
-- 评分快照状态中文：frozen→冻结 / estimated→回填 / insufficient→数据不足；日状态 rated→已评级 / low_coverage→覆盖不足 / no_scoreable→无可评分。
+- AI 评级徽章：A→优秀 / B→良好 / C→一般 / D→较差；评级由 AI 直接给出，前端只映射中文标签。未配置 AI 时评分区显示「未配置 AI」。
 - **start.cmd 必须纯 ASCII**（cmd 按 GBK 解析 UTF-8 中文会崩）；`if` 括号块内不能有 `(3,10)` 这类括号（被当块结束），版本检查移到独立标签。
 - Windows 打包态的数据库/日志/运行状态位于 `%LOCALAPPDATA%\StockAnalyzer`；静态资源从 PyInstaller `_MEIPASS` 只读加载。`STOCK_APP_HOME` 仅用于测试/便携覆盖。
 - Windows 启动器必须保持单实例、只监听 `127.0.0.1`，用 `/api/health` 判断服务身份；安装包严禁包含仓库 `data/` 中的个人文件。
@@ -121,11 +124,12 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 ## 关键坑（踩过，改前注意）
 - SQLite 写事务内不要再开连接写（如汇率落库）会 "database is locked"——汇率计算移到事务外。
 - `_MIGRATE_COLUMNS` 加新列后，旧库需手动 `ALTER TABLE`（migrate 只在版本落后时跑；已到目标版本不会重跑）。
-- daily_scores.total_score 可空（覆盖不足无分）；旧表 NOT NULL 需 `_recreate_daily_scores_nullable`。
+- **v5 迁移彻底移除公式评分**：`_drop_formula_scoring` DROP `trade_score_snapshots`/`daily_scores`；历史 v2 迁移里的 `_recreate_daily_scores_nullable` 保留只为旧库升级（新库该表未建，`PRAGMA table_info` 空表早退）。
+- AI 打分是慢操作：`chat_json` 最长 180s；后台自动打分失败只记日志，当日保持"未评分"（`maybe_auto_score_daily` 先同步 invalidate）。`_trigger_ai_daily`/`_invalidate_portfolio_ai` 必须放在写事务外调用。
 - 全市场列表只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
 - Windows 跑 pytest 需 `--basetemp`（默认临时目录权限失败）。
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 
 ## 测试
-- 145 用例。重点：scoring（冻结快照/覆盖率/日聚合）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级）、api（409 CACHE_MISS/GET 零写入/名称回填）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
+- 190 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发，mock chat_json 离线）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v5 移除公式表）、api（409 CACHE_MISS/GET 零写入/AI 评分端点）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。

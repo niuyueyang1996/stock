@@ -240,7 +240,7 @@ def _today_price(code: str, now: datetime) -> float | None:
 
 
 # 刷新内容项：key → 中文说明（前端弹窗多选 + 后端按需执行）。
-# 综合评分重建不在此列：由评分页独立触发（见 /api/scoring/rebuild）。
+# AI 打分不在此列：由组合页/交易页手动触发（POST /api/ai-scoring/*）。
 DYNAMIC_ITEMS = {
     "price": "实时价格（分钟级）",
     "valuation": "当前估值（PE/PB/股息率/市值）",
@@ -423,16 +423,6 @@ def _apply_dividends(now: datetime) -> dict:
     except Exception as e:  # noqa: BLE001 除权失败不中断
         logger.warning("[除权] 自动除权检查失败：%s", e)
         return {"today": now.date().isoformat(), "applied": [], "skipped": [], "failed": [], "error": str(e)}
-
-
-def _rebuild_scores() -> int:
-    """数据更新后重建全部交易日的综合评分（本地计算）。"""
-    try:
-        from app.analysis.scoring import rebuild_all
-
-        return rebuild_all()
-    except Exception:
-        return 0
 
 
 def _rebuild_portfolio_series() -> int:

@@ -228,14 +228,14 @@ def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=Non
             holding = rebuild(code, conn)
         except ValueError:
             raise
-    # 新股：先同步数据，再生成冻结快照（否则无缓存 → 覆盖率不足 → 无单笔得分）
+    # 新股：先同步数据（否则 AI 打分时无该股缓存因子）
     if _is_new_stock(code):
         _sync_stock_data(code)
-    # 事务外：生成冻结快照 + 重算当日综合评分（失败不影响交易录入）
-    daily = _rebuild_daily_with_snapshot(code, side, price, quantity, trade_time, trade_id, status="frozen")
     # 开仓/清仓引入新持仓权重 → 重算组合综合 PE/PB 序列缓存
     _rebuild_portfolio()
-    return {"trade_id": trade_id, "holding": holding, "daily_score": daily}
+    # 该日 AI 打分失效并后台自动重打分（尽力而为，失败不影响交易录入）
+    _trigger_ai_daily(trade_time[:10])
+    return {"trade_id": trade_id, "holding": holding}
 
 
 def adjust_cost(code, amount=0.0, delta_qty=0.0, note=None, trade_time=None, name=None,
@@ -268,9 +268,9 @@ def adjust_cost(code, amount=0.0, delta_qty=0.0, note=None, trade_time=None, nam
         )
         trade_id = cur.lastrowid
         holding = rebuild(code, conn)
-    daily = _rebuild_daily(trade_time[:10])
     _rebuild_portfolio()
-    return {"trade_id": trade_id, "holding": holding, "daily_score": daily}
+    _trigger_ai_daily(trade_time[:10])
+    return {"trade_id": trade_id, "holding": holding}
 
 
 def delete_trade(trade_id: int) -> dict:
@@ -284,10 +284,9 @@ def delete_trade(trade_id: int) -> dict:
             holding = rebuild(row["code"], conn)
         except ValueError:
             raise
-    _delete_snapshot(trade_id)
-    daily = _rebuild_daily(row["trade_time"][:10])
     _rebuild_portfolio()
-    return {"deleted_trade_id": trade_id, "holding": holding, "daily_score": daily}
+    _trigger_ai_daily(row["trade_time"][:10])
+    return {"deleted_trade_id": trade_id, "holding": holding}
 
 
 def update_trade(trade_id: int, **fields) -> dict:
@@ -343,54 +342,22 @@ def update_trade(trade_id: int, **fields) -> dict:
     dates = {new["trade_time"][:10]}
     if row["trade_time"][:10] != new["trade_time"][:10]:
         dates.add(row["trade_time"][:10])
-    # 修改交易 → 重新生成该交易快照（当日交易为 frozen，历史交易为 estimated）
-    snap_status = "frozen" if new["trade_time"][:10] == datetime.now().strftime("%Y-%m-%d") else "estimated"
-    _regenerate_snapshot(trade_id, new["code"], new["side"], new["price"], new["quantity"],
-                         new["trade_time"], status=snap_status)
-    daily = {}
+    # 涉及日 AI 打分失效并后台自动重打分
     for d in dates:
-        daily[d] = _rebuild_daily(d)
+        _trigger_ai_daily(d)
     _rebuild_portfolio()
-    return {"trade_id": trade_id, "holding": holding_new, "holding_old": holding_old, "daily_scores": daily}
+    return {"trade_id": trade_id, "holding": holding_new, "holding_old": holding_old}
 
 
-def _rebuild_daily(score_date: str):
-    """重算当日综合评分（失败返回 None，不影响交易操作）。"""
+def _trigger_ai_daily(score_date: str):
+    """该日 AI 打分失效并后台自动重打分（尽力而为，失败不影响交易操作）。
+
+    必须在写事务外调用：AI 打分自身会写 ai_daily_reports，事务内再开写连接会锁库。
+    """
     try:
-        from app.analysis.scoring import rebuild_daily
+        from app.services.ai_scoring import maybe_auto_score_daily
 
-        return rebuild_daily(score_date)
-    except Exception:
-        return None
-
-
-def _rebuild_daily_with_snapshot(code, side, price, quantity, trade_time, trade_id, status="frozen"):
-    """生成冻结快照 + 重算当日综合评分（失败返回 None，不影响交易操作）。"""
-    try:
-        from app.analysis.scoring import create_trade_snapshot, rebuild_daily
-
-        create_trade_snapshot(code, side, price, quantity, trade_time, trade_id, status=status)
-        return rebuild_daily(trade_time[:10])
-    except Exception:
-        return None
-
-
-def _regenerate_snapshot(trade_id, code, side, price, quantity, trade_time, status="estimated"):
-    """修改交易后重新生成其快照（失败不阻断交易操作）。"""
-    try:
-        from app.analysis.scoring import create_trade_snapshot
-
-        create_trade_snapshot(code, side, price, quantity, trade_time, trade_id, status=status)
-    except Exception:
-        pass
-
-
-def _delete_snapshot(trade_id: int):
-    """删除交易对应的评分快照（失败不阻断交易操作）。"""
-    try:
-        from app.analysis.scoring import delete_snapshot
-
-        delete_snapshot(trade_id)
+        maybe_auto_score_daily(score_date)
     except Exception:
         pass
 
@@ -525,6 +492,8 @@ def set_tag(code: str, tag: str, name: str | None = None) -> str:
                ON CONFLICT(code) DO UPDATE SET tag=excluded.tag""",
             (code, name or code, mkt, tag),
         )
+    # 标签变化影响组合画像与当日交易评分：组合 AI 报告靠画像哈希变 stale（各组合独立保留），今日重触发
+    _trigger_ai_daily(datetime.now().strftime("%Y-%m-%d"))
     return tag
 
 

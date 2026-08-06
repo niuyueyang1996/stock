@@ -1,0 +1,375 @@
+"""AI 评分测试：标签偏好 draft/confirmed、组合 AI 打分（画像哈希/stale/评级直传）、
+每日 AI 打分（偏好去重/trade_id 对齐/自动触发），全程 mock chat_json、离线。"""
+import threading
+from datetime import date, datetime
+
+import pytest
+
+from app.models.db import get_conn
+from app.services import ai as ai_mod
+from app.services import ai_scoring as svc
+from app.services import holdings
+
+# conftest 会把 maybe_auto_score_daily 打桩为「只失效不后台打分」（防线程逃逸到真实库/网络）；
+# 这里在导入期捕获真实函数，供验证线程行为的测试还原。
+_REAL_MAYBE_AUTO = svc.maybe_auto_score_daily
+
+
+def _activate_mock_model():
+    """建一个激活的 mock 模型（无网络）。"""
+    m = ai_mod.save_model("mock", "http://localhost", "k", "mock-model")
+    return ai_mod.activate_model(m["id"])
+
+
+def _fake_chat(monkeypatch, payload):
+    """把 ai.chat_json 替换为返回固定 payload 的函数。"""
+    monkeypatch.setattr(ai_mod, "chat_json", lambda cfg, system, user: payload)
+
+
+def _seed_trade(code="600000", qty=100, price=10.0, side="buy", name="浦发银行"):
+    """录一笔交易（无激活模型 → 不触发后台打分线程；微秒时间戳避免 UNIQUE 冲突）。返回 trade_id。"""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    return holdings.record_trade(code, side, price, qty, name=name, trade_time=ts)["trade_id"]
+
+
+# ============================================================ 标签偏好
+
+def test_tag_pref_draft_and_confirm_and_delete():
+    raw = "喜欢低估值高股息"
+    row = svc.upsert_tag_pref("红利", raw)
+    assert row["status"] == "draft" and row["prompt"] is None
+    assert "红利" not in svc.confirmed_prefs()
+
+    row2 = svc.upsert_tag_pref("红利", raw, prompt="完整指引：优先股息率≥4%…")
+    assert row2["status"] == "confirmed"
+    assert svc.confirmed_prefs()["红利"] == "完整指引：优先股息率≥4%…"
+
+    svc.delete_tag_pref("红利")
+    assert svc.get_tag_pref("红利") is None
+
+
+def test_tag_pref_rejects_empty():
+    with pytest.raises(ValueError):
+        svc.upsert_tag_pref("红利", "   ")
+
+
+def test_expand_tag_prompt_persists_draft(monkeypatch):
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {"prompt": "AI 补全的完整评分指引…"})
+    row = svc.expand_tag_prompt("红利", "喜欢高股息")
+    assert row["status"] == "draft"
+    assert row["prompt"] == "AI 补全的完整评分指引…"
+    # 未确认不进入打分
+    assert "红利" not in svc.confirmed_prefs()
+    svc.confirm_tag_pref("红利")
+    assert svc.confirmed_prefs()["红利"]
+
+
+def test_expand_tag_prompt_no_model_raises():
+    with pytest.raises(ValueError):
+        svc.expand_tag_prompt("红利", "喜欢高股息")
+
+
+def test_confirm_without_prompt_raises():
+    svc.upsert_tag_pref("红利", "喜欢高股息")   # draft，无 prompt
+    with pytest.raises(ValueError):
+        svc.confirm_tag_pref("红利")
+
+
+# ============================================================ 组合 AI
+
+def test_portfolio_profile_hash_stable_and_changes():
+    _seed_trade("600000", qty=100)
+    h1 = svc.portfolio_profile_hash()
+    assert svc.portfolio_profile_hash() == h1          # 相同状态稳定
+    # 加仓 → 哈希变化
+    _seed_trade("600000", qty=100)
+    h2 = svc.portfolio_profile_hash()
+    assert h2 != h1
+    # 新增已确认偏好 → 哈希变化
+    svc.upsert_tag_pref("个股", "喜欢低估值", prompt="指引")
+    h3 = svc.portfolio_profile_hash()
+    assert h3 != h2
+    # 标签筛选视角不同 → 哈希不同
+    assert svc.portfolio_profile_hash(tags=["红利"]) != svc.portfolio_profile_hash(tags=["个股"])
+    # 纯读：再算一次稳定
+    assert svc.portfolio_profile_hash() == h3
+
+
+def test_normalize_portfolio_report_clamps_and_passes_rating():
+    r = svc._normalize_portfolio_report({"score": 999, "rating": "B", "summary": "s",
+                                         "advice": ["a"], "risks": "不是列表", "reasons": [],
+                                         "html": "<html>详细报告</html>"})
+    assert r["score"] == 100.0
+    assert r["rating"] == "B"            # 评级直传，不按分数换算
+    assert r["rating_name"] == "良好"
+    assert r["risks"] == ["不是列表"]
+    assert r["html"] == "<html>详细报告</html>"   # AI 生成的 HTML 报告原样透传
+    # 非法评级兜底 C、坏分数回退 50、缺 html → 空
+    r2 = svc._normalize_portfolio_report({"score": "abc", "rating": "Z"})
+    assert r2["score"] == 50.0 and r2["rating"] == "C" and r2["html"] == ""
+
+
+def test_score_portfolio_persist_and_stale(monkeypatch):
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {"score": 82, "rating": "B", "summary": "均衡",
+                             "advice": ["继续持有"], "risks": ["集中度"], "reasons": ["估值不高"],
+                             "analysis": "详细"})
+    result = svc.score_portfolio()
+    assert result["report"]["score"] == 82.0
+    assert result["report"]["rating"] == "B"
+
+    rep = svc.get_portfolio_report()
+    assert rep is not None
+    assert rep["stale"] is False
+    assert rep["report"]["summary"] == "均衡"
+
+    # 持仓变化 → 报告标记 stale
+    _seed_trade("600000", qty=100)
+    rep2 = svc.get_portfolio_report()
+    assert rep2["stale"] is True
+
+    svc.invalidate_portfolio()
+    assert svc.get_portfolio_report() is None
+
+
+def test_score_portfolio_no_model_raises():
+    with pytest.raises(ValueError):
+        svc.score_portfolio()
+
+
+def test_portfolio_scores_stored_per_combination(monkeypatch):
+    """不同标签组合各自存一份，互不覆盖；同一组合画像变化标 stale。"""
+    _seed_trade("600000", qty=100)
+    holdings.set_tag("600000", "红利")
+    _seed_trade("600519", qty=10, name="贵州茅台")
+    holdings.set_tag("600519", "科技")
+    svc.upsert_tag_pref("红利", "高股息", prompt="红利指引")
+    svc.upsert_tag_pref("科技", "高成长", prompt="科技指引")
+    _activate_mock_model()
+
+    def fake_chat(cfg, system, user):
+        if '"selected_tags": ["红利"]' in user:
+            return {"score": 70, "rating": "B", "summary": "红利组合", "advice": [], "risks": [], "reasons": []}
+        return {"score": 60, "rating": "C", "summary": "全选", "advice": [], "risks": [], "reasons": []}
+
+    monkeypatch.setattr(ai_mod, "chat_json", fake_chat)
+
+    svc.score_portfolio(tags=["红利"])
+    svc.score_portfolio(tags=None)   # 全部组合
+    # 各自读回，互不覆盖
+    g1 = svc.get_portfolio_report(tags=["红利"])
+    g2 = svc.get_portfolio_report(tags=None)
+    assert g1["report"]["score"] == 70.0 and g1["stale"] is False
+    assert g2["report"]["score"] == 60.0 and g2["stale"] is False
+    # 分开存储：两张行
+    with get_conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM ai_portfolio_reports").fetchone()[0]
+    assert n == 2
+    # 加仓科技股 → 只影响「全部」组合；红利组合独立保留且非 stale
+    _seed_trade("600519", qty=10)
+    g1b = svc.get_portfolio_report(tags=["红利"])
+    assert g1b["report"]["score"] == 70.0 and g1b["stale"] is False
+    g_all = svc.get_portfolio_report(tags=None)
+    assert g_all["report"]["score"] == 60.0 and g_all["stale"] is True
+
+
+def test_score_portfolio_tags_filter(monkeypatch):
+    # 两个标签：个股 + 红利（手动给代码 A 标红利）
+    _seed_trade("600000", qty=100)          # 默认标签 个股
+    holdings.set_tag("600000", "红利")
+    _seed_trade("600519", qty=10, name="贵州茅台")
+    holdings.set_tag("600519", "科技")
+    svc.upsert_tag_pref("红利", "高股息", prompt="红利指引")
+    svc.upsert_tag_pref("科技", "高成长", prompt="科技指引")
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {"score": 70, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": []})
+    r = svc.score_portfolio(tags=["红利"])
+    # 筛选视角只带该标签已确认偏好 → 上下文 tag_prefs 仅 红利
+    assert r["report"]["score"] == 70.0
+
+
+# ============================================================ 每日 AI
+
+def test_build_daily_context_pref_dedup():
+    tid1 = _seed_trade("600000", qty=100)
+    tid2 = _seed_trade("600000", qty=50)
+    svc.upsert_tag_pref("个股", "低估值", prompt="个股指引")
+    ctx = svc.build_daily_context(date.today().isoformat())
+    assert len(ctx["trades"]) == 2
+    assert {t["trade_id"] for t in ctx["trades"]} == {tid1, tid2}
+    # 同标签两笔 → 偏好只带 1 条
+    assert len(ctx["tag_prefs"]) == 1
+    assert ctx["tag_prefs"]["个股"] == "个股指引"
+    # 无指引标签：注明按一般纪律
+    svc.delete_tag_pref("个股")
+    ctx2 = svc.build_daily_context(date.today().isoformat())
+    assert "按一般投资纪律" in ctx2["tag_prefs"]["个股"]
+
+
+def test_normalize_daily_report_alignment():
+    trades = [
+        {"trade_id": 1, "code": "600000", "name": "A", "tag": "个股", "side": "buy",
+         "price": 10.0, "quantity": 100, "amount": 1000.0, "amount_cny": 1000.0,
+         "fee": 0.0, "trade_time": "2026-08-06 10:00:00"},
+        {"trade_id": 2, "code": "600519", "name": "B", "tag": "科技", "side": "sell",
+         "price": 100.0, "quantity": 10, "amount": 1000.0, "amount_cny": 1000.0,
+         "fee": 0.0, "trade_time": "2026-08-06 10:05:00"},
+    ]
+    # AI 只给了 trade 1 的逐笔、漏了 trade 2，且多给了一个未知 id
+    r = svc._normalize_daily_report(
+        {"score": 72, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": [],
+         "html": "<html>复盘</html>",
+         "trades": [{"trade_id": 1, "score": 85, "rating": "A", "comment": "好", "analysis": ""},
+                    {"trade_id": 99, "score": 10, "rating": "D", "comment": "未知", "analysis": ""}]},
+        trades,
+    )
+    # 每笔真实交易各一条、按输入顺序；未知 id 丢弃；漏掉的按默认分/评级补
+    assert [t["trade_id"] for t in r["trades"]] == [1, 2]
+    assert r["trades"][0]["score"] == 85.0 and r["trades"][0]["rating"] == "A"
+    assert r["trades"][1]["score"] == 50.0 and r["trades"][1]["rating"] == "C"
+    assert "code" in r["trades"][0] and "amount_cny" in r["trades"][0]   # 显示字段并入
+    assert r["html"] == "<html>复盘</html>"                                # HTML 报告透传
+
+
+def test_score_daily_persist_and_read(monkeypatch):
+    tid = _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {
+        "score": 75, "rating": "B", "summary": "ok", "advice": [], "risks": [], "reasons": [],
+        "trades": [{"trade_id": tid, "score": 80, "rating": "A", "comment": "符合偏好", "analysis": ""}],
+    })
+    d = date.today().isoformat()
+    result = svc.score_daily(d)
+    assert result is not None
+    assert result["report"]["score"] == 75.0
+    assert result["report"]["trades"][0]["comment"] == "符合偏好"
+
+    rep = svc.get_daily_report(d)
+    assert rep["report"]["trades"][0]["trade_id"] == tid
+    # 左目录：该日 ai 摘要存在
+    days = svc.list_daily_days()
+    assert any(x["score_date"] == d and x["ai"]["rating"] == "B" for x in days)
+
+
+def test_score_daily_no_trades_returns_none(monkeypatch):
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {})
+    # 无交易日：score_daily 返回 None 且不落库
+    d = "2026-01-01"
+    assert svc.score_daily(d) is None
+    assert svc.get_daily_report(d) is None
+
+
+def test_maybe_auto_score_daily_no_model_invalidates(monkeypatch):
+    # 还原真实 maybe_auto_score_daily，验证「无激活模型 → 只失效、不起线程」
+    monkeypatch.setattr(svc, "maybe_auto_score_daily", _REAL_MAYBE_AUTO)
+    tid = _seed_trade("600000", qty=100)
+    d = date.today().isoformat()
+    # 预置一个旧报告 → 无模型时 maybe_auto_score_daily 应删掉它（宁可"未评分"不留陈旧）
+    with get_conn() as c:
+        c.execute("INSERT INTO ai_daily_reports(score_date, report_json, model_name) VALUES(?,?,?)",
+                  (d, '{"score":10}', "old"))
+    svc.maybe_auto_score_daily(d)
+    assert svc.get_daily_report(d) is None
+
+
+def test_maybe_auto_score_daily_with_model_spawns(monkeypatch):
+    # 还原真实 maybe_auto_score_daily，验证「有激活模型且当日有交易 → 起线程打分」
+    monkeypatch.setattr(svc, "maybe_auto_score_daily", _REAL_MAYBE_AUTO)
+    _seed_trade("600000", qty=100)
+    d = date.today().isoformat()
+    _activate_mock_model()
+    calls = []
+
+    # 用同步 Thread 替身，保证确定性地执行后台打分目标（不依赖线程调度）
+    class _SyncThread:
+        def __init__(self, target, args=(), daemon=False):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(threading, "Thread", _SyncThread)
+    monkeypatch.setattr(svc, "score_daily", lambda date_: calls.append(date_) or {"score_date": date_, "report": {}})
+
+    svc.maybe_auto_score_daily(d)
+    assert calls == [d]
+
+
+# ============================================================ API 层
+
+def test_api_prefs_crud(client):
+    r = client.put("/api/ai-scoring/prefs/红利", json={"raw_pref": "喜欢高股息"})
+    assert r.status_code == 200
+    assert r.json()["data"]["status"] == "draft"
+    r = client.get("/api/ai-scoring/prefs")
+    data = r.json()["data"]
+    assert any(p["tag"] == "红利" for p in data["prefs"])
+    assert data["configured"] is False
+    r = client.delete("/api/ai-scoring/prefs/红利")
+    assert r.status_code == 200
+
+
+def test_api_portfolio_no_model(client):
+    g = client.get("/api/ai-scoring/portfolio").json()["data"]
+    assert g["configured"] is False and g["report"] is None
+    r = client.post("/api/ai-scoring/portfolio")
+    assert r.status_code == 400
+    assert "AI 模型" in r.json()["detail"]
+
+
+def test_api_daily_no_model(client):
+    _seed_trade("600000", qty=100)
+    r = client.post("/api/ai-scoring/daily", json={"date": date.today().isoformat()})
+    assert r.status_code == 400
+    assert "AI 模型" in r.json()["detail"]
+
+
+def test_api_portfolio_post_success(client, monkeypatch):
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {"score": 82, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": []})
+    r = client.post("/api/ai-scoring/portfolio")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["report"]["score"] == 82.0 and data["report"]["rating"] == "B"
+    # GET 读回（report 内含 report 子对象 + stale）
+    g = client.get("/api/ai-scoring/portfolio").json()["data"]
+    assert g["report"]["report"]["score"] == 82.0
+    assert g["report"]["stale"] is False
+
+
+def test_api_daily_post_success(client, monkeypatch):
+    tid = _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {
+        "score": 75, "rating": "B", "summary": "ok", "advice": [], "risks": [], "reasons": [],
+        "trades": [{"trade_id": tid, "score": 80, "rating": "A", "comment": "符合偏好", "analysis": ""}],
+    })
+    d = date.today().isoformat()
+    r = client.post("/api/ai-scoring/daily", json={"date": d})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["report"]["score"] == 75.0
+    assert data["report"]["trades"][0]["trade_id"] == tid
+    assert data["report"]["trades"][0]["rating"] == "A"
+    # 明细表字段并入
+    assert data["report"]["trades"][0]["code"] == "600000"
+
+
+def test_api_daily_get_after_score(client, monkeypatch):
+    tid = _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {
+        "score": 75, "rating": "B", "summary": "ok", "advice": [], "risks": [], "reasons": [],
+        "trades": [{"trade_id": tid, "score": 80, "rating": "A", "comment": "好", "analysis": ""}],
+    })
+    d = date.today().isoformat()
+    client.post("/api/ai-scoring/daily", json={"date": d})
+    g = client.get("/api/ai-scoring/daily", params={"date": d}).json()["data"]
+    assert g["configured"] is True
+    assert g["day"]["trades_count"] == 1
+    assert g["report"]["score"] == 75.0

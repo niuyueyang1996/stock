@@ -1,4 +1,5 @@
-"""数据库迁移测试：v1 旧库升级到 v2，新表/新列就位，交易/持仓/币种推断/回填不丢失。"""
+"""数据库迁移测试：v1 旧库升级到当前版本，新表/新列就位，交易/持仓/币种推断/回填不丢失，
+公式评分表（trade_score_snapshots/daily_scores）在 v5 被彻底移除。"""
 import sqlite3
 
 import pytest
@@ -7,7 +8,7 @@ import app.models.db as db
 
 
 def _create_v1_db(path):
-    """构造 v1 schema 的旧库（无 currency/fx_rate/amount_cny/trade_score_snapshots/fx_rate_cache 等）。"""
+    """构造 v1 schema 的旧库（无 currency/fx_rate/amount_cny/fx_rate_cache 等，且含旧公式评分表 daily_scores）。"""
     conn = sqlite3.connect(str(path))
     conn.executescript("""
     CREATE TABLE stocks (code TEXT PRIMARY KEY, name TEXT NOT NULL, market TEXT NOT NULL, list_date TEXT, tag TEXT);
@@ -51,17 +52,16 @@ def test_migration_v1_to_v2(tmp_path, monkeypatch):
         # 交易/股票数据不丢失
         assert c.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 2
         assert c.execute("SELECT COUNT(*) FROM stocks").fetchone()[0] == 2
-        # 新表/新列存在
+        # 新表/新列存在；公式评分表已被 v5 彻底移除
         tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-        assert "fx_rate_cache" in tables and "trade_score_snapshots" in tables
-        # 旧交易回填评分快照
-        assert c.execute("SELECT COUNT(*) FROM trade_score_snapshots").fetchone()[0] >= 1
-        # daily_scores.total_score 可空（覆盖不足）
-        info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_scores)").fetchall()}
-        assert info["total_score"]["notnull"] == 0
-        # 版本号升级到当前版本（4：五档资金流 + 自适应分档 P15/P40/P75）
+        assert "fx_rate_cache" in tables
+        assert "trade_score_snapshots" not in tables and "daily_scores" not in tables
+        # AI 评分三表就位
+        for t in ("tag_prefs", "ai_portfolio_reports", "ai_daily_reports"):
+            assert t in tables
+        # 版本号升级到当前版本（6：AI 评分表 + 组合报告按标签组合 tags_json）
         ver = c.execute("SELECT value FROM config WHERE key='db_schema_version'").fetchone()[0]
-        assert ver == "4"
+        assert ver == "6"
         info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_fundflow_cache)").fetchall()}
         for col in ("p50", "p80", "p95", "xs_net", "p15", "p40", "p75"):
             assert info[col]["name"] == col

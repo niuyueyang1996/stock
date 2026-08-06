@@ -44,7 +44,7 @@ def create_trade(body: TradeBody):
 
 @router.get("/trades")
 def list_trades(code: str | None = None):
-    """交易流水（可筛单股）。当日综合评分见 /api/scoring/daily。"""
+    """交易流水（可筛单股）。当日 AI 评分见 /api/ai-scoring/daily。"""
     return {"ok": True, "data": svc.list_trades(code)}
 
 

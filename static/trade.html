@@ -28,10 +28,10 @@
         <button class="btn primary" id="submitBtn" onclick="submitTrade()">提交</button>
         <button class="btn" id="cancelBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
         <button class="btn" id="adjustBtn" onclick="openCostAdjust()" title="直接调整持仓成本：补记漏记 / 分红除权摊薄">💰 调整成本</button>
-        <button class="btn" id="rebuildBtn" onclick="rebuildScores()" title="数据源更新后，重建全部交易日的综合评分">🔁 重建综合评分</button>
+        <button class="btn" id="aiScoreTodayBtn" onclick="aiScoreToday()" title="请求 AI 对今天录制的交易打分">🤖 AI 打分(今日)</button>
       </div>
       <div class="muted" id="formTip" style="margin-top:8px">
-        录入买卖操作自动更新持仓（移动加权成本），并对当日所有交易金额加权综合评分。空仓时可用「📥 一键导入持仓Excel」从汇总持仓.xlsx 恢复持仓。
+        录入买卖操作自动更新持仓（移动加权成本），新交易会由 AI 对该日自动打分（也可手动「🤖 AI 打分(今日)」）。空仓时可用「📥 一键导入持仓Excel」从汇总持仓.xlsx 恢复持仓。
       </div>
       <div id="importProgress" style="display:none;margin-top:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
@@ -89,17 +89,31 @@
     const sb = stockSearchInput();
     document.getElementById('searchBox').appendChild(sb);
 
-    async function rebuildScores() {
-      const btn = document.getElementById('rebuildBtn');
-      btn.disabled = true;
+    // 今日 AI 打分按钮
+    async function aiScoreToday() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      await scoreDay(date);
+    }
+
+    // 对某日执行 AI 打分（一次调用逐笔+汇总）
+    async function scoreDay(date) {
+      const btn = document.getElementById('aiScoreTodayBtn');
+      if (btn) btn.disabled = true;
       try {
-        const r = await api('/scoring/rebuild', { method: 'POST' });
-        toast(`已重建 ${r.rebuilt_days} 个交易日的综合评分`);
-        await loadPage();
+        const d = await api('/ai-scoring/daily', { method: 'POST', body: { date }, blocking: true });
+        _day = d.day;
+        _aiReport = d.report;
+        _aiConfigured = true;
+        activeDate = date;
+        renderDayDir();
+        renderDayDetail();
+        toast(`AI 打分完成：${d.report.score} 分（${d.report.rating}）`);
       } catch (e) {
-        toast('重建失败：' + e.message, 4000);
+        toast('AI 打分失败：' + e.message, 5000);
       } finally {
-        btn.disabled = false;
+        if (btn) btn.disabled = false;
       }
     }
 
@@ -244,27 +258,31 @@
     }
 
     let activeDate = null;
-    let _history = [];
+    let _days = [];          // [{score_date, trades_count, net_amount, ai:{...}|null}]
+    let _day = null;         // {score_date, trades_count, net_amount, trades:[...]}
+    let _aiReport = null;    // 当日 AI 报告（含 trades 数组）
+    let _aiConfigured = false;
 
-    // 渲染左侧可滚动的日期目录栏
+    // 渲染左侧可滚动的日期目录栏（AI 评分 / 未评分）
     function renderDayDir() {
       const dir = document.getElementById('dayDir');
       dir.querySelectorAll('.day-tab').forEach((t) => t.remove());
-      if (!_history.length) {
+      if (!_days.length) {
         dir.insertAdjacentHTML('beforeend',
-          '<div class="muted" style="padding:14px;font-size:12px">暂无评分，先录入交易</div>');
+          '<div class="muted" style="padding:14px;font-size:12px">暂无交易，先录入交易后 AI 打分</div>');
         return;
       }
-      _history.forEach((h) => {
+      _days.forEach((h) => {
+        const ai = h.ai;
         const tab = document.createElement('div');
         tab.className = 'day-tab' + (h.score_date === activeDate ? ' active' : '');
         tab.dataset.date = h.score_date;
         tab.innerHTML = `
           <div style="display:flex;align-items:center;gap:6px">
             <strong>${h.score_date}</strong>
-            <span class="badge ${h.rating || 'N'}">${h.rating || 'N/A'}</span>
+            ${ai ? `<span class="badge ${ai.rating || 'N'}">${ai.rating || 'N/A'}</span>` : '<span class="badge N">未评分</span>'}
             <span class="grow"></span>
-            <span style="font-weight:700">${h.total_score === null ? '—' : h.total_score}</span>
+            <span style="font-weight:700">${ai ? (ai.score == null ? '—' : ai.score) : '—'}</span>
           </div>
           <div class="muted" style="font-size:11px;margin-top:2px">${h.trades_count} 笔 · 净${h.net_amount >= 0 ? '买' : '卖'} ${fmtNum(Math.abs(h.net_amount))} 元</div>`;
         tab.onclick = () => selectDay(h.score_date);
@@ -280,91 +298,89 @@
       });
       document.getElementById('dayDetail').innerHTML = '<div class="empty" style="padding:60px">加载中…</div>';
       try {
-        const d = await api('/scoring/daily?date=' + date, { silent: true });
-        renderDayDetail(d);
+        const d = await api('/ai-scoring/daily?date=' + date, { silent: true });
+        _aiConfigured = d.configured;
+        _day = d.day;
+        _aiReport = d.report;
+        renderDayDetail();
       } catch (e) {
-        renderDayDetail(null);
+        _day = null; _aiReport = null;
+        renderDayDetail();
       }
     }
 
-    const STATUS_CN = { rated: '已评级', low_coverage: '覆盖不足', no_scoreable: '无可评分' };
-
-    // 渲染右侧选中日的完整详情
-    function renderDayDetail(daily) {
+    // 渲染右侧选中日的完整详情（AI 综合分 + 分析 + 每笔明细）
+    function renderDayDetail() {
       const el = document.getElementById('dayDetail');
-      if (!daily) {
-        el.innerHTML = '<div class="empty" style="padding:60px">该日暂无评分</div>';
+      if (!_day || !_day.trades_count) {
+        el.innerHTML = '<div class="empty" style="padding:60px">该日无交易</div>';
         return;
       }
-      const dir = daily.net_amount >= 0 ? '净买入' : '净卖出';
-      const statusCn = STATUS_CN[daily.status] || daily.status || '';
-      el.innerHTML = `
-        <div class="row" style="align-items:center;margin-bottom:18px;gap:12px">
-          <h2 style="margin:0">${daily.score_date} 综合评分</h2>
+      if (!_aiConfigured) {
+        el.innerHTML = aiNotConfiguredHtml() + `<h3 style="margin:14px 0 8px">每笔明细</h3>` + _dayTableHtml(null);
+        return;
+      }
+      const dir = _day.net_amount >= 0 ? '净买入' : '净卖出';
+      const r = _aiReport;
+      const header = r ? `
+        <div class="row" style="align-items:center;margin-bottom:14px;gap:12px">
+          <h2 style="margin:0">${_day.score_date} AI 综合评分</h2>
           <span class="grow"></span>
-          ${daily.estimated_count ? `<span class="muted" style="font-size:12px">${daily.estimated_count} 笔回填</span>` : ''}
-          <span class="badge ${daily.rating || 'N'}">${daily.rating || 'N/A'} ${daily.rating_name || ''}</span>
+          <span class="badge ${r.rating || 'N'}">${r.rating || 'N/A'} ${esc(r.rating_name || '')}</span>
         </div>
-        <div class="row" style="align-items:center;gap:28px;margin-bottom:18px">
-          <div style="font-size:56px;font-weight:700;line-height:1">${daily.total_score === null ? '—' : daily.total_score}</div>
+        <div class="row" style="align-items:center;gap:28px;margin-bottom:12px">
+          <div style="font-size:52px;font-weight:700;line-height:1">${r.score == null ? '—' : r.score}</div>
           <div class="muted" style="font-size:13px;line-height:1.9">
-            ${daily.trades_count} 笔交易 · ${dir} ${fmtNum(Math.abs(daily.net_amount))} 元<br>
-            覆盖率 ${daily.coverage != null ? Math.round(daily.coverage * 100) + '%' : '—'}
-            · 模型 v${daily.model_version || '—'}${statusCn ? ' · ' + statusCn : ''}<br>
-            更新于 ${daily.updated_at}
+            ${_day.trades_count} 笔交易 · ${dir} ${fmtNum(Math.abs(_day.net_amount))} 元
           </div>
         </div>
-        <div class="chart sm" id="detailFactor" style="height:200px"></div>
-        <h3 style="margin:16px 0 8px">每笔明细</h3>
-        <div style="overflow-x:auto">
-          <table>
-            <thead><tr><th>时间</th><th>代码/名称</th><th>方向</th><th>价格</th><th>数量</th><th>金额(¥)</th><th>单笔分</th><th>评级</th><th>覆盖</th><th>状态</th></tr></thead>
-            <tbody>${_detailRowsHtml(daily)}</tbody>
-          </table>
-        </div>`;
-
-      const chart = initChart(document.getElementById('detailFactor'));
-      if (chart && daily.factors && daily.factors.length) {
-        chart.setOption({
-          title: { text: '综合因子（金额加权）', left: 'center', textStyle: { fontSize: 13 } },
-          tooltip: { trigger: 'axis' },
-          grid: { left: 90, right: 40, top: 36, bottom: 26 },
-          xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}' } },
-          yAxis: { type: 'category', data: daily.factors.map((f) => f.name) },
-          series: [{
-            type: 'bar', barWidth: 14,
-            data: daily.factors.map((f) => ({
-              value: f.score,
-              itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
-            })),
-            label: { show: true, position: 'right' },
-          }],
-        });
-      }
+        ${aiScoreHeader(r)}
+        ${renderAiReportBlock(r)}` : `
+        <div class="row" style="align-items:center;margin-bottom:14px;gap:12px">
+          <h2 style="margin:0">${_day.score_date} 交易</h2>
+          <span class="grow"></span>
+          <span class="badge N">未评分</span>
+        </div>
+        <div class="muted" style="font-size:13px;margin-bottom:12px">该日尚未 AI 评分。</div>`;
+      el.innerHTML = header + `
+        <div style="margin:12px 0">${aiScoreButtonHtml(r ? '重新打分' : '🤖 AI 打分')}</div>
+        <h3 style="margin:10px 0 8px">每笔明细</h3>
+        ${_dayTableHtml(r)}`;
+      const btn = el.querySelector('[data-aiscore-btn]');
+      if (btn) btn.onclick = () => scoreDay(_day.score_date);
+      if (r) wireAiHtmlButton(el, r);
     }
 
-    // 单日明细表格行（单笔分/评级/覆盖率/快照状态），供主视图与历史目录展开复用
-    const SNAP_STATUS_CN = { frozen: '冻结', estimated: '回填', insufficient: '数据不足' };
-
-    function _detailRowsHtml(daily) {
-      return (daily.detail || []).map((d) => {
-        const sideText = d.side === 'buy' ? '买入' : d.side === 'sell' ? '卖出' : '调整';
-        const sideCls = d.side === 'buy' ? 'up' : d.side === 'sell' ? 'down' : 'muted';
-        const isHk = /^\d{5}$/.test(d.code);           // 港股：价格港币、金额人民币
-        const amtCny = d.amount_cny != null ? d.amount_cny : d.amount;
-        const statusCn = SNAP_STATUS_CN[d.status] || d.status || '';
-        return `<tr>
-          <td>${(d.trade_time || '').slice(11) || ''}</td>
-          <td><a href="/static/stock.html?code=${d.code}">${d.name || d.code}</a>${isHk ? '<span class="muted" style="font-size:10px"> 港</span>' : ''}</td>
-          <td class="${sideCls}">${sideText}</td>
-          <td>${fmtNum(d.price)}${isHk ? '<span class="muted" style="font-size:10px"> 港币</span>' : ''}</td>
-          <td>${fmtNum(d.quantity)}</td>
-          <td>${fmtNum(amtCny)}</td>
-          <td>${d.total_score === null ? '—' : d.total_score}</td>
-          <td><span class="badge ${d.rating || 'N'}">${d.rating || 'N/A'}</span></td>
-          <td class="muted" title="覆盖率">${d.coverage != null ? Math.round(d.coverage * 100) + '%' : ''}</td>
-          <td class="muted" title="快照状态">${statusCn}</td>`;
-      }).join('');
+    // 每笔明细表：交易字段 + AI单笔分/评级/AI评论（来自报告 trades 数组）
+    function _dayTableHtml(report) {
+      const rows = _day.trades || [];
+      if (!rows.length) return '<div class="empty" style="padding:20px">该日无买卖交易</div>';
+      const byId = {};
+      ((report && report.trades) || []).forEach((t) => { byId[t.trade_id] = t; });
+      return `<div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>时间</th><th>代码/名称</th><th>标签</th><th>方向</th><th>价格</th><th>数量</th><th>金额(¥)</th><th>AI单笔分</th><th>评级</th><th>AI评论</th></tr></thead>
+          <tbody>${rows.map((d) => {
+            const sideText = d.side === 'buy' ? '买入' : '卖出';
+            const sideCls = d.side === 'buy' ? 'up' : 'down';
+            const isHk = /^\d{5}$/.test(d.code);           // 港股：价格港币、金额人民币
+            const amtCny = d.amount_cny != null ? d.amount_cny : d.amount;
+            const ai = byId[d.trade_id];
+            return `<tr>
+              <td>${(d.trade_time || '').slice(11) || ''}</td>
+              <td><a href="/static/stock.html?code=${d.code}">${esc(d.name || d.code)}</a>${isHk ? '<span class="muted" style="font-size:10px"> 港</span>' : ''}</td>
+              <td><span class="tag-badge">${esc(d.tag || '')}</span></td>
+              <td class="${sideCls}">${sideText}</td>
+              <td>${fmtNum(d.price)}${isHk ? '<span class="muted" style="font-size:10px"> 港币</span>' : ''}</td>
+              <td>${fmtNum(d.quantity)}</td>
+              <td>${fmtNum(amtCny)}</td>
+              <td>${ai ? (ai.score == null ? '—' : fmtNum(ai.score)) : '—'}</td>
+              <td>${ai ? `<span class="badge ${ai.rating || 'N'}">${ai.rating || 'N/A'}</span>` : ''}</td>
+              <td class="muted" style="max-width:280px;min-width:120px">${ai ? esc(ai.comment || '') : ''}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>`;
     }
 
     function renderTrades(trades) {
@@ -500,19 +516,20 @@
 
     async function loadPage() {
       try {
-        const [history, trades] = await Promise.all([
-          api('/scoring/history', { blocking: true }),
+        const [daysData, trades] = await Promise.all([
+          api('/ai-scoring/daily-reports', { blocking: true }),
           api('/trades', { blocking: true }),
         ]);
-        _history = history || [];
+        _days = (daysData && daysData.days) || [];
+        _aiConfigured = !!(daysData && daysData.configured);
         renderTrades(trades);
         renderDayDir();
-        if (_history.length) {
-          activeDate = _history[0].score_date;
+        if (_days.length) {
+          activeDate = _days[0].score_date;
           await selectDay(activeDate);
         } else {
           document.getElementById('dayDetail').innerHTML =
-            '<div class="empty" style="padding:60px">暂无评分，先在上方录入交易</div>';
+            '<div class="empty" style="padding:60px">暂无交易，先在上方录入交易</div>';
         }
       } catch (e) {
         toast('加载失败：' + e.message);

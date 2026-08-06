@@ -45,9 +45,10 @@
             <tbody id="pfGrowthBody"></tbody>
           </table>
         </div>
-        <div class="panel" id="scorePanel" style="display:none">
-          <h2>组合动态打分 <span class="sub">界面指标加权，缺失因子自动归一化；分散度权重暂为 0</span></h2>
-          <div class="chart sm" id="scoreFactorChart" style="height:280px"></div>
+        <div class="panel" id="aiScorePanel">
+          <h2>🤖 AI 组合打分 <span class="sub" id="aiScoreSub">AI 直接给出得分与评级，依据全部持仓汇总 + 各标签偏好</span></h2>
+          <div id="aiScoreBody"></div>
+          <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
         </div>
         <div class="panel" id="gaugePanel">
           <h2>综合估值分位（1y，穿透式打包序列）</h2>
@@ -129,6 +130,8 @@
     let tagCards = [];              // 全持仓按标签聚合（{tag,value_cny,day_pnl,count}，市值降序）
     let selectedTags = new Set();
     let tagsLoaded = false;
+    let aiPortfolioReport = null;   // 最新组合 AI 报告（GET /ai-scoring/portfolio）
+    let aiConfigured = false;
 
     function tagsQS() {
       if (!allTags.length) return '';
@@ -163,8 +166,9 @@
         <div class="tag-card ${on ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
           <div class="tc-head">
             <span class="tc-check">${on ? '✓' : ''}</span>
-            <span class="tc-name">${c.tag}</span>
+            <span class="tc-name">${esc(c.tag)}</span>
             <span class="tc-count">${c.count}只</span>
+            <span class="link muted" data-pref="${esc(c.tag)}" title="设置该标签偏好（AI 打分依据）" style="font-size:12px">⚙偏好</span>
           </div>
           <div class="tc-val">¥${fmtNum(c.value_cny)}</div>
           <div class="tc-day ${cls(d)}">${d == null ? '今 —' : '今 ' + signed(d)}</div>
@@ -176,6 +180,12 @@
           if (selectedTags.has(tag)) selectedTags.delete(tag); else selectedTags.add(tag);
           renderTagSidebar();
           loadPage();
+        });
+      });
+      list.querySelectorAll('[data-pref]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();                       // 不触发标签多选切换
+          openTagPrefModal(el.dataset.pref, () => { renderTagPrefList(); renderAiScore(); });
         });
       });
       document.getElementById('tagCount').textContent = `已选 ${selectedTags.size}/${allTags.length}`;
@@ -199,8 +209,13 @@
       right.style.display = '';
       noSel.style.display = 'none';
       try {
-        const p = await api('/portfolio' + tagsQS(), { blocking: true });
+        const [p, aiData] = await Promise.all([
+          api('/portfolio' + tagsQS(), { blocking: true }),
+          api('/ai-scoring/portfolio' + tagsQS(), { silent: true }).catch(() => ({ configured: false, report: null })),
+        ]);
         lastPortfolio = p;
+        aiConfigured = aiData.configured;
+        aiPortfolioReport = aiData.report || null;
         if (!tagsLoaded) {                               // 首次加载后默认全选
           tagsLoaded = true;
           allTags = p.all_tags || [];
@@ -210,12 +225,13 @@
         renderTagSidebar();
         renderSummary(p);
         renderPfGrowth(p.portfolio);
-        renderScore(p);
+        renderAiScore();
         renderGauges(p);
         renderCharts(p);
         renderTable(p);
         renderSeries(p);
         renderPfFlow();
+        renderTagPrefList();
       } catch (e) {
         document.getElementById('emptyTip').style.display = 'block';
       }
@@ -224,7 +240,10 @@
     function renderSummary(p) {
       const pf = p.portfolio;
       const main = [
-        ['组合打分', (pf.score == null ? '—' : fmtNum(pf.score)) + (pf.score_rating ? ' ' + pf.score_rating : '')],
+        ['AI 组合打分',
+          aiPortfolioReport ? `${fmtNum(aiPortfolioReport.report.score)} ${aiPortfolioReport.report.rating}` : (aiConfigured ? '—' : '未配置 AI'),
+          null,
+          aiPortfolioReport && aiPortfolioReport.stale ? '组合已变化，建议重新打分' : '', aiPortfolioReport && aiPortfolioReport.stale ? 'down' : ''],
         ['总市值', '¥' + fmtNum(pf.total_value), null,
           pf.day_pnl != null ? '今日 ' + signed(pf.day_pnl) + ' 元 · ' + signed(pf.day_pnl_pct) + '%' : '', cls(pf.day_pnl)],
         ['总成本', '¥' + fmtNum(pf.total_cost)],
@@ -264,43 +283,75 @@
       }).join('');
     }
 
-    function renderScore(p) {
-      const panel = document.getElementById('scorePanel');
-      const factors = p.portfolio.score_factors || [];
-      panel.style.display = factors.length ? '' : 'none';
-      if (!factors.length) return;
-      const chart = initChart(document.getElementById('scoreFactorChart'));
-      if (!chart) return;
-      const pf = p.portfolio;
-      // 只显示参与打分的因子（used=True），标签与条形严格一一对应
-      const used = factors.filter((f) => f.used && f.score != null);
-      const names = used.map((f) => f.name);
-      const scores = used.map((f) => ({
-        value: f.score,
-        raw: f.raw,
-        itemStyle: { color: f.score >= 75 ? '#2f9e44' : f.score <= 25 ? '#e03131' : '#2563eb' },
-      }));
-      chart.setOption({
-        title: {
-          text: `综合得分 ${pf.score == null ? '—' : pf.score} ${pf.score_rating || ''}`,
-          left: 'center', textStyle: { fontSize: 14 },
-        },
-        tooltip: {
-          trigger: 'axis',
-          formatter: (ps) => {
-            const i = ps[0].dataIndex;
-            return `${names[i]}：${scores[i].value} 分${scores[i].raw != null ? `（原始值 ${scores[i].raw}）` : ''}`;
-          },
-        },
-        grid: { left: 120, right: 40, top: 44, bottom: 30 },
-        xAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}' } },
-        yAxis: { type: 'category', data: names },
-        series: [{
-          type: 'bar', barWidth: 16,
-          data: scores,
-          label: { show: true, position: 'right', formatter: (p) => p.value },
-        }],
-      });
+    // ============ AI 组合打分 ============
+
+    // 渲染 #aiScoreBody：未配置 / 未评分 / 已评分（含 stale 提示）
+    function renderAiScore() {
+      const body = document.getElementById('aiScoreBody');
+      const sub = document.getElementById('aiScoreSub');
+      if (!aiConfigured) {
+        sub.textContent = '';
+        body.innerHTML = aiNotConfiguredHtml();
+        return;
+      }
+      if (!aiPortfolioReport) {
+        sub.textContent = '尚未评分';
+        const tagNote = allTags.length && selectedTags.size < allTags.length ? '当前标签筛选' : '当前组合';
+        body.innerHTML = `<div class="muted" style="font-size:13px;padding:6px 0">尚未对${tagNote}打分。</div>` +
+          aiScoreButtonHtml('🤖 AI 打分');
+        body.querySelector('[data-aiscore-btn]').onclick = runPortfolioAi;
+        return;
+      }
+      const r = aiPortfolioReport.report;
+      sub.textContent = aiPortfolioReport.stale
+        ? '组合已变化，建议重新打分'
+        : `打分于 ${(aiPortfolioReport.updated_at || aiPortfolioReport.created_at || '').slice(0, 16)}`;
+      const staleBadge = aiPortfolioReport.stale ? '<span class="badge N">已变化</span>' : '';
+      body.innerHTML = aiScoreHeader(r) + staleBadge + renderAiReportBlock(r) + aiScoreButtonHtml('重新打分');
+      body.querySelector('[data-aiscore-btn]').onclick = runPortfolioAi;
+      wireAiHtmlButton(body, r);
+    }
+
+    // 手动触发组合 AI 打分（跟随当前标签筛选）
+    async function runPortfolioAi() {
+      try {
+        const d = await api('/ai-scoring/portfolio' + tagsQS(), { method: 'POST', blocking: true });
+        aiPortfolioReport = { report: d.report, profile_hash: d.profile_hash, model_name: d.model_name,
+                              created_at: d.created_at, updated_at: d.created_at, stale: false };
+        aiConfigured = true;
+        renderSummary(lastPortfolio);
+        renderAiScore();
+        renderTagPrefList();
+        toast(`AI 组合打分完成：${d.report.score} 分（${d.report.rating}）`);
+      } catch (e) {
+        toast('AI 打分失败：' + e.message, 5000);
+      }
+    }
+
+    // 标签偏好列表（各标签偏好状态 + 编辑入口）
+    async function renderTagPrefList() {
+      const el = document.getElementById('tagPrefList');
+      try {
+        const data = await api('/ai-scoring/prefs', { silent: true });
+        const byTag = {};
+        (data.prefs || []).forEach((p) => { byTag[p.tag] = p; });
+        const chips = allTags.map((t) => {
+          const p = byTag[t];
+          const st = p
+            ? (p.status === 'confirmed' ? '<span class="badge A">已确认</span>' : '<span class="badge C">待确认</span>')
+            : '<span class="badge N">未设置</span>';
+          return `<button class="btn" data-pref-tag="${esc(t)}" style="font-size:12px">${esc(t)} ${st}</button>`;
+        }).join('');
+        el.innerHTML = `
+          <div style="font-size:13px;font-weight:700;margin-bottom:6px">标签偏好
+            <span class="muted" style="font-weight:400;font-size:11px">评分依据各标签已确认的评分指引，点击编辑</span></div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${chips || '<span class="muted" style="font-size:12px">暂无标签</span>'}</div>`;
+        el.querySelectorAll('[data-pref-tag]').forEach((b) => {
+          b.onclick = () => openTagPrefModal(b.dataset.prefTag, () => { renderTagPrefList(); renderAiScore(); });
+        });
+      } catch (e) {
+        el.innerHTML = '';
+      }
     }
 
     function gauge(el, value, name, color) {
