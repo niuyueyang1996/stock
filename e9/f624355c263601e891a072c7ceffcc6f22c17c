@@ -1,0 +1,24 @@
+packaging/windows/build.ps1
+  s_0e9a490e4e5bf6::t_12396628496adb 10,35,40,51,56,58,66,71,75,81,87,91,107,111,114,120-121
+tests/test_packaging.py
+  s_0e9a490e4e5bf6::t_338d9b59168945 115-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "e9f624355c263601e891a072c7ceffcc6f22c17c",
+  "prompts": {},
+  "logical_commit_id": "e9f624355c263601e891a072c7ceffcc6f22c17c",
+  "sessions": {
+    "s_0e9a490e4e5bf6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd4d1-d913-7501-ad60-957977067f54",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 23,
+      "total_deletions": 17
+    }
+  }
+}
