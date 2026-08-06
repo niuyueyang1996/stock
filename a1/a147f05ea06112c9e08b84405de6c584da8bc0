@@ -1,0 +1,115 @@
+README.md
+  s_0e9a490e4e5bf6::t_72cedb7692e71b 71,249
+  s_0e9a490e4e5bf6::t_88ed32176f5147 78-95,174,235-236,268
+  s_0e9a490e4e5bf6::t_a5101888bb9ea1 102
+app/version.py
+  s_0e9a490e4e5bf6::t_a0c8ff8639774a 1-6
+static/stock.html
+  s_0e9a490e4e5bf6::t_bd86b93440c101 8
+requirements-runtime.txt
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-10
+app/main.py
+  s_0e9a490e4e5bf6::t_a0c8ff8639774a 9,13,24,70,72-76,78,99-100
+static/trade.html
+  s_0e9a490e4e5bf6::t_bd86b93440c101 8
+static/index.html
+  s_0e9a490e4e5bf6::t_bd86b93440c101 8
+app/config.py
+  s_0e9a490e4e5bf6::t_a0c8ff8639774a 2-3,6-7,9-38,40-42
+packaging/windows/build.ps1
+  s_0e9a490e4e5bf6::t_877732cc85e104 96
+  s_0e9a490e4e5bf6::t_ac7eb4a366bbbb 1-24,26,28-54,57-92,99-109,111-125
+  s_0e9a490e4e5bf6::t_98a3824ad9fc48 55-56
+  s_0e9a490e4e5bf6::t_4c9c755d1b2a19 25,93-95,97-98,110
+  s_0e9a490e4e5bf6::t_16aef2cc6273a1 27
+.github/workflows/windows-installer.yml
+  s_0e9a490e4e5bf6::t_ac7eb4a366bbbb 1-63
+requirements-dev.txt
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-5
+.gitignore
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 11-13
+run.sh
+  s_0e9a490e4e5bf6::t_ac7eb4a366bbbb 49
+CLAUDE.md
+  s_0e9a490e4e5bf6::t_88ed32176f5147 9,40,100-101
+  s_0e9a490e4e5bf6::t_a5101888bb9ea1 41
+  s_0e9a490e4e5bf6::t_72cedb7692e71b 112
+tests/test_packaging.py
+  s_0e9a490e4e5bf6::t_dd499da81bdb09 3-41,53-66,69
+  s_0e9a490e4e5bf6::t_5c08c7155f0921 67-68,70-82
+  s_0e9a490e4e5bf6::t_74801c278e7c33 1,42-52,83-84,105-114
+  s_0e9a490e4e5bf6::t_449b0f9f186a56 85-92,99-104
+  s_0e9a490e4e5bf6::t_4824401906b2ce 2,93-98
+requirements.txt
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-2
+packaging/windows/README.md
+  s_0e9a490e4e5bf6::t_88ed32176f5147 1-17,19-42
+  s_0e9a490e4e5bf6::t_4c9c755d1b2a19 18
+start.cmd
+  s_0e9a490e4e5bf6::t_ac7eb4a366bbbb 76
+app/windows_launcher.py
+  s_0e9a490e4e5bf6::t_126e14865665e4 171,173-178,180,184-194,464-467,469
+  s_0e9a490e4e5bf6::t_513146f22bc01d 480-490
+  s_0e9a490e4e5bf6::t_33ec5a1d1f81af 182-183,233-254,492
+  s_0e9a490e4e5bf6::t_94d2579950d576 303-306
+  s_0e9a490e4e5bf6::t_42faf7c23287c9 404-409,411-412,414-421,424-428
+  s_0e9a490e4e5bf6::t_e940ec0f51b07e 302,308-312
+  s_0e9a490e4e5bf6::t_c9db3a8a3bd16e 401-403,437-441,463
+  s_0e9a490e4e5bf6::t_dd499da81bdb09 1-170,172,179,181,195-232,255-301,307,313-400,410,413,422-423,429-436,442-462,468,470-479,491,493-520
+packaging/windows/generate_icon.py
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-34
+app/api/system.py
+  s_0e9a490e4e5bf6::t_a0c8ff8639774a 9,63-68
+packaging/windows/StockAnalyzer.iss
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-9,13-30,32-60,87-103
+  s_0e9a490e4e5bf6::t_513146f22bc01d 61-65,86
+  s_0e9a490e4e5bf6::t_16aef2cc6273a1 10-12,31
+  s_0e9a490e4e5bf6::t_287c8ad905e90e 66-85
+static/portfolio.html
+  s_0e9a490e4e5bf6::t_bd86b93440c101 8
+packaging/windows/StockAnalyzer.spec
+  s_0e9a490e4e5bf6::t_744cd20c6e36cb 1-10,12-44,46-55,57-59
+  s_0e9a490e4e5bf6::t_4824401906b2ce 45,56
+  s_0e9a490e4e5bf6::t_33ec5a1d1f81af 11
+static/vendor/echarts.min.js
+  s_0e9a490e4e5bf6::t_8f65ee04bcdf7a 1-45
+.idea/.gitignore
+  s_fc28265c948f97::t_6fea0bd0911ed2 1-10
+.idea/modules.xml
+  s_fc28265c948f97::t_c5b8cef9db860d 1-8
+.idea/stock.iml
+  s_fc28265c948f97::t_96665829c77563 1-11
+.idea/vcs.xml
+  s_fc28265c948f97::t_eeca2d4f1bf636 1-6
+packaging/windows/requirements-windows.lock
+  s_0e9a490e4e5bf6::t_29f1ff2a8917bc 1-59
+static/vendor/README.md
+  s_0e9a490e4e5bf6::t_d97db15d0a4aa3 1-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "a1a147f05ea06112c9e08b84405de6c584da8bc0",
+  "prompts": {},
+  "logical_commit_id": "a1a147f05ea06112c9e08b84405de6c584da8bc0",
+  "sessions": {
+    "s_0e9a490e4e5bf6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd4d1-d913-7501-ad60-957977067f54",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 1239,
+      "total_deletions": 92
+    },
+    "s_fc28265c948f97": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd129-cbe0-7ae3-8759-edb7a8de2c64",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
