@@ -126,6 +126,54 @@ def get_quantile_asof(code: str, period: str, as_of: str):
 
 # ---------- 日级资金流缓存 ----------
 
+def upsert_daily_fundflow(code: str, trade_date: str, flow, bands: dict | None = None) -> None:
+    """写当日五档资金流（UPSERT 覆盖，盘中可多次刷新）。flow: FundflowDay；bands: {p50,p80,p95}。"""
+    bands = bands or {}
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO daily_fundflow_cache(code, trade_date, netamount, main_net,
+                 super_large_net, large_net, medium_net, small_net, main_net_pct, p50, p80, p95)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(code, trade_date) DO UPDATE SET
+                 netamount=excluded.netamount, main_net=excluded.main_net,
+                 super_large_net=excluded.super_large_net, large_net=excluded.large_net,
+                 medium_net=excluded.medium_net, small_net=excluded.small_net,
+                 main_net_pct=excluded.main_net_pct,
+                 p50=excluded.p50, p80=excluded.p80, p95=excluded.p95""",
+            (code, trade_date, flow.netamount, flow.main_net,
+             flow.super_large_net, flow.large_net, flow.medium_net, flow.small_net,
+             flow.main_net_pct, bands.get("p50"), bands.get("p80"), bands.get("p95")),
+        )
+
+
+def upsert_fundflow_min(code: str, trade_date: str, points: list) -> None:
+    """批量写当日分时五档资金流（1 分钟基础粒度，UPSERT 覆盖同 ts 行）。points: [FundflowPoint]。"""
+    if not points:
+        return
+    with get_conn() as c:
+        c.executemany(
+            """INSERT INTO fundflow_15m_cache(code, trade_date, ts, main_net,
+                 super_large_net, large_net, medium_net, small_net)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(code, trade_date, ts) DO UPDATE SET
+                 main_net=excluded.main_net, super_large_net=excluded.super_large_net,
+                 large_net=excluded.large_net, medium_net=excluded.medium_net,
+                 small_net=excluded.small_net""",
+            [(code, trade_date, p.ts, p.main_net, p.super_large_net, p.large_net, p.medium_net, p.small_net)
+             for p in points],
+        )
+
+
+def get_fundflow_min(code: str, trade_date: str) -> list:
+    """读当日分时五档资金流（1 分钟基础，按 ts 升序），返回 dict 列表。"""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM fundflow_15m_cache WHERE code=? AND trade_date=? ORDER BY ts",
+            (code, trade_date),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_daily_fundflow(code: str, trade_date: str | None = None):
     """指定日或最近一条资金流缓存。"""
     with get_conn() as c:

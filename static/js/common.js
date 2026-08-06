@@ -10,6 +10,14 @@ function fmtPct(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
   return Number(n).toFixed(2) + '%';
 }
+// 金额智能转万/亿（资金流等大额展示用）
+function fmtFlow(v) {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(2) + '亿';
+  if (a >= 1e4) return (v / 1e4).toFixed(2) + '万';
+  return Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
 // A股颜色：涨红跌绿
 function cls(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return 'muted';
@@ -99,22 +107,26 @@ const REFRESH_OPTIONS = {
   dynamic: [
     ['price', '实时价格（分钟级）'],
     ['valuation', '当前估值（PE/PB/股息率/市值）'],
+    ['flow', '当日资金流（分笔拉取）'],
   ],
   full: [
     ['bars', '日K历史（全量重拉覆盖）'],
     ['financials', '财务数据（净利/净资产/EPS/支付率）'],
     ['valuation', '估值分位（百度序列+1y/3y/5y分位+实时估值）'],
     ['fx', '港股汇率（HKD/CNY）'],
+    ['flow', '当日资金流（分笔拉取）'],
     ['portfolio', '组合综合序列重算'],
   ],
   stock_dynamic: [
     ['price', '实时价格（分钟级）'],
     ['valuation', '当前估值（PE/PB/股息率/市值）'],
+    ['flow', '当日资金流（分笔拉取）'],
   ],
   stock_full: [
     ['bars', '日K历史（全量重拉覆盖）'],
     ['financials', '财务数据（净利/净资产/EPS/支付率）'],
     ['valuation', '估值分位（百度序列+1y/3y/5y分位+实时估值）'],
+    ['flow', '当日资金流（分笔拉取）'],
   ],
 };
 

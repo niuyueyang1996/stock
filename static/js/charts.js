@@ -135,13 +135,13 @@ function fundflowBars(el, latest) {
     ['小单', latest.small_net],
   ];
   chart.setOption({
-    title: { text: '全天五档资金净流入（元）', left: 'center', textStyle: { fontSize: 14 } },
+    title: { text: '全天五档资金净流入', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: (ps) => {
       const p = ps[0];
-      return `${p.name}<br>净流入 ${fmtNum(p.value)} 元`;
+      return `${p.name}<br>净流入 ${fmtFlow(p.value)}`;
     } },
-    grid: { left: 70, right: 40, top: 40, bottom: 30 },
-    xAxis: { type: 'value', axisLabel: { formatter: (v) => (v / 1e8).toFixed(2) + '亿' } },
+    grid: { left: 70, right: 50, top: 40, bottom: 30 },
+    xAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     yAxis: { type: 'category', data: items.map((i) => i[0]), inverse: true },
     series: [{
       type: 'bar', barWidth: 16,
@@ -149,7 +149,7 @@ function fundflowBars(el, latest) {
         value: v,
         itemStyle: { color: v >= 0 ? '#e03131' : '#2f9e44' },
       })),
-      label: { show: true, position: 'right', formatter: (p) => fmtNum(p.value) },
+      label: { show: true, position: 'right', formatter: (p) => fmtFlow(p.value) },
     }],
   });
   return chart;
@@ -396,16 +396,85 @@ function valuationChart(el, series, opts) {
   return chart;
 }
 
+// 前端 1 分钟基础重采样到目标窗口（与后端 app/data/fundflow.resample_points 同口径）
+function resampleFlow(points, windowMin) {
+  if (windowMin <= 1) return points;
+  const buckets = new Map();
+  for (const p of points) {
+    const [h, m] = p.ts.split(':').map(Number);
+    const start = Math.floor((h * 60 + m) / windowMin) * windowMin;
+    const key = String(Math.floor(start / 60)).padStart(2, '0') + ':' + String(start % 60).padStart(2, '0');
+    if (!buckets.has(key)) buckets.set(key, { ts: key, small_net: 0, medium_net: 0, large_net: 0, super_large_net: 0, main_net: 0 });
+    const b = buckets.get(key);
+    b.small_net += p.small_net;
+    b.medium_net += p.medium_net;
+    b.large_net += p.large_net;
+    b.super_large_net += p.super_large_net;
+    b.main_net += p.main_net;
+  }
+  return [...buckets.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1));
+}
+
+// 分时五档资金流【累积】折线：每分钟净流入逐段累加，看清整体趋势，不再波来波去。
+// 主力线加粗，金额智能转万/亿，tooltip 显示到该时刻的累积净流入。
+function fundflowIntraday(el, points, window) {
+  const chart = initChart(el);
+  if (!chart) return null;
+  const ts = points.map((p) => p.ts);
+  const KEYS = ['main_net', 'super_large_net', 'large_net', 'medium_net', 'small_net'];
+  const cum = {};
+  for (const k of KEYS) {
+    let s = 0;
+    cum[k] = points.map((p) => (s += Math.round(p[k])));
+  }
+  const series = [
+    { name: '小单', type: 'line', smooth: true, symbol: 'none', data: cum.small_net, lineStyle: { width: 1.2, color: '#adb5bd' } },
+    { name: '中单', type: 'line', smooth: true, symbol: 'none', data: cum.medium_net, lineStyle: { width: 1.2, color: '#74c0fc' } },
+    { name: '大单', type: 'line', smooth: true, symbol: 'none', data: cum.large_net, lineStyle: { width: 1.2, color: '#f08c00' } },
+    { name: '特大单', type: 'line', smooth: true, symbol: 'none', data: cum.super_large_net, lineStyle: { width: 1.2, color: '#e03131' } },
+    { name: '主力', type: 'line', smooth: true, symbol: 'none', data: cum.main_net,
+      lineStyle: { width: 2.5, color: '#1a1a2e' },
+      markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
+  ];
+  chart.setOption({
+    title: { text: '分时资金流（' + window + '分钟 · 累积净流入）', left: 'center', textStyle: { fontSize: 14 } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        return [
+          ts[i],
+          '主力   ' + fmtFlow(cum.main_net[i]),
+          '特大单 ' + fmtFlow(cum.super_large_net[i]),
+          '大单   ' + fmtFlow(cum.large_net[i]),
+          '中单   ' + fmtFlow(cum.medium_net[i]),
+          '小单   ' + fmtFlow(cum.small_net[i]),
+        ].join('<br>');
+      },
+    },
+    legend: { data: ['主力', '特大单', '大单', '中单', '小单'], top: 28 },
+    grid: { left: 70, right: 30, top: 60, bottom: 40 },
+    xAxis: { type: 'category', data: ts, axisLabel: { interval: 'auto' } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    series,
+  });
+  return chart;
+}
+
 // 历史主力资金净流入折线
 function fundflowLine(el, history) {
   const chart = initChart(el);
   if (!chart) return null;
   chart.setOption({
-    title: { text: '近30日主力净流入（亿元）', left: 'center', textStyle: { fontSize: 14 } },
-    tooltip: { trigger: 'axis' },
+    title: { text: '近30日主力净流入', left: 'center', textStyle: { fontSize: 14 } },
+    tooltip: { trigger: 'axis', formatter: (ps) => {
+      const p = ps[0];
+      return `${p.axisValue}<br>主力净流入 ${fmtFlow(p.value)}`;
+    } },
     grid: { left: 70, right: 30, top: 40, bottom: 30 },
     xAxis: { type: 'category', data: history.map((h) => h.trade_date), boundaryGap: false },
-    yAxis: { type: 'value', axisLabel: { formatter: (v) => (v / 1e8).toFixed(1) + '亿' } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     series: [{
       type: 'line', smooth: true, symbol: 'none', data: history.map((h) => h.main_net),
       lineStyle: { width: 2, color: '#2563eb' },

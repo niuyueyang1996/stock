@@ -10,6 +10,7 @@ from app.data.base import auto_tag, is_etf_code, is_hk_code
 from app.data.cache import (
     get_daily_fundflow,
     get_daily_fundflows,
+    get_fundflow_min,
     get_expected_growth,
     get_expected_payout,
     get_expected_revenue_growth,
@@ -21,6 +22,7 @@ from app.data.cache import (
     upsert_expected_payout,
     upsert_expected_revenue_growth,
 )
+from app.data.fundflow import FUNDFLOW_WINDOWS, FundflowPoint, resample_points
 from app.services.quote import get_quote
 from app.services.holdings import set_tag
 
@@ -294,11 +296,12 @@ def stock_latest_dividend(code: str):
 
 
 @router.get("/stocks/{code}")
-def stock_detail(code: str, partial: bool = False):
+def stock_detail(code: str, partial: bool = False, window: int = 15):
     """单股全套：行情 + 实时估值/前瞻 + 分位 + 历史序列 + 财务 + 资金流。
 
     缓存缺失时返回 HTTP 409 CACHE_MISS（前端弹窗询问下载），GET 内绝不联网/写库/懒重建。
     下载由前端调用 POST /stocks/{code}/refresh/full 完成；partial=1 仅打开已有数据（缺失标记）。
+    window=1|5|15|30：分时资金流重采样分钟窗口（默认 15）。
     """
     status = _cache_status(code)
     if status["missing_items"] and not partial:
@@ -373,6 +376,25 @@ def stock_detail(code: str, partial: bool = False):
         for r in get_daily_fundflows(code, flow_start, today)
     ]
 
+    # 当日分时五档资金流（1 分钟基础缓存，按 window 重采样；仅当日，历史从接入日起累积）
+    fundflow_window = window if window in FUNDFLOW_WINDOWS else 15
+    min_rows = get_fundflow_min(code, today)
+    if min_rows:
+        points = [
+            FundflowPoint(
+                ts=r["ts"], main_net=r["main_net"], super_large_net=r["super_large_net"],
+                large_net=r["large_net"], medium_net=r["medium_net"], small_net=r["small_net"],
+            )
+            for r in min_rows
+        ]
+        fundflow_15m = [
+            {"ts": p.ts, "main_net": p.main_net, "super_large_net": p.super_large_net,
+             "large_net": p.large_net, "medium_net": p.medium_net, "small_net": p.small_net}
+            for p in resample_points(points, fundflow_window)
+        ]
+    else:
+        fundflow_15m = []
+
     return {
         "ok": True,
         "data": {
@@ -390,9 +412,13 @@ def stock_detail(code: str, partial: bool = False):
             "financials": dict(fin) if fin else None,
             "dv_ratio": live.get("dv_ratio"),
             "fundflow_latest": flow_latest,
+            "fundflow_bands": {k: flow_latest[k] for k in ("p50", "p80", "p95")
+                               if flow_latest and flow_latest.get(k) is not None} or None,
             "fundflow_history": flow_hist,
-            "fundflow_15m": [],  # 15分钟资金流暂无数据源，占位
-            "fundflow_15m_note": "15分钟资金流暂无可用数据源，占位",
+            "fundflow_15m": fundflow_15m,
+            "fundflow_window": fundflow_window,
+            "fundflow_windows": FUNDFLOW_WINDOWS,
+            "fundflow_15m_note": "当日分笔派生，历史从接入日起累积",
             "partial_missing": status["missing_items"] if partial else [],
         },
     }

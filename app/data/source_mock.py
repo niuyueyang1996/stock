@@ -2,6 +2,17 @@
 from datetime import date, timedelta
 
 from app.data.base import Bar, DataSource, Financials, Quote, ValuationPoint
+from app.data.fundflow import aggregate_ticks, tick_bands, ticks_to_day
+
+# 固定分笔（time, amount, sign）：覆盖各档位与买卖方向，供资金流测试
+_MOCK_TICKS: list[tuple[str, float, int]] = [
+    ("09:31:00", 100_000, 1),    # 10万 买
+    ("09:31:05", 50_000, -1),    # 5万 卖
+    ("09:32:00", 200_000, 1),    # 20万 买
+    ("09:32:30", 30_000, -1),    # 3万 卖
+    ("09:33:00", 300_000, 1),    # 30万 买
+    ("09:33:30", 120_000, -1),   # 12万 卖
+]
 
 
 class MockSource(DataSource):
@@ -41,3 +52,16 @@ class MockSource(DataSource):
             ],
             total_shares=1_000_000_000,
         )
+
+    def daily_fundflow(self, code: str) -> list:
+        """固定分笔 → 日级五档资金流。"""
+        day = ticks_to_day(_MOCK_TICKS, date.today().isoformat())
+        return [day] if day else []
+
+    def fundflow_intraday(self, code: str) -> list:
+        """固定分笔 → 1 分钟基础粒度五档。"""
+        return aggregate_ticks(_MOCK_TICKS, 1)
+
+    def fundflow_bands(self, code: str) -> dict | None:
+        """固定分笔 → 当日分档阈值 P50/P80/P95。"""
+        return tick_bands(_MOCK_TICKS)

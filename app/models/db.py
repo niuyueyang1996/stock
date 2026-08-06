@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS daily_fundflow_cache (
     medium_net     REAL,                -- 中单净流入
     small_net      REAL,                -- 小单净流入
     main_net_pct   REAL,                -- 主力净流入占比(%)
+    p50            REAL,                -- 当日自适应分档阈值 P50（小单上界）
+    p80            REAL,                -- 当日自适应分档阈值 P80（中单上界）
+    p95            REAL,                -- 当日自适应分档阈值 P95（大单上界）
     PRIMARY KEY (code, trade_date)
 );
 
@@ -243,7 +246,7 @@ def get_conn() -> sqlite3.Connection:
 
 # 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
 SCHEMA_VERSION_KEY = "db_schema_version"
-_CURRENT_VERSION = 2
+_CURRENT_VERSION = 3
 
 # 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
 # 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
@@ -264,6 +267,11 @@ _MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
         ("status", "ALTER TABLE daily_scores ADD COLUMN status TEXT"),
         ("model_version", "ALTER TABLE daily_scores ADD COLUMN model_version TEXT"),
         ("estimated_count", "ALTER TABLE daily_scores ADD COLUMN estimated_count INTEGER DEFAULT 0"),
+    ],
+    3: [
+        ("p50", "ALTER TABLE daily_fundflow_cache ADD COLUMN p50 REAL"),
+        ("p80", "ALTER TABLE daily_fundflow_cache ADD COLUMN p80 REAL"),
+        ("p95", "ALTER TABLE daily_fundflow_cache ADD COLUMN p95 REAL"),
     ],
 }
 

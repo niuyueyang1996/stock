@@ -95,6 +95,14 @@ class DataSource:
         """资金流暂无可用源，默认返回空。"""
         return []
 
+    def fundflow_intraday(self, code: str) -> list:
+        """当日分时五档资金流（1 分钟基础粒度），默认返回空。"""
+        return []
+
+    def fundflow_bands(self, code: str) -> dict | None:
+        """当日自适应分档阈值 {p50,p80,p95}，默认无。"""
+        return None
+
     def dividend_per_share(self, code: str) -> float | None:
         """最近年报每股股息（元），默认无。"""
         return None
@@ -169,6 +177,12 @@ class SourceManager:
 
     def daily_fundflow(self, code: str) -> list[FundflowDay]:
         return self._call("daily_fundflow", code)
+
+    def fundflow_intraday(self, code: str) -> list:
+        return self._call("fundflow_intraday", code)
+
+    def fundflow_bands(self, code: str) -> dict | None:
+        return self._call("fundflow_bands", code)
 
     def dividend_per_share(self, code: str) -> float | None:
         return self._call("dividend_per_share", code)

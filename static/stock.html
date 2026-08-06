@@ -94,18 +94,21 @@
       <div class="panel grow">
         <h2>全天五档资金流（最新交易日）</h2>
         <div class="chart sm" id="flowBars"></div>
-        <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据（数据源暂缺）。</div>
+        <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
       </div>
       <div class="panel grow">
         <h2>近30日主力净流入</h2>
         <div class="chart sm" id="flowLine"></div>
-        <div class="empty" id="flowLineEmpty" style="display:none;padding:20px">暂无历史资金流数据。</div>
+        <div class="empty" id="flowLineEmpty" style="display:none;padding:20px">暂无历史资金流数据 — 当日刷新后从接入日起累积。</div>
       </div>
     </div>
 
     <div class="panel">
-      <h2>15分钟资金流趋势</h2>
-      <div class="empty" style="padding:20px">15分钟资金流暂无可用数据源，功能占位，后续版本接入。</div>
+      <h2>分时资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 正=净流入 负=净流出</span></h2>
+      <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
+      <div id="flowTabs"></div>
+      <div class="chart lg" id="flowIntraday" style="height:300px"></div>
+      <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。</div>
     </div>
 
   </div>
@@ -178,6 +181,9 @@
       document.getElementById('flowLine').innerHTML = '';
       document.getElementById('flowEmpty').style.display = 'block';
       document.getElementById('flowLineEmpty').style.display = 'block';
+      document.getElementById('flowTabs').innerHTML = '';
+      document.getElementById('flowIntraday').innerHTML = '';
+      document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
     }
 
@@ -185,8 +191,9 @@
       if (!currentCode) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
       clearStockView();
       // 直接调 api 以便捕获 409（loadPage 内部会吞掉错误，不适合这里）
+      // window=1：分时资金流返回 1 分钟基础，前端切换刻度本地重采样
       try {
-        const d = await api('/stocks/' + currentCode, { blocking: true });
+        const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
         render(d);
       } catch (e) {
         if (e.status === 409) {
@@ -211,7 +218,7 @@
             } else if (choice === 'open') {
               // 仅打开已有数据：partial=1 展示部分数据 + 缺失标记
               try {
-                const dp = await api('/stocks/' + currentCode + '?partial=1', { blocking: true });
+                const dp = await api('/stocks/' + currentCode + '?partial=1&window=1', { blocking: true });
                 render(dp);
               } catch (e2) {
                 document.getElementById('title').textContent = `查询失败：${e2.message}`;
@@ -661,6 +668,15 @@
     }
 
     function renderFlow(d) {
+      // 今日自适应分档条件（P50/P80/P95）：让用户知道每档的组成边界
+      const bandsEl = document.getElementById('flowBands');
+      const bands = d.fundflow_bands;
+      bandsEl.textContent = bands
+        ? '今日分档（自适应）：小单 <' + fmtFlow(bands.p50)
+          + ' · 中单 ' + fmtFlow(bands.p50) + '~' + fmtFlow(bands.p80)
+          + ' · 大单 ' + fmtFlow(bands.p80) + '~' + fmtFlow(bands.p95)
+          + ' · 特大单 >' + fmtFlow(bands.p95)
+        : '';
       const latest = d.fundflow_latest;
       if (latest) {
         document.getElementById('flowEmpty').style.display = 'none';
@@ -676,6 +692,27 @@
       } else {
         document.getElementById('flowLineEmpty').style.display = 'block';
         document.getElementById('flowLine').innerHTML = '';
+      }
+      // 分时资金流：1 分钟基础（openStock 以 window=1 请求），前端切换刻度本地重采样
+      const base = d.fundflow_15m || [];
+      const intraEl = document.getElementById('flowIntraday');
+      const intraEmpty = document.getElementById('flowIntradayEmpty');
+      const tabsEl = document.getElementById('flowTabs');
+      if (base.length) {
+        intraEmpty.style.display = 'none';
+        const windows = d.fundflow_windows || [1, 5, 15, 30];
+        const draw = (w) => fundflowIntraday(intraEl, resampleFlow(base, w), w);
+        tabsEl.innerHTML = '';
+        tabsEl.appendChild(periodTabs({
+          periods: windows.map((x) => x + '分钟'),
+          active: '15分钟',
+          onChange: (label) => { draw(parseInt(label, 10)); },
+        }));
+        draw(15);
+      } else {
+        intraEmpty.style.display = 'block';
+        intraEl.innerHTML = '';
+        tabsEl.innerHTML = '';
       }
     }
 

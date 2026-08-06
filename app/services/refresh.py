@@ -19,11 +19,13 @@ from app.data.cache import (
     get_quantile,
     get_valuation,
     mark_closed,
+    upsert_daily_fundflow,
     upsert_daily_prices,
     upsert_financials,
+    upsert_fundflow_min,
     upsert_quantile,
 )
-from app.market.calendar import is_market_closed
+from app.market.calendar import is_market_closed, is_trade_day
 from app.models.db import get_conn
 
 logger = logging.getLogger("refresh")
@@ -176,6 +178,40 @@ def sync_current_valuation(code: str, now: datetime, price: float | None = None)
     return {"code": code, "fetched": 1, "reason": "ok"}
 
 
+def sync_fundflow(code: str, now: datetime) -> dict:
+    """当日分时五档资金流：腾讯分笔派生，落 daily_fundflow_cache + fundflow_15m_cache。
+
+    港股与非交易日跳过；单股失败不中断整体刷新。
+    """
+    from app.data.base import is_hk_code
+
+    if is_hk_code(code) or not is_trade_day(now.date()):
+        return {"code": code, "fetched": 0, "reason": "skipped"}
+    try:
+        manager = build_manager()
+        day_flow = manager.daily_fundflow(code)
+        intraday = manager.fundflow_intraday(code)
+    except Exception as e:  # noqa: BLE001 资金流失败不中断整体刷新
+        logger.warning("[资金流] %s 获取失败：%s", code, e)
+        return {"code": code, "fetched": 0, "reason": "source_fail"}
+    today = now.date().isoformat()
+    # 当日自适应分档阈值（P50/P80/P95），前端展示各档组成条件；拿不到不影响落库
+    bands = None
+    try:
+        bands = manager.fundflow_bands(code)
+    except Exception:  # noqa: BLE001
+        pass
+    if day_flow:
+        upsert_daily_fundflow(code, today, day_flow[0], bands)
+    if intraday:
+        upsert_fundflow_min(code, today, intraday)
+    fetched = len(intraday)
+    logger.info("[资金流] %s %s：当日分时 %d 个分钟点，主力净流入=%s",
+                code, _stock_name(code), fetched,
+                day_flow[0].main_net if day_flow else "—")
+    return {"code": code, "fetched": fetched, "reason": "ok"}
+
+
 def sync_stock_full(code: str) -> dict:
     """一站式同步单股全部数据（开仓新股用）：日K + 财务 + 百度序列/分位 + 实时估值。"""
     from app.models.db import init_db
@@ -206,23 +242,27 @@ def _today_price(code: str, now: datetime) -> float | None:
 DYNAMIC_ITEMS = {
     "price": "实时价格（分钟级）",
     "valuation": "当前估值（PE/PB/股息率/市值）",
+    "flow": "当日资金流（主力/大/中/小单）",
 }
 FULL_ITEMS = {
     "bars": "日K历史（全量重拉覆盖）",
     "financials": "财务数据（净利/净资产/EPS/支付率）",
     "valuation": "估值分位（百度序列 + 1y/3y/5y 分位 + 实时估值）",
     "fx": "港股汇率（HKD/CNY）",
+    "flow": "当日资金流（主力/大/中/小单）",
     "portfolio": "组合综合序列重算",
 }
 # 个股刷新（不含组合/评分）：只刷当前股数据
 STOCK_DYNAMIC_ITEMS = {
     "price": "实时价格（分钟级）",
     "valuation": "当前估值（PE/PB/股息率/市值）",
+    "flow": "当日资金流（主力/大/中/小单）",
 }
 STOCK_FULL_ITEMS = {
     "bars": "日K历史（全量重拉覆盖）",
     "financials": "财务数据（净利/净资产/EPS/支付率）",
     "valuation": "估值分位（百度序列 + 1y/3y/5y 分位 + 实时估值）",
+    "flow": "当日资金流（主力/大/中/小单）",
 }
 
 
@@ -249,9 +289,10 @@ def refresh_dynamic(items: list[str] | None = None) -> dict:
             q = _sync_realtime_quote(code, now) if "price" in items else None
             price = q.price if q else _today_price(code, now)
             r2 = sync_current_valuation(code, now, price) if "valuation" in items else _skip(code)
-            fetched = r1["fetched"] + r2["fetched"]
+            rf = sync_fundflow(code, now) if "flow" in items else _skip(code)
+            fetched = r1["fetched"] + r2["fetched"] + rf["fetched"]
             result["total_fetched"] += fetched
-            result["stocks"].append({"code": code, "daily": r1, "valuation": r2})
+            result["stocks"].append({"code": code, "daily": r1, "valuation": r2, "fundflow": rf})
         except Exception as e:  # noqa: BLE001 单只失败不中断整体
             result["stocks"].append({"code": code, "error": f"{type(e).__name__}: {e}"})
     # 港股汇率：存在港股时自动刷新
@@ -277,9 +318,10 @@ def refresh_full(items: list[str] | None = None) -> dict:
             q = _sync_realtime_quote(code, now) if "bars" in items else None
             price = q.price if q else _today_price(code, now)
             r2 = sync_valuation(code, now, price, force=True) if "valuation" in items else _skip(code)
-            fetched = r1["fetched"] + r2["fetched"] + r3["fetched"]
+            rf = sync_fundflow(code, now) if "flow" in items else _skip(code)
+            fetched = r1["fetched"] + r2["fetched"] + r3["fetched"] + rf["fetched"]
             result["total_fetched"] += fetched
-            result["stocks"].append({"code": code, "daily": r1, "valuation": r2, "financials": r3})
+            result["stocks"].append({"code": code, "daily": r1, "valuation": r2, "financials": r3, "fundflow": rf})
         except Exception as e:  # noqa: BLE001 单只失败不中断整体
             result["stocks"].append({"code": code, "error": f"{type(e).__name__}: {e}"})
     # 港股汇率：存在港股时自动刷新
@@ -317,10 +359,12 @@ def refresh_stock(code: str, items: list[str] | None = None, full: bool = False)
             price = q.price if q else _today_price(code, now)
             r2 = sync_current_valuation(code, now, price) if "valuation" in items else _skip(code)
             r3 = _skip(code)
-        result["fetched"] = r1["fetched"] + r2["fetched"] + r3["fetched"]
+        rf = sync_fundflow(code, now) if "flow" in items else _skip(code)
+        result["fetched"] = r1["fetched"] + r2["fetched"] + r3["fetched"] + rf["fetched"]
         result["daily"] = r1
         result["valuation"] = r2
         result["financials"] = r3
+        result["fundflow"] = rf
     except Exception as e:  # noqa: BLE001 单股失败不抛
         result["error"] = f"{type(e).__name__}: {e}"
     return result
