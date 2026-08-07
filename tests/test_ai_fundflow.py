@@ -299,6 +299,8 @@ def test_api_fundflow_analysis_no_model(client):
 
 
 def test_api_fundflow_analysis_success(client, monkeypatch):
+    from conftest import post_job
+
     _activate_mock_model()
     _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
     _seed_day("600000")
@@ -307,11 +309,14 @@ def test_api_fundflow_analysis_success(client, monkeypatch):
         "summary": "s", "correlation": "positive", "divergence": [],
         "main_force": "m", "rhythm": "r", "alerts": [], "conclusion": "c",
     })
-    r = client.post("/api/ai/fundflow-analysis", json={"code": "600000", "window": 15})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["analysis"]["correlation"] == "positive"
-    assert data["points_count"] == 1
+    start, snap = post_job(client, "/api/ai/fundflow-analysis",
+                           {"code": "600000", "window": 15})
+    assert start["async"] is True and snap["ok"] is True
+    # 落库后读回
+    rep = client.get("/api/ai/fundflow-report/600000")
+    assert rep.status_code == 200
+    data = rep.json()["data"]
+    assert data["correlation"] == "positive"
 
 
 # ============================================================ with_price=False（批量零网络）
@@ -526,6 +531,8 @@ def test_analyze_batch_no_holdings_flow():
 # ============================================================ 批量 API
 
 def test_api_fundflow_batch_success(client, monkeypatch):
+    from conftest import post_job
+
     _activate_mock_model()
     _seed_trade("600000", tag="红利")
     _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
@@ -533,9 +540,9 @@ def test_api_fundflow_batch_success(client, monkeypatch):
         "stocks": [{"code": "600000", "correlation": "positive", "summary": "s",
                     "main_force": "m", "alerts": []}],
     })
-    r = client.post("/api/ai/fundflow-batch", json={"tags": "红利", "window": "15m"})
-    assert r.status_code == 200
-    assert r.json()["data"]["stocks_count"] == 1
+    start, snap = post_job(client, "/api/ai/fundflow-batch",
+                           {"tags": "红利", "window": "15m"})
+    assert start["async"] is True and snap["ok"] is True
     # 落库后三个读取端点
     rep = client.get("/api/ai/fundflow-report/600000")
     assert rep.status_code == 200 and rep.json()["data"]["correlation"] == "positive"

@@ -461,15 +461,19 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
 
 @router.post("/stocks/{code}/refresh")
 def stock_refresh(code: str, body: StockRefreshBody | None = None):
-    """单股动态刷新（价格/当前估值），items 空=全部。不重算组合/评分。"""
-    from app.services.refresh import refresh_stock
+    """单股动态刷新：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_stock_refresh
 
-    return {"ok": True, "data": refresh_stock(code, body.items if body else None, full=False)}
+    items = body.items if body else None
+    job_id = start_stock_refresh(code, items, full=False)
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code, "kind": "refresh.stock.dynamic"}}
 
 
 @router.post("/stocks/{code}/refresh/full")
 def stock_refresh_full(code: str, body: StockRefreshBody | None = None):
-    """单股全量刷新（日K/财务/估值分位，force 覆盖），items 空=全部。不重算组合/评分。"""
-    from app.services.refresh import refresh_stock
+    """单股全量刷新：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_stock_refresh
 
-    return {"ok": True, "data": refresh_stock(code, body.items if body else None, full=True)}
+    items = body.items if body else None
+    job_id = start_stock_refresh(code, items, full=True)
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code, "kind": "refresh.stock.full"}}

@@ -442,13 +442,13 @@ def test_api_daily_no_model(client, monkeypatch):
 
 
 def test_api_portfolio_post_success(client, monkeypatch):
+    from conftest import post_job
+
     _seed_trade("600000", qty=100)
     _activate_mock_model()
     _fake_chat(monkeypatch, {"score": 82, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": []})
-    r = client.post("/api/ai-scoring/portfolio")
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["report"]["score"] == 82.0 and data["report"]["rating"] == "B"
+    start, snap = post_job(client, "/api/ai-scoring/portfolio")
+    assert start["async"] is True and snap["ok"] is True
     # GET 读回（report 内含 report 子对象 + stale）
     g = client.get("/api/ai-scoring/portfolio").json()["data"]
     assert g["report"]["report"]["score"] == 82.0
@@ -456,6 +456,8 @@ def test_api_portfolio_post_success(client, monkeypatch):
 
 
 def test_api_daily_post_success(client, monkeypatch):
+    from conftest import post_job
+
     # 用今天打分 → mock 已收盘，放行收盘守卫
     monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     tid = _seed_trade("600000", qty=100)
@@ -465,17 +467,19 @@ def test_api_daily_post_success(client, monkeypatch):
         "trades": [{"trade_id": tid, "score": 80, "rating": "A", "comment": "符合偏好", "analysis": ""}],
     })
     d = date.today().isoformat()
-    r = client.post("/api/ai-scoring/daily", json={"date": d})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["report"]["score"] == 75.0
-    assert data["report"]["trades"][0]["trade_id"] == tid
-    assert data["report"]["trades"][0]["rating"] == "A"
+    start, snap = post_job(client, "/api/ai-scoring/daily", {"date": d})
+    assert start["async"] is True and snap["ok"] is True
+    g = client.get(f"/api/ai-scoring/daily?date={d}").json()["data"]
+    assert g["report"]["score"] == 75.0
+    assert g["report"]["trades"][0]["trade_id"] == tid
+    assert g["report"]["trades"][0]["rating"] == "A"
     # 明细表字段并入
-    assert data["report"]["trades"][0]["code"] == "600000"
+    assert g["report"]["trades"][0]["code"] == "600000"
 
 
 def test_api_daily_get_after_score(client, monkeypatch):
+    from conftest import post_job
+
     # 用今天打分 → mock 已收盘，放行收盘守卫
     monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     tid = _seed_trade("600000", qty=100)
@@ -485,7 +489,7 @@ def test_api_daily_get_after_score(client, monkeypatch):
         "trades": [{"trade_id": tid, "score": 80, "rating": "A", "comment": "好", "analysis": ""}],
     })
     d = date.today().isoformat()
-    client.post("/api/ai-scoring/daily", json={"date": d})
+    post_job(client, "/api/ai-scoring/daily", {"date": d})
     g = client.get("/api/ai-scoring/daily", params={"date": d}).json()["data"]
     assert g["configured"] is True
     assert g["day"]["trades_count"] == 1

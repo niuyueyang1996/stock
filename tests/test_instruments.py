@@ -49,10 +49,11 @@ def _seed_day(code, netamount, main_net=None):
 
 def test_type_of_routing():
     assert type_of("000300") == "index"   # 注册表种子
-    assert type_of("HSI") == "index"
     assert type_of("00700") == "hk"       # 5 位代码
     assert type_of("515080") == "etf"     # ETF 前缀
     assert type_of("600000") == "ashare"  # 6 位 A 股
+    # 恒生指数已从注册表下线，不再判为指数
+    assert type_of("HSI") != "index"
 
 
 def test_type_of_stock_conflict_yields_ashare():

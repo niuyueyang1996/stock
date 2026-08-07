@@ -61,6 +61,23 @@ def get_daily_prices(code: str, start: str, end: str) -> list:
         ).fetchall()
 
 
+def get_daily_prices_many(codes: list[str], start: str, end: str) -> dict[str, list]:
+    """批量查多只股票 [start,end] 日K（一次开连）；返回 {code: [rows升序]}。"""
+    if not codes:
+        return {}
+    out: dict[str, list] = {c: [] for c in codes}
+    placeholders = ",".join("?" * len(codes))
+    with get_conn() as c:
+        rows = c.execute(
+            f"SELECT * FROM daily_price_cache WHERE code IN ({placeholders}) "
+            "AND trade_date BETWEEN ? AND ? ORDER BY code, trade_date",
+            (*codes, start, end),
+        ).fetchall()
+    for r in rows:
+        out.setdefault(r["code"], []).append(r)
+    return out
+
+
 def get_latest_daily_price(code: str):
     """最近一条价格缓存（可能未收盘）。"""
     with get_conn() as c:

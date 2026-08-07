@@ -738,13 +738,33 @@ function indexVolumePrice(el, points, windowLabel, names) {
       emphasis: { focus: 'series' } },
   ];
   chart.setOption({
-    title: { text: windowLabel + '成交额（累计折线 + 各期柱）+ 各指数价格', left: 'center', textStyle: { fontSize: 14 } },
+    title: { text: windowLabel + ' · 成交额变化（柱=各期 / 线=累计）+ 价格', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
         const i = ps[0].dataIndex;
-        const lines = [labels[i], '各期成交额 ' + fmtAmt(amounts[i]), '累计成交额 ' + fmtAmt(cum[i])];
-        for (const p of ps) if (!['累计成交额', '各期成交额'].includes(p.seriesName) && p.value != null) lines.push(p.seriesName + ' ' + fmtNum(p.value));
+        const cur = amounts[i] || 0;
+        const prev = i > 0 ? (amounts[i - 1] || 0) : null;
+        let deltaLine = '';
+        if (prev != null && prev > 0) {
+          const d = cur - prev;
+          const pct = (d / prev) * 100;
+          const tag = pct > 3 ? '放量' : (pct < -3 ? '缩量' : '持平');
+          deltaLine = `较上期 ${tag} ${(pct >= 0 ? '+' : '') + pct.toFixed(1)}%（${d >= 0 ? '+' : ''}${fmtAmt(d)}）`;
+        } else if (prev != null) {
+          deltaLine = '较上期 —（上期无额）';
+        }
+        const lines = [
+          '<b>' + labels[i] + '</b>',
+          '各期成交额  ' + fmtAmt(cur),
+          deltaLine,
+          '累计成交额  ' + fmtAmt(cum[i]),
+        ].filter(Boolean);
+        for (const p of ps) {
+          if (!['累计成交额', '各期成交额'].includes(p.seriesName) && p.value != null) {
+            lines.push(p.seriesName + '  ' + fmtNum(p.value));
+          }
+        }
         return lines.join('<br>');
       },
     },
@@ -754,8 +774,10 @@ function indexVolumePrice(el, points, windowLabel, names) {
     xAxis: { type: 'category', data: labels, boundaryGap: true,
              axisLabel: { fontSize: 10, hideOverlap: true, rotate: labels.length > 20 ? 35 : 0 } },
     yAxis: [
-      { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
-      { type: 'value', scale: true, splitLine: { show: false }, axisLabel: { fontSize: 10, formatter: (v) => fmtAmt(v) } },
+      { type: 'value', scale: true, name: '点位', nameTextStyle: { fontSize: 10, color: '#8b95a5' },
+        axisLabel: { fontSize: 10 } },
+      { type: 'value', scale: true, name: '成交额', nameTextStyle: { fontSize: 10, color: '#8b95a5' },
+        splitLine: { show: false }, axisLabel: { fontSize: 10, formatter: (v) => fmtAmt(v) } },
     ],
     dataZoom: [
       { type: 'inside', start: 0, end: 100 },

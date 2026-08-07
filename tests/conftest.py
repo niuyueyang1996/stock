@@ -64,7 +64,13 @@ def temp_db(monkeypatch, tmp_path):
     import app.services.ai_scoring as aisc
 
     monkeypatch.setattr(aisc, "maybe_auto_score_daily", lambda d: aisc.invalidate_daily(d))
+    # 全局任务槽跨 TestClient 共享：每测清空；跳过 create_app 启动预热占槽
+    from app import config, jobs
+
+    monkeypatch.setattr(config, "SKIP_STARTUP_TASKS", True)
+    jobs.force_reset()
     yield
+    jobs.force_reset()
 
 
 @pytest.fixture
@@ -76,3 +82,42 @@ def client():
 
     # raise_server_exceptions=False：让服务端异常由全局 handler 转成 500+detail 响应
     return TestClient(create_app(), raise_server_exceptions=False)
+
+
+def await_job(client, job_id=None, timeout=60):
+    """轮询 /api/status/jobs，在 recent 中找到 job_id（或全局空闲）即返回。"""
+    import time
+
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = client.get("/api/status/jobs").json()["data"]
+        if job_id:
+            for r in last.get("recent") or []:
+                if r.get("job_id") == job_id or r.get("batch_id") == job_id:
+                    return r
+            # batch 仍在跑
+            for b in last.get("batches") or []:
+                if b.get("batch_id") == job_id:
+                    break
+            else:
+                # 也匹配子任务 id
+                pass
+        else:
+            active = (last.get("jobs") or []) or (last.get("batches") or [])
+            if not active and not last.get("running"):
+                return (last.get("recent") or [last])[0] if last.get("recent") else last
+        time.sleep(0.05)
+    raise AssertionError(f"job timeout: {last}")
+
+
+def post_job(client, path, json_body=None):
+    """POST 异步任务并等待完成。"""
+    r = client.post(path, json=json_body)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data.get("async") is True and data.get("job_id")
+    wait_id = data.get("batch_id") or data["job_id"]
+    snap = await_job(client, wait_id)
+    assert snap.get("ok") is not False and snap.get("status") != "cancelled", snap
+    return data, snap

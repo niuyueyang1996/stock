@@ -533,9 +533,10 @@ _INDEX_SEED = [
     ("399006", "创业板指", "sz399006", "399006.SZ", "none", "none", 12),
     ("399673", "创业板50", "sz399673", None, "none", "none", 13),
     ("399303", "国证2000", "sz399303", None, "none", "none", 14),
-    ("HSI", "恒生指数", "hkHSI", "HSI", "legu", "none", 15),
-    ("HSTECH", "恒生科技", "hkHSTECH", None, "none", "none", 16),
 ]
+
+# 已下线指数：旧库种子曾插入，启动时删除（不展示、不预热）
+_INDEX_REMOVED = ("HSI", "HSTECH")
 
 # ETF→指数映射种子（仅已确认的，其余由自动匹配/手动填）
 _ETF_INDEX_SEED = [
@@ -544,7 +545,7 @@ _ETF_INDEX_SEED = [
 
 
 def _seed_index_defs(conn: sqlite3.Connection) -> None:
-    """幂等插入指数注册表与 ETF 映射种子（只补缺，不覆盖已有）。"""
+    """幂等插入指数注册表与 ETF 映射种子（只补缺，不覆盖已有）；并剔除已下线指数。"""
     conn.executemany(
         """INSERT OR IGNORE INTO index_defs
              (code, name, symbol, legu_code, pe_source, pb_source, sort_order)
@@ -555,6 +556,16 @@ def _seed_index_defs(conn: sqlite3.Connection) -> None:
         """INSERT OR IGNORE INTO etf_index_map (etf_code, index_code, source)
            VALUES (?,?,?)""",
         _ETF_INDEX_SEED,
+    )
+    placeholders = ",".join("?" * len(_INDEX_REMOVED))
+    conn.execute(
+        f"DELETE FROM index_defs WHERE code IN ({placeholders})",
+        _INDEX_REMOVED,
+    )
+    # 指向已删指数的 ETF 映射一并清掉，避免悬空
+    conn.execute(
+        f"DELETE FROM etf_index_map WHERE index_code IN ({placeholders})",
+        _INDEX_REMOVED,
     )
 
 

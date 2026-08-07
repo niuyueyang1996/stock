@@ -215,18 +215,20 @@ def test_ai_report_api_no_model_400(client):
 
 
 def test_ai_report_api_success(client, monkeypatch):
+    from conftest import post_job
+
     client.post("/api/ai/models", json={"name": "DS", "base_url": "https://x/v1", "api_key": "k", "model": "m"})
     models = client.get("/api/ai/models").json()["data"]["models"]
     client.post(f"/api/ai/models/{models[0]['id']}/activate")
     monkeypatch.setattr(ai_svc, "chat_json", lambda *a, **k: _FAKE_AI_OUTPUT)
-    r = client.post("/api/stocks/600000/ai-report")
-    assert r.status_code == 200
-    assert r.json()["data"]["report"]["rating"] == "A"
-    assert r.json()["data"]["report"]["expected_growth"]["net_profit"] == 15.0
+    start, snap = post_job(client, "/api/stocks/600000/ai-report")
+    assert start["async"] is True
+    assert snap["ok"] is True
     # 读已存报告
     r2 = client.get("/api/stocks/600000/ai-report")
     assert r2.status_code == 200
     assert r2.json()["data"]["report"]["rating"] == "A"
+    assert r2.json()["data"]["report"]["expected_growth"]["net_profit"] == 15.0
 
 
 def test_reasoning_effort_default_and_config():
@@ -272,18 +274,19 @@ def test_ai_prompts_api(client):
 
 def test_ai_report_custom_prompt(client, monkeypatch):
     """诊股 body.system_prompt 作为「用户附加要求」追加到默认指令后；无 body 用默认。"""
+    from conftest import post_job
+
     client.post("/api/ai/models", json={"name": "DS", "base_url": "https://x/v1", "api_key": "k", "model": "m"})
     models = client.get("/api/ai/models").json()["data"]["models"]
     client.post(f"/api/ai/models/{models[0]['id']}/activate")
     captured = {}
-    monkeypatch.setattr(ai_svc, "chat_json", lambda cfg, system, user: captured.update(system=system) or _FAKE_AI_OUTPUT)
+    monkeypatch.setattr(ai_svc, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(system=system) or _FAKE_AI_OUTPUT)
     # 带自定义要求
-    r = client.post("/api/stocks/600000/ai-report", json={"system_prompt": "重点看股息"})
-    assert r.status_code == 200
+    post_job(client, "/api/stocks/600000/ai-report", {"system_prompt": "重点看股息"})
     assert captured["system"] == ai_svc._SYSTEM_PROMPT + "\n\n[用户附加要求]\n重点看股息"
     # 不带 body → 默认指令
-    r2 = client.post("/api/stocks/600000/ai-report")
-    assert r2.status_code == 200
+    post_job(client, "/api/stocks/600000/ai-report")
     assert captured["system"] == ai_svc._SYSTEM_PROMPT
 
 

@@ -192,16 +192,19 @@ def _compute_live_series_fallback(code: str, price: float | None, as_of: str | N
     return out
 
 
-def compute_live(code: str, price: float | None = None, as_of: str | None = None) -> dict:
+def compute_live(code: str, price: float | None = None, as_of: str | None = None,
+                 fin=None) -> dict:
     """实时估值全套（读缓存 + 本地计算，零网络）。
 
     price 为实时股价（当日日K末根）；缺省回退最近缓存收盘价。
+    fin：可选预加载的 financial_cache 行，避免调用方重复 get_financials。
     返回 {price, total_shares, total_mv, ttm_net_profit, pe, pb, dv_ratio, payout_ratio,
           g, fwd_pe, fwd_pb, fwd_dv_ratio, pe_pct, pb_pct, fwd_pe_pct, fwd_pb_pct}
     """
     import json
 
-    fin = get_financials(code)
+    if fin is None:
+        fin = get_financials(code)
     if not fin:
         return _compute_live_series_fallback(code, price, as_of)
     if price is None:

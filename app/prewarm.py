@@ -1,57 +1,45 @@
-"""启动后台预热状态：控制台日志 + 前端提示条共用。
+"""启动后台预热状态：委托统一任务管理 app.jobs（前端顶部条轮询）。
 
-app/main.py 的启动后台线程执行时逐步骤标记进度，前端轮询 /api/status/prewarm 展示提示条，
-避免启动后静默预热让用户困惑（搜索/名称回填依赖市场列表缓存，汇率/除权依赖后台刷新）。
+保留本模块 API（begin/mark/complete/finish/snapshot）供 main.py 与旧测试兼容。
 """
-import threading
-from datetime import datetime
+from app import jobs
 
-_state = {"running": False, "step": "", "done": [], "updated_at": ""}
-_lock = threading.Lock()
-
-
-def _now() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+# 与 app/main.py _startup_tasks 步骤顺序一致（complete 名）
+PREWARM_STEPS = ["港股汇率", "今日除权", "全市场列表", "指数", "今日 AI 评分"]
 
 
-def begin() -> None:
-    """预热开始：重置状态。"""
-    with _lock:
-        _state["running"] = True
-        _state["step"] = ""
-        _state["done"] = []
-        _state["updated_at"] = _now()
+def begin(steps: list[str] | None = None) -> None:
+    jobs.prewarm_begin(steps)
 
 
 def mark(step_name: str) -> None:
-    """标记当前正在执行的步骤。"""
-    with _lock:
-        _state["step"] = step_name
-        _state["updated_at"] = _now()
+    jobs.prewarm_mark(step_name)
 
 
 def complete(step_name: str) -> None:
-    """标记一步完成（无论成败）。"""
-    with _lock:
-        if step_name not in _state["done"]:
-            _state["done"].append(step_name)
-        _state["step"] = ""
-        _state["updated_at"] = _now()
+    jobs.prewarm_complete(step_name)
 
 
 def finish() -> None:
-    """全部预热结束。"""
-    with _lock:
-        _state["running"] = False
-        _state["step"] = ""
-        _state["updated_at"] = _now()
+    jobs.prewarm_finish()
 
 
 def snapshot() -> dict:
-    with _lock:
-        return {
-            "running": _state["running"],
-            "step": _state["step"],
-            "done": list(_state["done"]),
-            "updated_at": _state["updated_at"],
-        }
+    """兼容旧字段；统一走 jobs.snapshot。"""
+    s = jobs.snapshot()
+    # 非预热任务时，旧 /status/prewarm 仍可读到当前任务（顶部条已合并）
+    return {
+        "running": s["running"],
+        "step": s["step"],
+        "done": s["done"],
+        "done_count": s["done_count"],
+        "current": s["current"],
+        "total": s["total"],
+        "pct": s["pct"],
+        "updated_at": s["updated_at"],
+        "kind": s.get("kind") or "",
+        "label": s.get("label") or "",
+        "job_id": s.get("job_id"),
+        "ok": s.get("ok"),
+        "error": s.get("error"),
+    }

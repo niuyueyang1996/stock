@@ -12,10 +12,8 @@
   <div class="container">
     <div class="panel">
       <h2 id="formTitle">录入交易</h2>
-      <div class="row">
+      <div class="form-row-main">
         <div id="searchBox"></div>
-        <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
-        <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 一键导入持仓Excel</button>
         <select id="side">
           <option value="buy">买入</option>
           <option value="sell">卖出</option>
@@ -23,15 +21,19 @@
         <input type="number" id="price" placeholder="成交价" step="0.001" min="0" style="width:100px">
         <input type="number" id="quantity" placeholder="数量" step="1" min="0" style="width:90px">
         <input type="number" id="fee" placeholder="费用" step="0.01" min="0" value="0" style="width:90px">
-        <input type="datetime-local" id="tradeTime" style="width:190px">
-        <input type="text" id="note" placeholder="备注" style="width:140px">
         <button class="btn primary" id="submitBtn" onclick="submitTrade()">提交</button>
         <button class="btn" id="cancelBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+      </div>
+      <div class="form-row-secondary">
+        <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
+        <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 导入Excel</button>
+        <input type="datetime-local" id="tradeTime" style="width:190px">
+        <input type="text" id="note" placeholder="备注" style="width:140px">
         <button class="btn" id="adjustBtn" onclick="openCostAdjust()" title="直接调整持仓成本：补记漏记 / 分红除权摊薄">💰 调整成本</button>
         <button class="btn" id="aiScoreTodayBtn" onclick="aiScoreToday()" title="请求 AI 对今天录制的交易打分">🤖 AI 打分(今日)</button>
       </div>
       <div class="muted" id="formTip" style="margin-top:8px">
-        录入买卖操作自动更新持仓（移动加权成本），新交易会由 AI 对该日自动打分（也可手动「🤖 AI 打分(今日)」）。空仓时可用「📥 一键导入持仓Excel」从汇总持仓.xlsx 恢复持仓。
+        买卖自动更新持仓；新交易可触发当日 AI 打分。空仓可用导入 Excel 恢复。
       </div>
       <div id="importProgress" style="display:none;margin-top:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
@@ -43,7 +45,7 @@
     </div>
 
     <div class="panel" style="padding:0;overflow:hidden">
-      <div class="row" style="align-items:stretch;gap:0;margin:0;height:70vh;flex-wrap:nowrap">
+      <div class="row day-split-row" style="align-items:stretch;gap:0;margin:0;height:70vh;flex-wrap:nowrap">
         <!-- 左：日期目录栏（可滚动） -->
         <div id="dayDir" class="day-dir">
           <div class="day-dir-title">综合评分历史</div>
@@ -55,7 +57,7 @@
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="tradeListPanel">
       <h2>交易流水 <span class="sub">可修改 / 撤销</span></h2>
       <div style="overflow-x:auto">
         <table>
@@ -105,14 +107,16 @@
         try {
           const body = { date, intensity };
           if (systemPrompt) body.system_prompt = systemPrompt;
-          const d = await api('/ai-scoring/daily', { method: 'POST', body, blocking: true });
+          const job = await startBackgroundJob('/ai-scoring/daily', body, { toast: '每日打分已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/ai-scoring/daily?date=' + date, { silent: true });
           _day = d.day;
           _aiReport = d.report;
           _aiConfigured = true;
           activeDate = date;
           renderDayDir();
           renderDayDetail();
-          toast(`AI 打分完成：${d.report.score} 分（${d.report.rating}）`);
+          toast(_aiReport ? `AI 打分完成：${_aiReport.score} 分（${_aiReport.rating}）` : 'AI 打分完成');
         } catch (e) {
           toast('AI 打分失败：' + e.message, 5000);
         } finally {
@@ -380,7 +384,7 @@
               <td>${fmtNum(amtCny)}</td>
               <td>${ai ? (ai.score == null ? '—' : fmtNum(ai.score)) : '—'}</td>
               <td>${ai ? `<span class="badge ${ai.rating || 'N'}">${ai.rating || 'N/A'}</span>` : ''}</td>
-              <td class="muted" style="max-width:280px;min-width:120px">${ai ? esc(ai.comment || '') : ''}</td>
+              <td class="muted ai-comment">${ai ? esc(ai.comment || '') : ''}</td>
             </tr>`;
           }).join('')}</tbody>
         </table>
@@ -416,6 +420,9 @@
           </td>`;
         body.appendChild(tr);
       });
+      setPanelSummary('tradeListPanel', trades.length
+        ? sumKV('共', trades.length + ' 笔')
+        : '暂无交易');
     }
 
     // 调整持仓弹窗：调整每股（成本）与/或调整股数（拆股/送股）；「分红除权」自动查最近除权填入
@@ -540,6 +547,7 @@
       }
     }
 
+    makeFoldable(document.getElementById('tradeListPanel'), { id: 'tradeListPanel', defaultOpen: false });
     loadPage();
   </script>
 </body>

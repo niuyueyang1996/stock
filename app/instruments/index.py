@@ -59,12 +59,25 @@ class IndexInstrument(Instrument):
         """
         from datetime import date
 
+        by_day = self.intraday_by_date()
+        return by_day.get(date.today().isoformat()) or []
+
+    def intraday_by_date(self) -> dict:
+        """一次 mkline 请求，按交易日拆分分时点 { 'YYYY-MM-DD': [points…] }。
+
+        腾讯 m1 自带跨日（约 320 分钟，覆盖今+昨尾盘），刷新时可顺带落昨日分时，
+        供「较昨同时段成交额」用真实数据而非进度估算。
+        """
         sym = self.symbol()
         if not sym:
-            return []
-        today = date.today().isoformat()
-        rows = [r for r in raw_tencent.index_min_kline(sym) if self._intraday_date(r) == today]
-        return normalize_index_trends(rows)
+            return {}
+        raw = raw_tencent.index_min_kline(sym)
+        buckets: dict[str, list] = {}
+        for r in raw:
+            d = self._intraday_date(r)
+            if d:
+                buckets.setdefault(d, []).append(r)
+        return {d: normalize_index_trends(rows) for d, rows in buckets.items()}
 
     @staticmethod
     def _intraday_date(row) -> str | None:

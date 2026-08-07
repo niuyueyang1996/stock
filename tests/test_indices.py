@@ -54,9 +54,10 @@ def test_normalize_index_valuation_http_empty_and_clip():
 # ---------- 注册表与冲突防护（is_index_code） ----------
 
 def test_is_index_code_seed_and_conflict():
-    # 种子指数可识别
+    # 种子指数可识别（恒生已下线）
     assert is_index_code("000300") is True
-    assert is_index_code("HSI") is True
+    assert is_index_code("000016") is True
+    assert is_index_code("HSI") is False
     # 未定义 → False
     assert is_index_code("999999") is False
     # stocks 表登记 000001（平安银行）后，000001 让位给个股，不再当指数
@@ -124,14 +125,14 @@ def test_indices_api(client):
     r = client.get("/api/indices")
     assert r.status_code == 200
     codes = {d["code"] for d in r.json()["data"]}
-    assert len(codes) >= 16
-    assert "000300" in codes and "HSI" in codes
+    assert len(codes) >= 14
+    assert "000300" in codes
+    assert "HSI" not in codes and "HSTECH" not in codes  # 恒生已下线
     d300 = next(d for d in r.json()["data"] if d["code"] == "000300")
     assert d300["name"] == "沪深300"
     assert d300["pe_source"] == "legu"
-    # 恒指仅 PE 源，PB 无估值
-    hsi = next(d for d in r.json()["data"] if d["code"] == "HSI")
-    assert hsi["pb_source"] == "none"
+    assert "turnover" in d300
+    assert set(d300["turnover"]) >= {"amount", "chg_pct", "state", "basis", "as_of"}
 
 
 def test_index_detail_api(client):
@@ -145,10 +146,12 @@ def test_index_detail_api(client):
     assert d["partial_missing"] == []
     # 未定义指数 → 404
     assert client.get("/api/indices/999999").status_code == 404
+    # 已下线恒生 → 404
+    assert client.get("/api/indices/HSI").status_code == 404
 
 
 def test_index_series_route_not_swallowed(client):
-    r = client.get("/api/indices/series?codes=000300,HSI")
+    r = client.get("/api/indices/series?codes=000300,000016")
     assert r.status_code == 200
     d = r.json()["data"]
     assert "periods" in d

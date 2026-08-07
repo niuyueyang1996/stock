@@ -1,5 +1,38 @@
 """API 集成测试：全部路由返回结构与错误码（离线，mock 行情）。"""
+import json
+import time
+
 import pytest
+
+
+def _await_job(client, job_id=None, timeout=60):
+    """轮询 /status/jobs，在 recent 中找到 job/batch 即返回。"""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = client.get("/api/status/jobs").json()["data"]
+        if job_id:
+            for r in last.get("recent") or []:
+                if r.get("job_id") == job_id or r.get("batch_id") == job_id:
+                    return r
+        else:
+            active = (last.get("jobs") or []) or (last.get("batches") or [])
+            if not active and not last.get("running"):
+                return (last.get("recent") or [last])[0] if last.get("recent") else last
+        time.sleep(0.05)
+    raise AssertionError(f"job timeout: {last}")
+
+
+def _post_job(client, path, json_body=None):
+    """POST 异步任务并等待完成，返回 (start_data, final_snapshot)。"""
+    r = client.post(path, json=json_body)
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data.get("async") is True and data.get("job_id")
+    wait_id = data.get("batch_id") or data["job_id"]
+    snap = _await_job(client, wait_id)
+    assert snap.get("ok") is not False and snap.get("status") != "cancelled", snap
+    return data, snap
 
 
 class _WriteDetector:
@@ -74,30 +107,61 @@ def test_status(client):
     assert "trade_day" in body and "source_status" in body
 
 
+def _parse_ndjson(resp):
+    return [json.loads(l) for l in resp.text.strip().splitlines() if l.strip()]
+
+
 def test_prewarm_status(client):
-    """启动预热进度接口：结构完整。"""
+    """启动预热进度接口：结构完整（含进度字段）。"""
     r = client.get("/api/status/prewarm")
     assert r.status_code == 200
     data = r.json()["data"]
-    assert set(data) >= {"running", "step", "done", "updated_at"}
+    assert set(data) >= {"running", "step", "done", "updated_at", "total", "done_count", "current", "pct"}
 
 
 def test_prewarm_state_machine():
-    """预热状态机：begin→mark→complete→finish 逐步骤推进，状态正确。"""
+    """预热状态机：begin→mark→complete→finish 逐步骤推进，进度递增。"""
     from app import prewarm
 
     prewarm.begin()
-    assert prewarm.snapshot()["running"] is True
+    s0 = prewarm.snapshot()
+    assert s0["running"] is True
+    assert s0["total"] == 5
+    assert s0["done_count"] == 0
     prewarm.mark("拉取港股汇率")
-    assert prewarm.snapshot()["step"] == "拉取港股汇率"
+    s1 = prewarm.snapshot()
+    assert s1["step"] == "拉取港股汇率"
+    assert s1["current"] == 1
+    assert 0 < s1["pct"] < 100
     prewarm.complete("港股汇率")
     s = prewarm.snapshot()
     assert s["step"] == "" and s["done"] == ["港股汇率"]
+    assert s["done_count"] == 1
     prewarm.mark("缓存全市场列表")
     prewarm.complete("全市场列表")
     assert prewarm.snapshot()["done"] == ["港股汇率", "全市场列表"]
     prewarm.finish()
-    assert prewarm.snapshot()["running"] is False
+    s2 = prewarm.snapshot()
+    assert s2["running"] is False
+    assert s2["pct"] == 100
+
+
+def test_prewarm_not_cancellable(client):
+    """启动预热不可取消：DELETE 404，快照 cancellable=false。"""
+    from app import jobs, prewarm
+
+    prewarm.begin()
+    try:
+        snap = client.get("/api/status/jobs").json()["data"]
+        pw = next((j for j in (snap.get("jobs") or []) if j.get("kind") == "system.prewarm"), None)
+        assert pw is not None
+        assert pw.get("cancellable") is False
+        r = client.delete(f"/api/jobs/{pw['job_id']}")
+        assert r.status_code == 404
+        assert client.get("/api/status/jobs").json()["data"]["running"] is True
+    finally:
+        prewarm.finish()
+        jobs.force_reset()
 
 
 def test_init_and_list_holdings(client):
@@ -392,7 +456,8 @@ def test_stock_detail_cache_status_endpoint(client):
     assert data["code"] == "CACHE_MISS"
     assert "bars" in data["missing_items"]
     # 下载后齐全
-    client.post("/api/stocks/600000/refresh/full", json={"items": ["bars", "financials", "valuation"]})
+    _post_job(client, "/api/stocks/600000/refresh/full",
+              {"items": ["bars", "financials", "valuation"]})
     r2 = client.get("/api/stocks/600000/cache-status")
     assert r2.json()["data"]["code"] == "CACHE_OK"
 
@@ -421,56 +486,53 @@ def test_cache_status_missing_only_bars(client):
 
 
 def test_stock_detail_download_then_open(client):
-    """前端下载流：409 → POST refresh/full → GET 自动重试成功。"""
+    """前端下载流：409 → POST refresh/full（异步任务）→ GET 自动重试成功。"""
     r = client.get("/api/stocks/600000")
     assert r.status_code == 409
-    r = client.post("/api/stocks/600000/refresh/full", json={"items": ["bars", "financials", "valuation"]})
-    assert r.status_code == 200
+    _post_job(client, "/api/stocks/600000/refresh/full",
+              {"items": ["bars", "financials", "valuation"]})
     r = client.get("/api/stocks/600000")
     assert r.status_code == 200
     assert r.json()["data"]["quote"]["price"] == pytest.approx(10.0)
 
 
 def test_stock_refresh_dynamic(client):
-    """POST /stocks/{code}/refresh：单股动态刷新，返回 daily/valuation 结构。"""
-    r = client.post("/api/stocks/600000/refresh", json={"items": ["price", "valuation"]})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["code"] == "600000"
-    assert data["mode"] == "dynamic"
-    assert "daily" in data and "valuation" in data and "financials" in data
+    """POST /stocks/{code}/refresh：异步启动并完成。"""
+    start, snap = _post_job(client, "/api/stocks/600000/refresh",
+                            {"items": ["price", "valuation"]})
+    assert start["kind"] == "refresh.stock.dynamic"
+    assert start["code"] == "600000"
+    assert snap["ok"] is True
 
 
 def test_stock_refresh_full(client):
-    """POST /stocks/{code}/refresh/full：单股全量刷新，force 覆盖。"""
-    r = client.post("/api/stocks/600000/refresh/full", json={"items": ["bars", "financials", "valuation"]})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["code"] == "600000"
-    assert data["mode"] == "full"
-    assert "daily" in data and "valuation" in data and "financials" in data
+    """POST /stocks/{code}/refresh/full：异步全量刷新。"""
+    start, snap = _post_job(client, "/api/stocks/600000/refresh/full",
+                            {"items": ["bars", "financials", "valuation"]})
+    assert start["kind"] == "refresh.stock.full"
+    assert snap["ok"] is True
 
 
 def test_refresh_dynamic_items_filter(client):
-    """POST /refresh 按 items 过滤：只刷指定内容项（价格），其余 skip。"""
+    """POST /refresh 按 items 过滤：异步完成；服务层仍尊重 skip。"""
+    from app.services.refresh import refresh_dynamic
+
     client.post("/api/holdings", json={"items": [{"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100}]})
-    r = client.post("/api/refresh", json={"items": ["price"]})
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["mode"] == "dynamic"
+    start, snap = _post_job(client, "/api/refresh", {"items": ["price"]})
+    assert start["kind"] == "refresh.dynamic"
+    assert snap["ok"] is True
+    # 同步路径校验 skip 语义（与异步同逻辑）
+    data = refresh_dynamic(["price"])
     assert data["items"] == ["price"]
-    assert len(data["stocks"]) == 1
-    s = data["stocks"][0]
-    assert "daily" in s and "valuation" in s
-    assert s["valuation"]["reason"] == "skipped"  # 未勾选 valuation → 跳过
+    assert data["stocks"][0]["valuation"]["reason"] == "skipped"
 
 
 def test_refresh_full_concurrent_order_preserved(client):
-    """全局全量刷新并发执行：多持仓结果保序、无单股失败、并发写不报 database is locked。"""
+    """全局全量刷新并发：多持仓结果保序、无单股失败、并发写不报 database is locked。"""
     from app.data.base import load_index_registry
     from app.models.db import get_conn
+    from app.services.refresh import refresh_full
 
-    # 000001 同时是上证指数代码：模拟真实用户已持有该股（stocks 表有记录）→ 按个股放行
     with get_conn() as c:
         c.execute("INSERT INTO stocks (code, name, market) VALUES ('000001', '平安银行', 'sz')")
     load_index_registry()
@@ -482,20 +544,168 @@ def test_refresh_full_concurrent_order_preserved(client):
         {"code": "510300", "name": "300ETF", "price": 4, "quantity": 100},
     ]
     client.post("/api/holdings", json={"items": items})
-    r = client.post("/api/refresh/full")
-    assert r.status_code == 200
-    data = r.json()["data"]
-    assert data["mode"] == "full"
-    # 并发结果按输入顺序保序返回
+    # API 异步启动
+    _post_job(client, "/api/refresh/full")
+    # 保序语义用同步 refresh_full 再验一次（同 _run_parallel）
+    data = refresh_full()
     assert [s["code"] for s in data["stocks"]] == [i["code"] for i in items]
-    # 无单股失败（并发写冲突会以 error 形式露出，如 database is locked）
     assert all("error" not in s for s in data["stocks"]), data["stocks"]
-    # 每只股票原始缓存都已写入（并发写落库完整）
     with get_conn() as c:
         for code in ("600000", "000001", "510300"):
             for tbl in ("daily_price_cache", "financial_cache", "daily_valuation_cache"):
                 n = c.execute(f"SELECT COUNT(*) FROM {tbl} WHERE code=?", (code,)).fetchone()[0]
                 assert n > 0, f"{tbl} 应并发写入 {code}"
+
+
+def test_refresh_async_job_completes(client):
+    """动态刷新：POST 立刻返回 job_id，任务跑完 ok=True。"""
+    items = [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+        {"code": "600519", "name": "贵州茅台", "price": 1500, "quantity": 10},
+    ]
+    client.post("/api/holdings", json={"items": items})
+    start, snap = _post_job(client, "/api/refresh", {"items": ["price"]})
+    assert start["async"] is True
+    assert snap["ok"] is True
+    assert snap["kind"] == "refresh.dynamic"
+
+
+def test_refresh_full_async_job(client):
+    """全量刷新异步任务可完成。"""
+    client.post("/api/holdings", json={"items": [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+    ]})
+    start, snap = _post_job(client, "/api/refresh/full",
+                            {"items": ["bars", "financials", "valuation", "portfolio"]})
+    assert start["kind"] == "refresh.full"
+    assert snap["ok"] is True
+
+
+def test_refresh_queues_while_busy(client):
+    """占满 refresh worker 后全局刷新仍 200 入队；AI 车道可立刻开跑。"""
+    import threading
+
+    from app import jobs
+
+    gate = threading.Event()
+
+    def hang(prog):
+        gate.wait(timeout=10)
+
+    client.post("/api/holdings", json={"items": [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+    ]})
+    batch_id = None
+    # 占满 refresh 池，使扇出子任务排队
+    for i in range(6):
+        jobs.start("refresh.hang", f"挂起{i}", hang, total=1)
+    try:
+        r = client.post("/api/refresh", json={"items": ["price"]})
+        assert r.status_code == 200
+        data = r.json()["data"]
+        batch_id = data.get("batch_id")
+        assert data.get("async") is True and batch_id
+        snap = client.get("/api/status/jobs").json()["data"]
+        assert snap.get("batches") or any(
+            j.get("status") == "queued" for j in (snap.get("jobs") or []))
+
+        ai_ran = threading.Event()
+
+        def ai_work(prog):
+            ai_ran.set()
+
+        jobs.start("ai.test", "测试 AI", ai_work, total=1)
+        assert ai_ran.wait(timeout=3), "AI 车道应不被 refresh 挂起阻塞"
+    finally:
+        gate.set()
+        time.sleep(0.2)
+        if batch_id:
+            _await_job(client, batch_id)
+
+
+def test_cancel_queued_job(client):
+    """取消排队中的任务。"""
+    import threading
+
+    from app import jobs
+
+    gate = threading.Event()
+
+    def hang(prog):
+        gate.wait(timeout=10)
+
+    # 占满 refresh worker，使后续任务排队
+    blockers = [jobs.start("refresh.hang", f"挂起{i}", hang, total=1) for i in range(8)]
+    try:
+        jid = jobs.start("refresh.queued", "待取消", hang, total=1)
+        time.sleep(0.05)
+        r = client.delete(f"/api/jobs/{jid}")
+        assert r.status_code == 200
+        snap = client.get("/api/status/jobs").json()["data"]
+        hit = next((x for x in (snap.get("recent") or []) if x["job_id"] == jid), None)
+        assert hit and hit["status"] == "cancelled"
+    finally:
+        gate.set()
+        time.sleep(0.2)
+        _await_job(client)
+
+
+def test_global_refresh_fanout_uses_names(client):
+    """全局刷新扇出：batch 进度含股票名称。"""
+    client.post("/api/holdings", json={"items": [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+        {"code": "600519", "name": "贵州茅台", "price": 1500, "quantity": 10},
+    ]})
+    r = client.post("/api/refresh", json={"items": ["price"]})
+    assert r.status_code == 200
+    batch_id = r.json()["data"]["batch_id"]
+    found_name = False
+    for _ in range(40):
+        snap = client.get("/api/status/jobs").json()["data"]
+        blob = json.dumps(snap, ensure_ascii=False)
+        if "浦发银行" in blob or "贵州茅台" in blob:
+            found_name = True
+            break
+        time.sleep(0.05)
+    assert found_name, "进度快照应出现股票名称"
+    done = _await_job(client, batch_id)
+    assert done.get("ok") is not False
+
+
+def test_refresh_stock_error_still_reaches_done(client, monkeypatch):
+    """单股 process 返回 error 时全局任务仍完成（ok）。"""
+    import app.services.refresh as rmod
+
+    client.post("/api/holdings", json={"items": [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+        {"code": "600519", "name": "贵州茅台", "price": 1500, "quantity": 10},
+    ]})
+
+    real = rmod._process_stock
+
+    def flaky(code, now, full, items):
+        if code == "600519":
+            return {"code": code, "error": "RuntimeError: boom", "fetched": 0}
+        return real(code, now, full, items)
+
+    monkeypatch.setattr(rmod, "_process_stock", flaky)
+    start, snap = _post_job(client, "/api/refresh", {"items": ["price"]})
+    assert snap["ok"] is True
+    # 同步再验 error 不中断
+    data = rmod.refresh_dynamic(["price"])
+    assert any(s.get("error") for s in data["stocks"])
+    assert len(data["stocks"]) == 2
+
+
+def test_status_jobs_endpoint(client):
+    """GET /status/jobs 结构完整（含队列字段）。"""
+    r = client.get("/api/status/jobs")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert set(data) >= {
+        "running", "kind", "label", "step", "pct", "job_id", "ok",
+        "queue", "jobs", "recent", "lanes",
+    }
 
 
 def test_data_reset_requires_confirm(client):

@@ -422,3 +422,62 @@ def test_compute_portfolio_series_subset_weights():
     assert d["pe"][0] == pytest.approx(round(1 / denom, 2), abs=0.01)
     # C 的 PE=50 被排除（否则 1/6,2/6,3/6 会得到 23.08）
     assert d["pe"][0] != pytest.approx(23.08, abs=0.01)
+
+
+def test_combo_current_reuses_live_map(monkeypatch):
+    """compute_portfolio 路径：compute_live 每只最多一次（序列当前点复用 live_by_code）。"""
+    import app.analysis.portfolio as pmod
+    import app.analysis.valuation as vmod
+
+    _seed_holdings([("A", 100), ("B", 200)])
+    _seed_fin_passthrough("A", total_shares=1000, ttm=100.0, net_assets=500.0)
+    _seed_fin_passthrough("B", total_shares=2000, ttm=200.0, net_assets=1000.0)
+
+    real = vmod.compute_live
+    calls = []
+
+    def counting(code, *a, **k):
+        calls.append(code)
+        return real(code, *a, **k)
+
+    monkeypatch.setattr(vmod, "compute_live", counting)
+    monkeypatch.setattr(pmod, "compute_live", counting)
+
+    p = pmod.compute_portfolio()
+    assert p["portfolio"]["pe"] == pytest.approx(100.0)
+    # 优化前约 3N（snapshot + cur PE + cur PB）；优化后 ≤ N
+    assert len(calls) <= 2, f"compute_live 调用过多: {calls}"
+
+
+def test_day_pnl_batch_matches_per_stock():
+    """批量预加载当日 trades 与逐股查库结果一致。"""
+    from app.analysis.portfolio import _day_pnl, _load_day_trades
+
+    _insert_trade("600519", "buy", 1300.0, 100, 0, "2026-08-04 09:30:00")
+    _insert_trade("600519", "buy", 1306.0, 100, 0, "2026-08-05 09:30:00")
+    _insert_trade("600519", "sell", 1306.0, 50, 0, "2026-08-05 10:00:00")
+    per = _day_pnl("600519", 150, 1306.0, 1300.0, "2026-08-05")
+    batch = _load_day_trades(["600519"], "2026-08-05")
+    with_rows = _day_pnl("600519", 150, 1306.0, 1300.0, "2026-08-05",
+                         rows=batch.get("600519", []))
+    assert per == pytest.approx(600.0)
+    assert with_rows == pytest.approx(per)
+
+
+def test_get_portfolio_unchanged_shape(client):
+    """GET /api/portfolio 响应键形状保持不变。"""
+    from conftest import post_job
+
+    client.post("/api/holdings", json={"items": [
+        {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
+    ]})
+    post_job(client, "/api/stocks/600000/refresh/full",
+             {"items": ["bars", "financials", "valuation"]})
+    r = client.get("/api/portfolio")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    for key in ("portfolio", "stocks", "series", "tag_cards", "all_tags", "weights"):
+        assert key in data
+    assert "total_value" in data["portfolio"]
+    assert "pe" in data["portfolio"]
+

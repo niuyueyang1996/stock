@@ -97,7 +97,10 @@ def create_app() -> FastAPI:
 
             finish()
 
-        threading.Thread(target=_startup_tasks, daemon=True).start()
+        from app.config import SKIP_STARTUP_TASKS
+
+        if not SKIP_STARTUP_TASKS:
+            threading.Thread(target=_startup_tasks, daemon=True).start()
     except Exception:  # noqa: BLE001
         pass
 

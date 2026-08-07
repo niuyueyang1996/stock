@@ -7,23 +7,74 @@
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
   <style>
-    #indexSidebar { flex: 0 0 190px; position: sticky; top: 16px; align-self: flex-start;
-                    max-height: calc(100vh - 32px); overflow-y: auto; padding-right: 6px; }
-    #indexSidebar h3 { margin: 0 0 8px; font-size: 14px; }
-    #indexSidebar h3 .sub { font-size: 11px; color: var(--muted, #868e96); font-weight: 400; }
-    .tag-card { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 8px 10px;
-                margin-bottom: 8px; cursor: pointer; user-select: none;
-                transition: border-color .12s, background .12s, box-shadow .12s; }
-    .tag-card:hover { border-color: #b9cdff; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-    .tag-card.on { border-color: #2563eb; background: rgba(37,99,235,.06);
-                   box-shadow: inset 0 0 0 1px rgba(37,99,235,.28); }
-    .tag-card .tc-head { display: flex; align-items: center; gap: 4px; }
-    .tag-card .tc-check { color: #2563eb; font-weight: 700; width: 12px; font-size: 12px; }
-    .tag-card .tc-name { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tag-card .tc-count { font-size: 11px; color: var(--muted, #868e96); flex: none; }
-    .tag-card .tc-val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
-    .tag-card .tc-day { font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 1px; }
-    .tag-card.all { background: rgba(0,0,0,.02); }
+    /* 侧栏：白底浮于灰页，与页面背景拉开层次 */
+    #indexSidebar {
+      flex: 0 0 236px; position: sticky; top: 16px; align-self: flex-start;
+      max-height: calc(100vh - 32px); overflow-y: auto;
+      padding: 12px 10px 14px;
+      background: #fff;
+      border: 1px solid #e4e8f0;
+      border-radius: 14px;
+      box-shadow: 0 1px 3px rgba(20, 28, 50, .04);
+    }
+    #indexSidebar h3 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: #2a3140; letter-spacing: .02em; }
+    #indexSidebar h3 .sub { font-size: 11px; color: #8b95a5; font-weight: 500; margin-left: 4px; }
+    .tag-card {
+      position: relative;
+      border: 1px solid #e6eaf1; border-radius: 11px; padding: 10px 11px 9px;
+      margin-bottom: 8px; cursor: pointer; user-select: none;
+      background: #fff;
+      transition: border-color .12s, box-shadow .12s, background .12s;
+    }
+    .tag-card::before {
+      content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px;
+      border-radius: 2px; background: transparent;
+    }
+    .tag-card:hover { border-color: #cfd7e6; box-shadow: 0 2px 8px rgba(20, 28, 50, .05); }
+    .tag-card.on {
+      border-color: #c5d4f5;
+      background: #f7f9fd;
+      box-shadow: inset 0 0 0 1px rgba(47, 111, 237, .08);
+    }
+    .tag-card.on::before { background: #2f6fed; }
+    .tag-card .tc-head { display: flex; align-items: center; gap: 5px; }
+    .tag-card .tc-check {
+      color: #2f6fed; font-weight: 700; width: 12px; font-size: 11px;
+      opacity: 0; transition: opacity .1s;
+    }
+    .tag-card.on .tc-check { opacity: 1; }
+    .tag-card .tc-name {
+      font-size: 13px; font-weight: 600; color: #1f2530; flex: 1;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .tag-card .tc-count { font-size: 11px; color: #8b95a5; flex: none; font-variant-numeric: tabular-nums; }
+    .tag-card .tc-row {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 8px; margin-top: 6px;
+    }
+    .tag-card .tc-val {
+      font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums;
+      color: #1f2530; letter-spacing: -.02em; line-height: 1;
+    }
+    .tag-card .tc-day {
+      font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+    }
+    .tag-card .tc-meta {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 6px; margin-top: 5px; font-size: 11px; font-variant-numeric: tabular-nums;
+    }
+    .tag-card .tc-amt { color: #5c6573; font-weight: 500; }
+    .tag-card .tc-amt b { color: #2a3140; font-weight: 600; }
+    .tag-card .tc-vol { font-weight: 600; white-space: nowrap; }
+    .tag-card .tc-vol.expand { color: #d13b3b; }
+    .tag-card .tc-vol.shrink { color: #2b9a4a; }
+    .tag-card .tc-vol.flat { color: #8b95a5; }
+    .tag-card.all {
+      background: #f5f7fb; border-style: dashed; border-color: #d8dee8;
+      margin-bottom: 10px;
+    }
+    .tag-card.all.on { border-style: solid; background: #f7f9fd; border-color: #c5d4f5; }
+    #indexRefreshAll { margin-top: 2px; }
   </style>
 </head>
 <body>
@@ -41,9 +92,9 @@
     <div style="flex:1; min-width:0">
       <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个指数。</div>
       <div id="rightContent">
-        <div class="cards" id="summary"></div>
+        <div id="summary"></div>
         <div class="panel" id="fundflowPanel">
-          <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">腾讯量价：Σ累计成交额折线 + 各期成交额柱 + 各指数价格 · 分钟窗口=当日分时，天窗口=多日聚合</span></h2>
+          <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">读图：浅蓝柱=各期成交额（高低看放缩），深灰折线=累计成交额；悬停看较上期变化。分钟窗=当日分时，天窗=多日聚合</span></h2>
           <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
             <div id="pfFlowTabs"></div>
             <div style="flex:1"></div>
@@ -114,18 +165,42 @@
           <span class="tc-count">${selected.size}/${allIndices.length}</span>
         </div>`;
 
+      const volLabel = (t) => {
+        if (!t || t.chg_pct == null || !t.state) {
+          return '<span class="tc-vol flat" title="请先「刷新全部指数」拉取分时后再看额较昨">额较昨 —</span>';
+        }
+        const word = t.state === 'expand' ? '放量' : (t.state === 'shrink' ? '缩量' : '持平');
+        const est = t.basis === 'scaled' ? '估' : '';
+        const tip = t.basis === 'intraday' && t.as_of
+          ? `成交额较昨同时段实算（至 ${t.as_of}）`
+          : (t.basis === 'scaled' && t.as_of
+            ? `成交额较昨同时段估算（至 ${t.as_of}；昨分时未缓存，按交易进度折算。刷新后可落昨分时改实算）`
+            : '成交额较昨全日');
+        const prev = t.prev_amount != null ? `，昨约 ${fmtAmt(t.prev_amount)}` : '';
+        const sign = t.chg_pct > 0 ? '+' : '';
+        return `<span class="tc-vol ${t.state}" title="${tip}${prev}">${word}${est} ${sign}${t.chg_pct}%</span>`;
+      };
+
       const list = document.getElementById('indexList');
       list.innerHTML = allIndices.map((d, i) => {
         const s = selected.has(d.code);
         const q = d.quote || {};
+        const t = d.turnover || {};
+        const amt = t.amount != null ? t.amount : q.amount;
         return `
         <div class="tag-card ${s ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
           <div class="tc-head">
             <span class="tc-check">${s ? '✓' : ''}</span>
             <span class="tc-name">${esc(d.name)}</span>
           </div>
-          <div class="tc-val">${q.price == null ? '—' : fmtNum(q.price)}</div>
-          <div class="tc-day ${cls(q.pct_chg)}">${q.pct_chg == null ? '—' : signed(q.pct_chg) + '%'}</div>
+          <div class="tc-row">
+            <span class="tc-val">${q.price == null ? '—' : fmtNum(q.price)}</span>
+            <span class="tc-day ${cls(q.pct_chg)}">${q.pct_chg == null ? '—' : signed(q.pct_chg) + '%'}</span>
+          </div>
+          <div class="tc-meta">
+            <span class="tc-amt">额 <b>${amt == null ? '—' : fmtAmt(amt)}</b></span>
+            ${volLabel(t)}
+          </div>
         </div>`;
       }).join('');
       list.querySelectorAll('.tag-card[data-i]').forEach((el2) => {
@@ -150,12 +225,13 @@
       const btn = document.getElementById('indexRefreshAll');
       const label = btn.textContent;
       btn.disabled = true;
-      btn.textContent = '刷新中…';
+      btn.textContent = '已提交…';
       try {
-        const r = await api('/indices/refresh-all', { method: 'POST' });
-        const fails = (r && r.fail) || [];
-        toast(`指数刷新完成：成功 ${r ? r.ok : 0} 个` + (fails.length ? `，失败 ${fails.length} 个` : ''));
+        const job = await startBackgroundJob('/indices/refresh-all', {}, { toast: '全部指数刷新已开始，进度见顶部' });
+        if (job && job.job_id) await waitForJob(job.job_id);
+        loaded = false;
         await loadPage();
+        toast('指数刷新完成，侧栏已更新成交额较昨');
       } catch (e) {
         toast('指数刷新失败：' + e.message, 5000);
       } finally {
@@ -168,12 +244,14 @@
       const card = ([l, v, note]) =>
         `<div class="card"><div class="label">${l}</div><div class="value">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`;
       document.getElementById('summary').innerHTML = `
-        <div class="panel" style="grid-column:1/-1">
-          <h3>简况</h3>
-          <div class="cards summary-main" style="margin-bottom:8px">
-            ${card(['选中指数', `${selected.size}/${allIndices.length}`, '点击左侧卡片多选 / 全选'])}
-          </div>
+        <div class="cards summary-main" style="margin-bottom:20px">
+          ${card(['选中指数', `${selected.size}/${allIndices.length}`, '点击左侧卡片多选 / 全选'])}
         </div>`;
+      setPanelSummary('tablePanel', sumKV('已选', selected.size + ' 只'));
+      setPanelSummary('chartRow', selected.size ? sumKV('等权', selected.size + ' 只') : '未选择');
+      setPanelSummary('fundflowPanel', selected.size
+        ? sumKV('已选', selected.size + ' 只') + sumSep() + sumChip(FLOW_WINDOW_LABEL[pfFlowWindow] || pfFlowWindow)
+        : '未选择');
     }
 
     // 权重分布：指数等权（每只 100/n）
@@ -264,21 +342,28 @@
         const panel = document.getElementById('fundflowPanel');
         if (panel) panel.style.display = '';               // 成功渲染恢复面板可见
         const note = document.getElementById('pfFlowNote');
-        note.textContent = '腾讯量价 Σ累计成交额（覆盖 ' + d.covered + '/' + d.total + ' 指数）+ 各期成交额柱 + 各指数价格叠加';
+        if (note) {
+          note.textContent = '读图：浅蓝柱=各期成交额（柱高看放缩），深灰线=累计额；悬停看较上期%。覆盖 '
+            + d.covered + '/' + d.total + ' 指数 · 分钟窗=当日分时，天窗=多日';
+        }
+        setPanelSummary('fundflowPanel',
+          sumKV('覆盖', d.covered + '/' + d.total) + sumSep() + sumChip(FLOW_WINDOW_LABEL[pfFlowWindow] || pfFlowWindow));
         const empty = document.getElementById('pfFlowEmpty');
         const intraday = d.intraday || [];
         const daily = d.daily || [];
         if (!intraday.length && !daily.length) {
-          empty.style.display = 'block';
+          if (empty) empty.style.display = 'block';
           document.getElementById('pfFlowTabs').innerHTML = '';
           document.getElementById('pfFlowIntraday').innerHTML = '';
           return;
         }
-        empty.style.display = 'none';
+        if (empty) empty.style.display = 'none';
         const names = nameMap();
         const intraEl = document.getElementById('pfFlowIntraday');
         const draw = (w) => {
           pfFlowWindow = w;
+          setPanelSummary('fundflowPanel',
+            sumKV('覆盖', d.covered + '/' + d.total) + sumSep() + sumChip(FLOW_WINDOW_LABEL[w] || w));
           if (/m$/.test(w)) {
             if (!intraday.length) { intraEl.innerHTML = ''; return; }
             const pts = resampleIndexVolume(intraday, parseInt(w, 10));
@@ -298,9 +383,14 @@
         }));
         draw(pfFlowWindow);
       } catch (e) {
-        if (seq !== pfFlowSeq) return;                     // 过期失败也不隐藏面板
-        const p = document.getElementById('fundflowPanel');
-        if (p) p.style.display = 'none';
+        if (seq !== pfFlowSeq) return;
+        // 失败时保留面板（可折叠标题仍在），只标摘要，勿 display:none 整块消失
+        setPanelSummary('fundflowPanel', '加载失败');
+        const empty = document.getElementById('pfFlowEmpty');
+        if (empty) {
+          empty.style.display = 'block';
+          empty.textContent = '指数资金面加载失败：' + (e && e.message ? e.message : e);
+        }
       }
     }
 
@@ -309,18 +399,21 @@
       const noSel = document.getElementById('noSelection');
       const showEmpty = () => { right.style.display = 'none'; noSel.style.display = 'block'; };
       const showContent = () => { right.style.display = ''; noSel.style.display = 'none'; };
-      if (allIndices.length && selected.size === 0) { renderSidebar(); showEmpty(); return; }
-      if (!loaded) {
-        try {
-          const data = await api('/indices', { blocking: true });
+      try {
+        // 每次重拉摘要（含成交额较昨）；首次默认不选
+        const data = await api('/indices', { blocking: !loaded, silent: loaded });
+        const keep = loaded ? selected : new Set();
+        allIndices = data || [];
+        if (!loaded) {
+          selected = new Set();
           loaded = true;
-          allIndices = data || [];
-          selected = new Set();                      // 默认全不选
-        } catch (e) {
-          document.getElementById('indexBody').innerHTML =
-            '<tr><td colspan="4" class="muted">加载失败：' + esc(e.message) + '</td></tr>';
-          return;
+        } else {
+          selected = new Set([...keep].filter((c) => allIndices.some((d) => d.code === c)));
         }
+      } catch (e) {
+        document.getElementById('indexBody').innerHTML =
+          '<tr><td colspan="4" class="muted">加载失败：' + esc(e.message) + '</td></tr>';
+        return;
       }
       renderSidebar();
       if (selected.size === 0) { showEmpty(); return; }
@@ -332,6 +425,9 @@
       renderPfFlow();
     }
 
+    makeFoldable(document.getElementById('fundflowPanel'), { id: 'fundflowPanel', defaultOpen: true });
+    makeFoldable(document.getElementById('chartRow'), { id: 'chartRow', defaultOpen: false });
+    makeFoldable(document.getElementById('tablePanel'), { id: 'tablePanel', defaultOpen: true });
     loadPage();
   </script>
 </body>

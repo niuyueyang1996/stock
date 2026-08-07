@@ -79,28 +79,58 @@ def status():
     }
 
 
+@router.get("/status/jobs")
+def jobs_status():
+    """统一后台任务进度（刷新/AI/预热）；前端顶部条轮询。"""
+    from app.jobs import snapshot
+
+    return {"ok": True, "data": snapshot()}
+
+
 @router.get("/status/prewarm")
 def prewarm_status():
-    """启动后台预热进度（前端首页提示条轮询用）。"""
+    """兼容旧预热接口：与 /status/jobs 同源。"""
     from app.prewarm import snapshot
 
     return {"ok": True, "data": snapshot()}
 
 
+@router.delete("/jobs/batch/{batch_id}")
+def cancel_job_batch(batch_id: str):
+    """取消整批刷新子任务并跳过收尾（路由须在 /jobs/{id} 之前）。"""
+    from app.jobs import cancel_batch
+
+    if not cancel_batch(batch_id):
+        raise HTTPException(404, "批次不存在")
+    return {"ok": True, "data": {"batch_id": batch_id, "cancelled": True}}
+
+
+@router.delete("/jobs/{job_id}")
+def cancel_job(job_id: str):
+    """取消单个任务（排队中立即移除，执行中协作式停止）。"""
+    from app.jobs import cancel
+
+    if not cancel(job_id):
+        raise HTTPException(404, "任务不存在或已结束")
+    return {"ok": True, "data": {"job_id": job_id, "cancelled": True}}
+
+
 @router.post("/refresh")
 def refresh(body: RefreshBody | None = None):
-    """动态刷新：按 items 选择内容（实时价格/当前估值/评分重建），items 空=全部。"""
-    from app.services.refresh import refresh_dynamic
+    """动态刷新：按持仓扇出入队，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_global_refresh
 
-    return {"ok": True, "data": refresh_dynamic(body.items if body else None)}
+    data = start_global_refresh(full=False, items=body.items if body else None)
+    return {"ok": True, "data": data}
 
 
 @router.post("/refresh/full")
 def refresh_full(body: RefreshBody | None = None):
-    """全量刷新：按 items 选择内容（日K/财务/估值分位/评分/组合序列）强制重拉覆盖，items 空=全部。"""
-    from app.services.refresh import refresh_full
+    """全量刷新：按持仓扇出入队，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_global_refresh
 
-    return {"ok": True, "data": refresh_full(body.items if body else None)}
+    data = start_global_refresh(full=True, items=body.items if body else None)
+    return {"ok": True, "data": data}
 
 
 @router.post("/data/reset")

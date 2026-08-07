@@ -132,16 +132,24 @@ def portfolio_report(tags: str | None = None):
 
 @router.post("/ai-scoring/portfolio")
 def score_portfolio(tags: str | None = None, body: ScoreBody | None = None):
-    """手动触发组合 AI 打分（跟随标签筛选：?tags=红利,科技）。
-    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
-    try:
-        result = svc.score_portfolio(_parse_tags(tags),
-                                     body.system_prompt if body else None,
-                                     body.intensity if body else "normal")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    logger.info("[AI打分] 组合%s 完成 %s（%s）", f"筛选{tags}" if tags else "全部", result["report"]["score"], result["report"]["rating"])
-    return {"ok": True, "data": result}
+    """手动触发组合 AI 打分：后台异步，进度见 GET /status/jobs；完成后 GET 读报告。"""
+    from app.services.job_runners import start_simple
+
+    if not _configured():
+        raise HTTPException(400, "未配置 AI 模型")
+    tag_list = _parse_tags(tags)
+    prompt = body.system_prompt if body else None
+    intensity = body.intensity if body else "normal"
+    label = f"组合 AI 打分{('·' + tags) if tags else ''}"
+
+    def work():
+        result = svc.score_portfolio(tag_list, prompt, intensity)
+        logger.info("[AI打分] 组合%s 完成 %s（%s）",
+                    f"筛选{tags}" if tags else "全部",
+                    result["report"]["score"], result["report"]["rating"])
+
+    job_id = start_simple("ai.portfolio", label, work, step="AI 组合打分中…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True}}
 
 
 # ============================================================ 每日 AI
@@ -164,13 +172,24 @@ def daily_report(date: str):
 
 @router.post("/ai-scoring/daily")
 def score_daily(body: DateBody):
-    """某日 AI 打分（一次调用逐笔+汇总）。无交易或无激活模型返回 400。
-    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
-    try:
-        result = svc.score_daily(body.date, body.system_prompt, body.intensity)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if result is None:
+    """某日 AI 打分：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not _configured():
+        raise HTTPException(400, "未配置 AI 模型")
+    day = svc.get_daily_day(body.date)
+    if not day or not day.get("trades"):
         raise HTTPException(400, "该日无交易")
-    logger.info("[AI打分] 当日 %s 完成 %s（%s）", body.date, result["report"]["score"], result["report"]["rating"])
-    return {"ok": True, "data": {"day": svc.get_daily_day(body.date), "report": result["report"]}}
+
+    def work():
+        result = svc.score_daily(body.date, body.system_prompt, body.intensity)
+        if result is None:
+            raise ValueError("该日无交易")
+        logger.info("[AI打分] 当日 %s 完成 %s（%s）",
+                    body.date, result["report"]["score"], result["report"]["rating"])
+
+    job_id = start_simple(
+        "ai.daily", f"每日 AI 打分 {body.date}",
+        work, step=f"AI 打分 {body.date}…",
+    )
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "date": body.date}}

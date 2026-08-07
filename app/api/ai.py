@@ -132,29 +132,39 @@ def get_ai_report(code: str):
 
 @router.post("/stocks/{code}/ai-report")
 def analyze_ai(code: str, body: ReportBody | None = None):
-    """触发诊股：用激活模型分析该股并落库。无激活模型或 AI 调用失败返回 400。
-    body.system_prompt 覆盖默认诊股指令（前端弹窗可编辑）。"""
-    try:
-        result = ai_svc.analyze_stock(code,
-                                      body.system_prompt if body else None,
-                                      body.intensity if body else "normal")
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    logger.info("[AI诊股] %s 完成", code)
-    return {"ok": True, "data": result}
+    """触发诊股：后台异步，进度见 GET /status/jobs；完成后 GET 读报告。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+    prompt = body.system_prompt if body else None
+    intensity = body.intensity if body else "normal"
+
+    def work():
+        ai_svc.analyze_stock(code, prompt, intensity)
+        logger.info("[AI诊股] %s 完成", code)
+
+    job_id = start_simple("ai.stock_report", f"AI 诊股 {code}", work, step=f"诊股 {code}…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
 
 
 @router.post("/ai/fundflow-analysis")
 def fundflow_analysis(body: FundflowAnalysisBody):
-    """个股 AI 资金流实时分析（按选定窗口；无 HTML，简明结论）。
-    无激活模型/选定窗口无资金流数据 → 400。"""
-    try:
-        result = ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt, body.intensity)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    logger.info("[AI资金流] %s %s分析完成", body.code, body.window)
-    return {"ok": True, "data": result}
+    """个股 AI 资金流分析：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
 
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+
+    def work():
+        ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt, body.intensity)
+        logger.info("[AI资金流] %s %s分析完成", body.code, body.window)
+
+    job_id = start_simple(
+        "ai.fundflow", f"资金流 AI {body.code}",
+        work, step=f"资金流分析 {body.code}…",
+    )
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": body.code}}
 
 @router.get("/ai/prompts")
 def default_prompts():
@@ -164,10 +174,11 @@ def default_prompts():
 
 @router.post("/ai/fundflow-batch")
 def fundflow_batch(body: FundflowAnalysisBody):
-    """批量分析资金面：持仓组合（tags，缺省=全部持仓）或指数组合（codes，逗号分隔指数代码）。
-    一次发给 AI（省 token），逐只落库 source='batch'；组合级相关性（coherence）落库 ai_fundflow_coherence_reports。
-    仅支持 15m 及以上（1m/5m 拒绝）；无激活模型/组合无资金流数据标的 → 400。
-    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
+    """批量资金流 AI：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
     codes = None
     weights = None
     if body.codes:
@@ -179,14 +190,23 @@ def fundflow_batch(body: FundflowAnalysisBody):
         tags = [t.strip() for t in body.tags.split(",") if t.strip()] or None
     if codes and tags:
         raise HTTPException(400, "codes（指数组合）与 tags（持仓组合）只能二选一")
-    try:
-        result = ai_svc.analyze_batch_fundflow(tags, body.window, codes=codes, weights=weights,
-                                               system_prompt=body.system_prompt,
-                                               intensity=body.intensity)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    logger.info("[AI资金流] 批量分析完成 %s 只", result.get("stocks_count"))
-    return {"ok": True, "data": result}
+    # 窗口校验前置：异步任务里失败只会标红顶部条，这里先 400 给前端明确提示
+    w = ai_svc._norm_flow_window(body.window)
+    if w in ("1m", "5m"):
+        raise HTTPException(400, "批量分析窗口过小，请选择 15 分钟及以上")
+
+    def work():
+        result = ai_svc.analyze_batch_fundflow(
+            tags, body.window, codes=codes, weights=weights,
+            system_prompt=body.system_prompt, intensity=body.intensity,
+        )
+        logger.info("[AI资金流] 批量分析完成 %s 只", result.get("stocks_count"))
+
+    job_id = start_simple(
+        "ai.fundflow_batch", "批量资金流 AI",
+        work, step="批量资金流分析中…",
+    )
+    return {"ok": True, "data": {"job_id": job_id, "async": True}}
 
 
 @router.get("/ai/fundflow-report/{code}")

@@ -9,7 +9,7 @@ import math
 import statistics
 from datetime import date, timedelta
 
-from app.data.cache import get_daily_prices, get_fx_rate, get_latest_fx_rate
+from app.data.cache import get_daily_prices_many, get_fx_rate, get_latest_fx_rate
 
 # 年化交易日数
 TRADING_DAYS = 250
@@ -43,13 +43,14 @@ def compute_volatility(codes: list[str], weights: dict[str, float],
     start = end - timedelta(days=365)
     currencies = currencies or {}
 
-    # 加载各股人民币收盘价
+    # 加载各股人民币收盘价（一次批量查库）
     data: dict[str, dict[str, float]] = {}
     all_dates: set[str] = set()
+    by_code = get_daily_prices_many(codes, start.isoformat(), end.isoformat())
     for code in codes:
         currency = currencies.get(code, "CNY")
         dmap: dict[str, float] = {}
-        for r in get_daily_prices(code, start.isoformat(), end.isoformat()):
+        for r in by_code.get(code, []):
             if not r["close"]:
                 continue
             v = _cny_close(currency, r["trade_date"], float(r["close"]))

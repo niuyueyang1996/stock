@@ -8,6 +8,8 @@
 实时 PE/PB/股息率据此计算；实时股价用分钟级行情覆盖当日日K行。
 """
 import logging
+import queue
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
@@ -35,6 +37,18 @@ logger = logging.getLogger("refresh")
 
 # 波动率计算所需历史窗口（交易日）
 HISTORY_DAYS = 250
+
+# 刷新互斥（与 Excel 导入同口径：防双点搅进度）
+_refresh_lock = threading.Lock()
+_refreshing = False
+
+STAGE_LABELS = {
+    "fx": "刷新港股汇率",
+    "dividend": "分红除权检查",
+    "buysell_backfill": "资金流买卖回填",
+    "portfolio": "重建组合估值序列",
+    "daily_catchup": "AI 每日补打分",
+}
 
 
 def _stock_name(code: str) -> str:
@@ -232,7 +246,15 @@ def sync_fundflow(code: str, now: datetime) -> dict:
         return {"code": code, "fetched": 0, "reason": "skipped"}
     try:
         day_flow = inst.daily_fundflow() if inst.has_fundflow else []
-        intraday = inst.intraday_quote() if inst.has_intraday_quote else inst.fundflow_intraday()
+        # 指数：一次 mkline 含跨日分钟，按日落库（今+昨），供同时段成交额真实对比
+        if inst.has_intraday_quote and getattr(inst, "kind", None) == "index":
+            by_day = inst.intraday_by_date()
+            intraday = by_day.get(now.date().isoformat()) or []
+            for d, pts in by_day.items():
+                if pts:
+                    upsert_index_intraday(code, d, pts)
+        else:
+            intraday = inst.intraday_quote() if inst.has_intraday_quote else inst.fundflow_intraday()
     except Exception as e:  # noqa: BLE001 资金流失败不中断整体刷新
         logger.warning("[资金流] %s 获取失败：%s", code, e)
         return {"code": code, "fetched": 0, "reason": "source_fail"}
@@ -246,7 +268,8 @@ def sync_fundflow(code: str, now: datetime) -> dict:
     if day_flow:
         upsert_daily_fundflow(code, today, day_flow[0], bands)
     if inst.has_intraday_quote:
-        upsert_index_intraday(code, today, intraday)
+        if getattr(inst, "kind", None) != "index":
+            upsert_index_intraday(code, today, intraday)
     elif intraday:
         upsert_fundflow_min(code, today, intraday)
     fetched = len(intraday)
@@ -314,117 +337,396 @@ def _skip(code: str) -> dict:
     return {"code": code, "fetched": 0, "reason": "skipped"}
 
 
+def _parallel_cap(n: int, items: set[str]) -> int:
+    """外层持仓并发上限。含资金流时腾讯分笔内层已多线程，外层保守；否则可提高。"""
+    cap = 6 if "flow" in items else 12
+    return max(1, min(cap, n))
+
+
 def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dict:
     """处理单只股票的全部刷新项（动态/全量二合一）。
 
-    单只内部有顺序依赖（日K → 实时价 → 估值 → 资金流）；
-    股票之间完全独立，由 _run_parallel 并发调用，主线程按序汇总。
+    单只内部：无依赖项并行（bars∥financials；valuation∥fundflow）；
+    股票之间由 _run_parallel 并发。
     """
     try:
         if full:
-            r1 = sync_daily_bars(code, now, force=True) if "bars" in items else _skip(code)
-            r3 = sync_financials(code, force=True) if "financials" in items else _skip(code)
-            q = _sync_realtime_quote(code, now) if "bars" in items else None
+            # 日K 与财务互不依赖 → 并行
+            r1, r3 = _skip(code), _skip(code)
+            need_bars = "bars" in items
+            need_fin = "financials" in items
+            if need_bars and need_fin:
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fb = ex.submit(sync_daily_bars, code, now, True)
+                    ff = ex.submit(sync_financials, code, True)
+                    r1, r3 = fb.result(), ff.result()
+            elif need_bars:
+                r1 = sync_daily_bars(code, now, force=True)
+            elif need_fin:
+                r3 = sync_financials(code, force=True)
+            q = _sync_realtime_quote(code, now) if need_bars else None
             price = q.price if q else _today_price(code, now)
-            r2 = sync_valuation(code, now, price, force=True) if "valuation" in items else _skip(code)
-            entry = {"code": code, "daily": r1, "valuation": r2, "financials": r3}
+            # 估值依赖价格；资金流不依赖估值 → 有价后两者并行
+            r2, rf = _skip(code), _skip(code)
+            need_val = "valuation" in items
+            need_flow = "flow" in items
+            if need_val and need_flow:
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fv = ex.submit(sync_valuation, code, now, price, True)
+                    fl = ex.submit(sync_fundflow, code, now)
+                    r2, rf = fv.result(), fl.result()
+            elif need_val:
+                r2 = sync_valuation(code, now, price, force=True)
+            elif need_flow:
+                rf = sync_fundflow(code, now)
+            entry = {"code": code, "daily": r1, "valuation": r2, "financials": r3, "fundflow": rf}
         else:
             r1 = sync_daily_bars(code, now) if "price" in items else _skip(code)
             q = _sync_realtime_quote(code, now) if "price" in items else None
             price = q.price if q else _today_price(code, now)
-            r2 = sync_current_valuation(code, now, price) if "valuation" in items else _skip(code)
-            entry = {"code": code, "daily": r1, "valuation": r2}
-        rf = sync_fundflow(code, now) if "flow" in items else _skip(code)
-        entry["fundflow"] = rf
-        entry["fetched"] = r1["fetched"] + r2["fetched"] + rf["fetched"] \
+            r2, rf = _skip(code), _skip(code)
+            need_val = "valuation" in items
+            need_flow = "flow" in items
+            if need_val and need_flow:
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fv = ex.submit(sync_current_valuation, code, now, price)
+                    fl = ex.submit(sync_fundflow, code, now)
+                    r2, rf = fv.result(), fl.result()
+            elif need_val:
+                r2 = sync_current_valuation(code, now, price)
+            elif need_flow:
+                rf = sync_fundflow(code, now)
+            entry = {"code": code, "daily": r1, "valuation": r2, "fundflow": rf}
+        entry["fetched"] = entry["daily"]["fetched"] + entry["valuation"]["fetched"] + entry["fundflow"]["fetched"] \
             + (entry["financials"]["fetched"] if "financials" in entry else 0)
         return entry
     except Exception as e:  # noqa: BLE001 单只失败不中断整体
         return {"code": code, "error": f"{type(e).__name__}: {e}", "fetched": 0}
 
 
-def _run_parallel(codes: list[str], fn) -> list[dict]:
+def _run_parallel(codes: list[str], fn, on_progress=None, max_workers: int | None = None) -> list[dict]:
     """并发执行 fn(code)，按输入顺序保序返回结果列表。
 
-    并发上限 6：raw_tencent 分笔内部已再开 8 线程翻页，外层并发必须有界，
-    避免线程数爆炸。单只失败由 fn 内部捕获返回 error dict，不抛。
+    默认上限 6（含资金流时防线程爆炸）；调用方可传入更高 max_workers。
+    单只失败由 fn 内部捕获返回 error dict，不抛。
+    on_progress(done, total, entry)：每完成一只回调（as_completed 序，非输入序）。
     """
     if not codes:
         return []
-    if len(codes) == 1:
-        return [fn(codes[0])]
-    max_workers = min(6, len(codes))
-    results: list[dict | None] = [None] * len(codes)
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+    total = len(codes)
+    if total == 1:
+        entry = fn(codes[0])
+        if on_progress:
+            on_progress(1, total, entry)
+        return [entry]
+    workers = max_workers if max_workers is not None else min(6, total)
+    workers = max(1, min(workers, total))
+    results: list[dict | None] = [None] * total
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
         future_map = {ex.submit(fn, code): i for i, code in enumerate(codes)}
         for fut in as_completed(future_map):
-            results[future_map[fut]] = fut.result()
+            i = future_map[fut]
+            entry = fut.result()
+            results[i] = entry
+            done += 1
+            if on_progress:
+                on_progress(done, total, entry)
     return [r for r in results if r is not None]
 
 
-def refresh_dynamic(items: list[str] | None = None) -> dict:
-    """全局动态刷新：批量刷全部持仓股（价格/实时估值），不拉序列不重算分位。
+def try_begin_refresh() -> bool:
+    global _refreshing
+    with _refresh_lock:
+        if _refreshing:
+            return False
+        _refreshing = True
+        return True
 
-    items 为空/None 时刷新全部内容项。
-    """
+
+def end_refresh() -> None:
+    global _refreshing
+    with _refresh_lock:
+        _refreshing = False
+
+
+def _stock_event(done: int, total: int, entry: dict) -> dict:
+    code = entry.get("code", "")
+    name = entry.get("name") or _stock_name(code)
+    ev = {
+        "status": "stock",
+        "done": done,
+        "total": total,
+        "current": name,  # 顶部进度显示名称，不是代码
+        "code": code,
+        "name": name,
+        "fetched": entry.get("fetched", 0),
+    }
+    if entry.get("error"):
+        ev["error"] = entry["error"]
+    return ev
+
+
+def run_dynamic_stages(items: list[str], now: datetime | None = None, prog=None) -> dict:
+    """动态刷新收尾（汇率等）。prog 可选，支持协作取消。"""
+    now = now or datetime.now()
+    items = items or list(DYNAMIC_ITEMS)
+    result: dict = {}
+    if prog is not None:
+        prog.check()
+    if "fx" in items:
+        if prog is not None:
+            prog.step(STAGE_LABELS["fx"])
+        result["fx"] = _refresh_fx(now)
+        if prog is not None:
+            prog.complete_step(STAGE_LABELS["fx"])
+    else:
+        result["fx"] = None
+    return result
+
+
+def run_full_stages(items: list[str], now: datetime | None = None, prog=None) -> dict:
+    """全量刷新收尾：汇率/除权/买卖回填/组合序列/AI 补打分。"""
+    now = now or datetime.now()
+    items = items or list(FULL_ITEMS)
+    result: dict = {}
+
+    def _step(key: str):
+        if prog is not None:
+            prog.check()
+            prog.step(STAGE_LABELS[key])
+
+    def _done(key: str):
+        if prog is not None:
+            prog.complete_step(STAGE_LABELS[key])
+
+    if "fx" in items:
+        _step("fx")
+        result["fx"] = _refresh_fx(now)
+        _done("fx")
+    else:
+        result["fx"] = None
+
+    _step("dividend")
+    result["dividend"] = _apply_dividends(now)
+    _done("dividend")
+
+    _step("buysell_backfill")
+    try:
+        from app.data.cache import backfill_daily_buysell
+
+        result["buysell_backfill"] = backfill_daily_buysell()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[资金流] 历史 buy/sell 回填失败：%s", e)
+        result["buysell_backfill"] = f"error: {e}"
+    _done("buysell_backfill")
+
+    if "portfolio" in items:
+        _step("portfolio")
+        result["portfolio_rebuilt"] = _rebuild_portfolio_series()
+        _done("portfolio")
+    else:
+        result["portfolio_rebuilt"] = 0
+
+    _step("daily_catchup")
+    try:
+        from app.services.ai_scoring import catchup_pending_daily
+
+        catchup_pending_daily()
+        result["daily_catchup"] = "ok"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[AI打分] 全量刷新后补打失败：%s", e)
+        result["daily_catchup"] = f"error: {e}"
+    _done("daily_catchup")
+    return result
+
+
+def _iter_queue_events(q: queue.Queue, worker: threading.Thread):
+    """消费工作线程推入的进度事件；遇哨兵结束。"""
+    try:
+        while True:
+            msg = q.get()
+            if isinstance(msg, tuple):
+                if msg[0] == "_END":
+                    break
+                if msg[0] == "_ERR":
+                    raise msg[1]
+                continue
+            yield msg
+    finally:
+        worker.join(timeout=600)
+
+
+def iter_refresh_dynamic(items: list[str] | None = None):
+    """动态刷新 NDJSON 事件流：start → stock* → [stage] → done。边跑边推进度。"""
     from app.models.db import init_db
 
     items = items or list(DYNAMIC_ITEMS)
     init_db()
     now = datetime.now()
     codes = get_holdings_codes()
-    result = {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "mode": "dynamic", "items": items,
-              "stocks": [], "total_fetched": 0}
-    stocks = _run_parallel(codes, lambda c: _process_stock(c, now, False, set(items)))
-    for s in stocks:  # 主线程按序汇总 fetched（累加不进工作线程）
-        result["total_fetched"] += s.get("fetched", 0)
-        result["stocks"].append(s)
-    # 港股汇率：存在港股时自动刷新
-    result["fx"] = _refresh_fx(now) if "fx" in items else None
-    logger.info("[刷新完成] 动态刷新：%d 只股票，本次拉取 %d 条数据", len(codes), result["total_fetched"])
-    return result
+    yield {"status": "start", "total": len(codes), "mode": "dynamic", "items": items}
+
+    q: queue.Queue = queue.Queue()
+
+    def worker():
+        try:
+            result = {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "mode": "dynamic", "items": items,
+                      "stocks": [], "total_fetched": 0}
+
+            def on_progress(done, total, entry):
+                q.put(_stock_event(done, total, entry))
+
+            item_set = set(items)
+            stocks = _run_parallel(
+                codes, lambda c: _process_stock(c, now, False, item_set),
+                on_progress=on_progress,
+                max_workers=_parallel_cap(len(codes), item_set),
+            )
+            for s in stocks:
+                result["total_fetched"] += s.get("fetched", 0)
+                result["stocks"].append(s)
+
+            if "fx" in items:
+                q.put({"status": "stage", "stage": "fx", "label": STAGE_LABELS["fx"]})
+                result["fx"] = _refresh_fx(now)
+            else:
+                result["fx"] = None
+
+            logger.info("[刷新完成] 动态刷新：%d 只股票，本次拉取 %d 条数据",
+                        len(codes), result["total_fetched"])
+            q.put({"status": "done", **result})
+            q.put(("_END", None))
+        except Exception as e:  # noqa: BLE001
+            q.put(("_ERR", e))
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    yield from _iter_queue_events(q, t)
 
 
-def refresh_full(items: list[str] | None = None) -> dict:
-    """全局全量刷新：批量刷全部持仓股，按内容项强制重拉覆盖（日K/财务/估值分位/组合序列）。"""
+def iter_refresh_full(items: list[str] | None = None):
+    """全量刷新 NDJSON 事件流：start → stock* → stage* → done。边跑边推进度。"""
     from app.models.db import init_db
 
     items = items or list(FULL_ITEMS)
     init_db()
     now = datetime.now()
     codes = get_holdings_codes()
-    result = {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "mode": "full", "items": items,
-              "stocks": [], "total_fetched": 0}
-    stocks = _run_parallel(codes, lambda c: _process_stock(c, now, True, set(items)))
-    for s in stocks:  # 主线程按序汇总 fetched
-        result["total_fetched"] += s.get("fetched", 0)
-        result["stocks"].append(s)
-    # 港股汇率：存在港股时自动刷新
-    result["fx"] = _refresh_fx(now) if "fx" in items else None
-    # 分红除权：今天有除权的持仓自动摊薄成本（幂等）
-    result["dividend"] = _apply_dividends(now)
-    # 日级资金流 buy/sell 回填：历史天从分时分钟点按日聚合补全（幂等，只补空值）
-    try:
-        from app.data.cache import backfill_daily_buysell
+    yield {"status": "start", "total": len(codes), "mode": "full", "items": items}
 
-        result["buysell_backfill"] = backfill_daily_buysell()
-    except Exception as e:  # noqa: BLE001 回填失败不影响刷新结果
-        logger.warning("[资金流] 历史 buy/sell 回填失败：%s", e)
-        result["buysell_backfill"] = f"error: {e}"
-    # 百度序列可能更新 → 按最新全部持仓权重重算组合综合 PE/PB 序列
-    result["portfolio_rebuilt"] = _rebuild_portfolio_series() if "portfolio" in items else 0
-    # 收盘后补打：全量刷新数据定格后，今天已收盘 + 有交易 + 无 AI 报告 → 后台补打一次
-    try:
-        from app.services.ai_scoring import catchup_pending_daily
+    q: queue.Queue = queue.Queue()
 
-        catchup_pending_daily()
-        result["daily_catchup"] = "ok"
-    except Exception as e:  # noqa: BLE001 补打失败不影响刷新结果
-        logger.warning("[AI打分] 全量刷新后补打失败：%s", e)
-        result["daily_catchup"] = f"error: {e}"
-    logger.info("[刷新完成] 全量刷新：%d 只股票，本次拉取 %d 条数据，组合序列重算 %d 点",
-                len(codes), result["total_fetched"], result["portfolio_rebuilt"])
-    return result
+    def worker():
+        try:
+            result = {"time": now.strftime("%Y-%m-%d %H:%M:%S"), "mode": "full", "items": items,
+                      "stocks": [], "total_fetched": 0}
+
+            def on_progress(done, total, entry):
+                q.put(_stock_event(done, total, entry))
+
+            item_set = set(items)
+            stocks = _run_parallel(
+                codes, lambda c: _process_stock(c, now, True, item_set),
+                on_progress=on_progress,
+                max_workers=_parallel_cap(len(codes), item_set),
+            )
+            for s in stocks:
+                result["total_fetched"] += s.get("fetched", 0)
+                result["stocks"].append(s)
+
+            if "fx" in items:
+                q.put({"status": "stage", "stage": "fx", "label": STAGE_LABELS["fx"]})
+                result["fx"] = _refresh_fx(now)
+            else:
+                result["fx"] = None
+
+            q.put({"status": "stage", "stage": "dividend", "label": STAGE_LABELS["dividend"]})
+            result["dividend"] = _apply_dividends(now)
+
+            q.put({"status": "stage", "stage": "buysell_backfill",
+                   "label": STAGE_LABELS["buysell_backfill"]})
+            try:
+                from app.data.cache import backfill_daily_buysell
+
+                result["buysell_backfill"] = backfill_daily_buysell()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[资金流] 历史 buy/sell 回填失败：%s", e)
+                result["buysell_backfill"] = f"error: {e}"
+
+            if "portfolio" in items:
+                q.put({"status": "stage", "stage": "portfolio", "label": STAGE_LABELS["portfolio"]})
+                result["portfolio_rebuilt"] = _rebuild_portfolio_series()
+            else:
+                result["portfolio_rebuilt"] = 0
+
+            q.put({"status": "stage", "stage": "daily_catchup",
+                   "label": STAGE_LABELS["daily_catchup"]})
+            try:
+                from app.services.ai_scoring import catchup_pending_daily
+
+                catchup_pending_daily()
+                result["daily_catchup"] = "ok"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[AI打分] 全量刷新后补打失败：%s", e)
+                result["daily_catchup"] = f"error: {e}"
+
+            logger.info("[刷新完成] 全量刷新：%d 只股票，本次拉取 %d 条数据，组合序列重算 %d 点",
+                        len(codes), result["total_fetched"], result["portfolio_rebuilt"])
+            q.put({"status": "done", **result})
+            q.put(("_END", None))
+        except Exception as e:  # noqa: BLE001
+            q.put(("_ERR", e))
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    yield from _iter_queue_events(q, t)
+
+
+def iter_refresh_stock(code: str, items: list[str] | None = None, full: bool = False):
+    """单股刷新 NDJSON 事件流：start → stock → done。"""
+    now = datetime.now()
+    stock_map = STOCK_FULL_ITEMS if full else STOCK_DYNAMIC_ITEMS
+    items = [it for it in (items or []) if it in stock_map] or list(stock_map)
+    mode = "full" if full else "dynamic"
+    yield {"status": "start", "total": 1, "mode": mode, "items": items, "code": code}
+    entry = _process_stock(code, now, full, set(items))
+    yield _stock_event(1, 1, entry)
+    result = {
+        "code": code,
+        "mode": mode,
+        "items": items,
+        "total_fetched": entry.get("fetched", 0),
+        "fetched": entry.get("fetched", 0),
+        "daily": entry.get("daily", _skip(code)),
+        "valuation": entry.get("valuation", _skip(code)),
+        "financials": entry.get("financials", _skip(code)),
+        "fundflow": entry.get("fundflow", _skip(code)),
+    }
+    if entry.get("error"):
+        result["error"] = entry["error"]
+    yield {"status": "done", **result}
+
+
+def refresh_dynamic(items: list[str] | None = None) -> dict:
+    """全局动态刷新：批量刷全部持仓股（价格/实时估值），不拉序列不重算分位。
+
+    items 为空/None 时刷新全部内容项。返回最终结果 dict（不含 status）。
+    """
+    done = {}
+    for ev in iter_refresh_dynamic(items):
+        if ev.get("status") == "done":
+            done = {k: v for k, v in ev.items() if k != "status"}
+    return done
+
+
+def refresh_full(items: list[str] | None = None) -> dict:
+    """全局全量刷新：批量刷全部持仓股，按内容项强制重拉覆盖（日K/财务/估值分位/组合序列）。"""
+    done = {}
+    for ev in iter_refresh_full(items):
+        if ev.get("status") == "done":
+            done = {k: v for k, v in ev.items() if k != "status"}
+    return done
 
 
 def refresh_stock(code: str, items: list[str] | None = None, full: bool = False) -> dict:
@@ -432,34 +734,11 @@ def refresh_stock(code: str, items: list[str] | None = None, full: bool = False)
 
     full=False 动态（价格/实时估值）；full=True 全量（日K/财务/估值分位，force 覆盖）。
     """
-    now = datetime.now()
-    item_map = FULL_ITEMS if full else DYNAMIC_ITEMS
-    stock_map = STOCK_FULL_ITEMS if full else STOCK_DYNAMIC_ITEMS
-    items = [it for it in (items or []) if it in stock_map] or list(stock_map)
-    result = {"code": code, "mode": "full" if full else "dynamic", "items": items,
-              "total_fetched": 0}
-    try:
-        if full:
-            r1 = sync_daily_bars(code, now, force=True) if "bars" in items else _skip(code)
-            r3 = sync_financials(code, force=True) if "financials" in items else _skip(code)
-            q = _sync_realtime_quote(code, now) if "bars" in items else None
-            price = q.price if q else _today_price(code, now)
-            r2 = sync_valuation(code, now, price, force=True) if "valuation" in items else _skip(code)
-        else:
-            r1 = sync_daily_bars(code, now) if "price" in items else _skip(code)
-            q = _sync_realtime_quote(code, now) if "price" in items else None
-            price = q.price if q else _today_price(code, now)
-            r2 = sync_current_valuation(code, now, price) if "valuation" in items else _skip(code)
-            r3 = _skip(code)
-        rf = sync_fundflow(code, now) if "flow" in items else _skip(code)
-        result["fetched"] = r1["fetched"] + r2["fetched"] + r3["fetched"] + rf["fetched"]
-        result["daily"] = r1
-        result["valuation"] = r2
-        result["financials"] = r3
-        result["fundflow"] = rf
-    except Exception as e:  # noqa: BLE001 单股失败不抛
-        result["error"] = f"{type(e).__name__}: {e}"
-    return result
+    done = {}
+    for ev in iter_refresh_stock(code, items, full):
+        if ev.get("status") == "done":
+            done = {k: v for k, v in ev.items() if k != "status"}
+    return done
 
 
 def _refresh_fx(now: datetime) -> dict | None:

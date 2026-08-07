@@ -51,6 +51,141 @@ function toast(msg, ms = 2500) {
   toast._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+/** 可折叠 panel：标题常显，body 可收起；摘要写在标题旁。不删功能，只改展示密度。 */
+function _foldKey(id) {
+  return 'fold:' + (location.pathname || '') + ':' + id;
+}
+
+function makeFoldable(panel, opts = {}) {
+  if (!panel || panel.dataset.foldable === '1') return panel;
+  const id = opts.id || panel.id || ('p' + Math.random().toString(36).slice(2, 8));
+  panel.dataset.foldable = '1';
+  panel.dataset.foldId = id;
+  panel.classList.add('foldable');
+
+  const h2 = panel.querySelector(':scope > h2');
+  const headRow = panel.querySelector(':scope > .row');
+  const head = document.createElement('div');
+  head.className = 'panel-head';
+  const summary = document.createElement('span');
+  summary.className = 'panel-summary';
+  const chev = document.createElement('span');
+  chev.className = 'fold-chevron';
+  chev.textContent = '▼';
+
+  const body = document.createElement('div');
+  body.className = 'panel-body';
+
+  if (h2 && (!headRow || !headRow.contains(h2))) {
+    // 典型结构：panel > h2 + 内容
+    const kids = [...panel.childNodes];
+    kids.forEach((n) => {
+      if (n === h2) head.appendChild(n);
+      else body.appendChild(n);
+    });
+  } else if (headRow && headRow.querySelector('h2')) {
+    // panel > .row(h2 + 控件) + 内容：标题进 head，控件留 body
+    const h = headRow.querySelector('h2');
+    head.appendChild(h);
+    const kids = [...panel.childNodes];
+    kids.forEach((n) => body.appendChild(n));
+  } else {
+    const title = document.createElement('h2');
+    title.textContent = opts.title || '详情';
+    head.appendChild(title);
+    while (panel.firstChild) body.appendChild(panel.firstChild);
+  }
+
+  // 长副标题下沉到 body（保留原 id，避免后续脚本 getElementById 丢引用）
+  const sub = head.querySelector('h2 .sub');
+  if (sub) {
+    const note = document.createElement('div');
+    note.className = 'sub-note';
+    if (sub.id) note.id = sub.id;
+    note.textContent = sub.textContent;
+    sub.remove();
+    body.insertBefore(note, body.firstChild);
+  }
+
+  head.appendChild(summary);
+  head.appendChild(chev);
+  panel.appendChild(head);
+  panel.appendChild(body);
+
+  let open = opts.defaultOpen === true;
+  try {
+    const saved = localStorage.getItem(_foldKey(id));
+    if (saved === '1') open = true;
+    if (saved === '0') open = false;
+  } catch (e) { /* ignore */ }
+  panel.classList.toggle('folded', !open);
+
+  function resizeCharts() {
+    if (typeof echarts === 'undefined') return;
+    panel.querySelectorAll('.chart').forEach((el) => {
+      try {
+        const inst = echarts.getInstanceByDom(el);
+        if (inst) inst.resize();
+      } catch (e) { /* ignore */ }
+    });
+  }
+
+  head.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input, select, label')) return;
+    const willOpen = panel.classList.contains('folded');
+    panel.classList.toggle('folded', !willOpen);
+    try { localStorage.setItem(_foldKey(id), willOpen ? '1' : '0'); } catch (err) { /* ignore */ }
+    if (willOpen) {
+      requestAnimationFrame(() => {
+        resizeCharts();
+        window.dispatchEvent(new CustomEvent('panel-unfold', { detail: { id, panel } }));
+      });
+    }
+    if (typeof opts.onToggle === 'function') opts.onToggle(willOpen);
+  });
+  return panel;
+}
+
+function setPanelSummary(panelOrId, html) {
+  const panel = typeof panelOrId === 'string'
+    ? document.getElementById(panelOrId)
+    : panelOrId;
+  if (!panel) return;
+  const el = panel.querySelector('.panel-summary');
+  if (el) el.innerHTML = html == null ? '' : html;
+}
+
+function isPanelOpen(panelOrId) {
+  const panel = typeof panelOrId === 'string'
+    ? document.getElementById(panelOrId)
+    : panelOrId;
+  return !!(panel && !panel.classList.contains('folded'));
+}
+
+// 折叠摘要色标：标签灰 / 数字墨色 / 涨跌红绿 / 分位高低 / 评级色块（与 badge 同相）
+function sumL(label) { return `<span class="muted">${esc(String(label))}</span>`; }
+function sumV(text, tone) { return `<span class="${tone || 'hi'}">${text}</span>`; }
+function sumSep() { return `<span class="sep"> · </span>`; }
+function sumChip(text) { return `<span class="chip">${esc(String(text))}</span>`; }
+function sumKV(label, text, tone) { return `${sumL(label)} ${sumV(text, tone)}`; }
+function sumSigned(n, text) {
+  const tone = (n > 0 ? 'up' : (n < 0 ? 'down' : 'hi'));
+  return sumV(text != null ? text : signed(n), tone);
+}
+/** 估值分位色：≤25 低估(绿) · ≥75 高估(红) · 中间墨色 */
+function sumQ(pct) {
+  if (pct == null || pct === '' || Number.isNaN(+pct)) return sumV('—', 'muted');
+  const v = +pct;
+  const tone = v <= 25 ? 'down' : (v >= 75 ? 'up' : 'hi');
+  return sumV((Math.round(v * 10) / 10) + '%', tone);
+}
+/** AI 评级色块 A/B/C/D（折叠摘要专用，展开态仍用 .badge） */
+function sumGrade(rating) {
+  const raw = (rating == null ? '' : String(rating)).trim().toUpperCase();
+  const g = 'ABCD'.includes(raw.charAt(0)) ? raw.charAt(0) : 'N';
+  return `<span class="grade ${g}">${g}</span>`;
+}
+
 // 持仓页/组合页：点击标签直接修改（事件委托，重渲染后依然生效）
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-edittag]');
@@ -95,15 +230,15 @@ function initNav(active) {
   nav.appendChild(aiBtn);
 
   const dynamic = document.createElement('button');
-  dynamic.textContent = '⚡ 刷新动态数据';
-  dynamic.title = '只刷新实时价格 / 当前PE/PB / 股息率（增量、快）';
+  dynamic.textContent = '⚡ 动态';
+  dynamic.title = '刷新动态数据：实时价格 / 当前PE/PB / 股息率（增量、快）';
   dynamic.onclick = () => doRefresh(dynamic, false);
   nav.appendChild(dynamic);
 
   const full = document.createElement('button');
-  full.textContent = '🔄 全量刷新';
+  full.textContent = '🔄 全量';
   full.className = 'primary';
-  full.title = '日K + 估值分位重算 + 财务/股息，触发全部重计算';
+  full.title = '全量刷新：日K + 估值分位重算 + 财务/股息，触发全部重计算';
   full.onclick = () => doRefresh(full, true);
   nav.appendChild(full);
 
@@ -114,38 +249,275 @@ function initNav(active) {
   setupPrewarmBar(nav);
 }
 
-// 启动后台预热提示条（全页通用）：轮询 /status/prewarm，预热中显示当前步骤，刚完成时短暂展示结果。
-// 预热是启动后台线程执行的（拉汇率/查除权/缓存市场列表），不提示会让用户误以为程序没反应。
-let _prewarmSeen = false;
+// 统一后台任务条：双车道队列 + 取消；轮询 /status/jobs。
+let _jobBarActive = false;
+let _jobBarSeenIds = new Set();
+let _jobBarHideTimer = null;
+
 function setupPrewarmBar(nav) {
+  setupJobBar(nav);
+}
+
+function setupJobBar(nav) {
   if (!nav || document.getElementById('prewarmBar')) return;
   const bar = document.createElement('div');
   bar.id = 'prewarmBar';
   bar.className = 'prewarm-bar';
   bar.style.display = 'none';
-  const txt = document.createElement('span');
-  txt.id = 'prewarmText';
-  bar.appendChild(txt);
+  bar.innerHTML = `
+    <div class="prewarm-row">
+      <span id="prewarmText"></span>
+      <span class="prewarm-actions">
+        <span id="prewarmPct" class="prewarm-pct"></span>
+        <button type="button" class="job-toggle-btn" id="jobQueueToggle" style="display:none">任务</button>
+        <button type="button" class="job-cancel-btn" id="jobCancelPrimary" title="取消" style="display:none">取消</button>
+      </span>
+    </div>
+    <div class="progress-track prewarm-track">
+      <div class="progress-fill" id="prewarmFill"></div>
+    </div>
+    <div id="jobQueueList" class="job-queue-list" style="display:none"></div>`;
   nav.insertAdjacentElement('afterend', bar);
+  const txt = bar.querySelector('#prewarmText');
+  const pctEl = bar.querySelector('#prewarmPct');
+  const fill = bar.querySelector('#prewarmFill');
+  const qList = bar.querySelector('#jobQueueList');
+  const cancelBtn = bar.querySelector('#jobCancelPrimary');
+  const toggleBtn = bar.querySelector('#jobQueueToggle');
+  let queueOpen = false;  // 列表默认收起，点「任务」才展开
 
-  async function checkPrewarm() {
+  async function cancelJob(id, isBatch) {
+    if (!id) return;
     try {
-      const p = await api('/status/prewarm', { silent: true });
-      if (p.running) {
-        _prewarmSeen = true;
-        bar.classList.remove('done');
-        bar.style.display = 'block';
-        txt.textContent = p.step ? '后台预热中：' + p.step + '…' : '后台预热中…';
-        setTimeout(checkPrewarm, 3000);
-      } else if (_prewarmSeen && p.done.length) {
-        // 页面加载时预热进行中，现已完成 → 展示一次结果后隐藏
-        bar.classList.add('done');
-        txt.textContent = '后台预热完成：' + p.done.join(' / ') + '，数据已就绪';
-        setTimeout(() => { bar.style.display = 'none'; }, 5000);
-      }
-    } catch (e) { /* 预热接口查询失败静默 */ }
+      await api(isBatch ? '/jobs/batch/' + id : '/jobs/' + id, {
+        method: 'DELETE', silent: true,
+      });
+      toast('已取消');
+      tick();
+    } catch (e) {
+      toast(e.message || '取消失败', 3000);
+    }
   }
-  checkPrewarm();
+  cancelBtn.onclick = () => {
+    const id = cancelBtn.dataset.id;
+    const batch = cancelBtn.dataset.batch === '1';
+    cancelJob(id, batch);
+  };
+  toggleBtn.onclick = () => {
+    queueOpen = !queueOpen;
+    qList.style.display = queueOpen ? 'block' : 'none';
+    toggleBtn.classList.toggle('on', queueOpen);
+    tick();
+  };
+
+  function fireDone(detail) {
+    const id = detail.job_id;
+    if (!id || _jobBarSeenIds.has(id + ':' + (detail.status || detail.ok))) return;
+    _jobBarSeenIds.add(id + ':' + (detail.status || detail.ok));
+    window.dispatchEvent(new CustomEvent('app-job-done', { detail }));
+    const kind = detail.kind || '';
+    const ok = detail.ok !== false && detail.status !== 'cancelled' && !detail.error;
+    if (ok && (kind.startsWith('refresh') || kind.startsWith('index.refresh'))) {
+      if (typeof loadPage === 'function') loadPage();
+    }
+  }
+
+  function renderQueueList(jobs) {
+    const listItems = jobs
+      .filter(j => j.status === 'running' || j.status === 'queued')
+      .slice(0, 24);
+    const runN = listItems.filter(j => j.status === 'running').length;
+    const qN = listItems.length - runN;
+    if (!listItems.length) {
+      toggleBtn.style.display = 'none';
+      qList.innerHTML = '';
+      qList.style.display = 'none';
+      return;
+    }
+    toggleBtn.style.display = '';
+    toggleBtn.textContent = queueOpen
+      ? `收起 (${listItems.length})`
+      : `任务 ${listItems.length}` + (qN ? ` · 排队${qN}` : '');
+    toggleBtn.classList.toggle('on', queueOpen);
+    if (!queueOpen) {
+      qList.style.display = 'none';
+      return;
+    }
+    qList.innerHTML =
+      `<div class="job-queue-title">进行中 ${runN} · 排队 ${qN}</div>` +
+      listItems.map(j => {
+        const st = j.status === 'running' ? '进行中' : '排队';
+        const can = j.cancellable !== false && j.kind !== 'system.prewarm';
+        const x = can
+          ? `<button type="button" class="job-cancel-btn" data-id="${j.job_id}" title="取消">×</button>`
+          : `<span class="job-queue-locked" title="启动预热不可取消">—</span>`;
+        return `<div class="job-queue-item">
+          <span class="job-queue-label"><span class="job-queue-st">${st}</span>${j.label || j.kind}</span>
+          ${x}
+        </div>`;
+      }).join('');
+    qList.querySelectorAll('button[data-id]').forEach(btn => {
+      btn.onclick = () => cancelJob(btn.dataset.id, false);
+    });
+    qList.style.display = 'block';
+  }
+
+  async function tick() {
+    try {
+      const p = await api('/status/jobs', { silent: true });
+      const jobs = p.jobs || [];
+      const batches = p.batches || [];
+      const active = jobs.length > 0 || batches.length > 0;
+      (p.recent || []).slice(0, 8).forEach(r => {
+        if (r && (r.status === 'done' || r.status === 'error' || r.status === 'cancelled')) {
+          fireDone(r);
+        }
+      });
+
+      if (active) {
+        _jobBarActive = true;
+        if (_jobBarHideTimer) { clearTimeout(_jobBarHideTimer); _jobBarHideTimer = null; }
+        bar.classList.remove('done', 'error');
+        bar.style.display = 'block';
+
+        const batch = batches[0];
+        const runJobs = jobs.filter(j => j.status === 'running');
+        const queued = jobs.filter(j => j.status === 'queued');
+        let label, cur, tot, step, pct, cancelId, cancelIsBatch, cancellable = true;
+
+        if (batch) {
+          label = batch.label || '刷新';
+          cur = batch.done_count || 0;
+          tot = batch.total || 1;
+          const runNames = (batch.running || []).slice(0, 3).join('、') || batch.current_label || '进行中';
+          step = runNames;
+          pct = batch.pct != null ? batch.pct : 0;
+          cancelId = batch.batch_id;
+          cancelIsBatch = true;
+          cancellable = true;
+        } else if (runJobs[0]) {
+          const j = runJobs[0];
+          label = j.label || j.kind || '后台任务';
+          cur = j.current || (j.done_count || 0) + (j.step ? 1 : 0);
+          tot = j.total || 1;
+          step = j.step || '进行中';
+          pct = j.pct != null ? j.pct : 0;
+          cancelId = j.job_id;
+          cancelIsBatch = false;
+          cancellable = j.cancellable !== false && j.kind !== 'system.prewarm';
+        } else if (queued[0]) {
+          label = '排队中';
+          cur = 0;
+          tot = queued.length;
+          step = queued.map(j => j.label).slice(0, 4).join('、');
+          pct = 0;
+          cancelId = queued[0].job_id;
+          cancelIsBatch = false;
+          cancellable = queued[0].cancellable !== false && queued[0].kind !== 'system.prewarm';
+        }
+
+        txt.textContent = `${label} ${cur}/${tot}：${step}`;
+        pctEl.textContent = (pct != null ? pct : 0) + '%';
+        fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+        if (cancelId && cancellable) {
+          cancelBtn.style.display = '';
+          cancelBtn.dataset.id = cancelId;
+          cancelBtn.dataset.batch = cancelIsBatch ? '1' : '0';
+          cancelBtn.textContent = cancelIsBatch ? '取消整批' : '取消';
+        } else {
+          cancelBtn.style.display = 'none';
+        }
+
+        renderQueueList(jobs);
+
+        const st = document.getElementById('statusText');
+        if (st) { st.textContent = ''; st.style.display = 'none'; }  // 进度只在任务条，避免双写
+        setTimeout(tick, 1000);
+      } else if (_jobBarActive) {
+        _jobBarActive = false;
+        queueOpen = false;
+        cancelBtn.style.display = 'none';
+        toggleBtn.style.display = 'none';
+        qList.style.display = 'none';
+        qList.innerHTML = '';
+        const last = (p.recent || [])[0];
+        const label = (last && last.label) || p.label || '任务';
+        const ok = last ? (last.ok !== false && last.status !== 'cancelled') : (p.ok !== false);
+        bar.classList.toggle('done', ok);
+        bar.classList.toggle('error', !ok);
+        bar.style.display = 'block';
+        txt.textContent = ok ? (label + '完成') : (label + (last && last.status === 'cancelled' ? '已取消' : '失败'));
+        pctEl.textContent = ok ? '100%' : '';
+        fill.style.width = ok ? '100%' : '0%';
+        if (last && last.status === 'cancelled') toast(label + '已取消');
+        else if (ok) toast(label + '完成');
+        else toast((last && last.error) || label + '失败', 4000);
+        const st = document.getElementById('statusText');
+        if (st) { st.style.display = ''; st.textContent = ''; }
+        _jobBarHideTimer = setTimeout(() => { bar.style.display = 'none'; }, 4000);
+        setTimeout(tick, 2000);
+      } else {
+        setTimeout(tick, 2500);
+      }
+    } catch (e) {
+      setTimeout(tick, 3000);
+    }
+  }
+  window.kickJobBar = () => { _jobBarActive = true; tick(); };
+  tick();
+}
+
+/** 启动后台任务（POST 秒回 job_id / batch_id），顶部条跟进度。 */
+async function startBackgroundJob(path, body, opts = {}) {
+  const data = await api(path, {
+    method: 'POST',
+    body: body || {},
+    silent: !!opts.silent,
+  });
+  if (!data || !data.job_id) throw new Error('未返回任务 ID');
+  if (!opts.silent) toast(opts.toast || '任务已加入队列，进度见顶部');
+  if (typeof window.kickJobBar === 'function') window.kickJobBar();
+  return data;
+}
+
+/** 等待指定 job/batch 出现在 recent（队列连跑时不能等全局 idle）。 */
+function waitForJob(jobId, timeoutMs = 600000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (ok, detail, err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      window.removeEventListener('app-job-done', onDone);
+      if (ok) resolve(detail || {});
+      else reject(new Error(err || '任务失败'));
+    };
+    function match(d) {
+      if (!d) return false;
+      if (!jobId) return true;
+      return d.job_id === jobId || d.batch_id === jobId;
+    }
+    function onDone(e) {
+      const d = e.detail || {};
+      if (!match(d)) return;
+      if (d.status === 'cancelled' || d.ok === false || d.error) finish(false, d, d.error || '已取消');
+      else finish(true, d);
+    }
+    window.addEventListener('app-job-done', onDone);
+    const timer = setTimeout(() => finish(false, null, '任务超时'), timeoutMs);
+    const poll = setInterval(async () => {
+      try {
+        const p = await api('/status/jobs', { silent: true });
+        const hit = (p.recent || []).find(r => match(r));
+        if (hit) {
+          if (hit.status === 'cancelled' || hit.ok === false || hit.error)
+            finish(false, hit, hit.error || '已取消');
+          else finish(true, hit);
+        }
+      } catch (e) { /* ignore */ }
+    }, 500);
+  });
 }
 
 // 刷新内容项（与后端 DYNAMIC_ITEMS / FULL_ITEMS / STOCK_*_ITEMS 对应）
@@ -217,21 +589,16 @@ async function doRefresh(btn, full, scope = 'global', code) {
   const items = await chooseRefreshItems(full, scope);
   if (!items || !items.length) return; // 用户取消或未勾选任何内容
   btn.disabled = true;
-  document.getElementById('statusText').textContent = '刷新中…';
+  const st = document.getElementById('statusText');
+  if (st) st.textContent = '已提交刷新…';
+  const label = scope === 'stock' ? '个股' : (full ? '全量' : '动态');
   try {
     const path = scope === 'stock'
       ? `/stocks/${code}/refresh` + (full ? '/full' : '')
       : full ? '/refresh/full' : '/refresh';
-    const r = await api(path, { blocking: true, method: 'POST', body: JSON.stringify({ items }) });
-    const n = r.total_fetched ?? 0;
-    const label = scope === 'stock' ? '个股' : (full ? '全量' : '动态');
-    document.getElementById('statusText').textContent =
-      `${label}刷新完成：${scope === 'stock' ? r.code : (r.stocks?.length ?? 0) + ' 只持仓'}，拉取 ${n} 条 ${r.time ?? ''}`;
-    toast(`${label}刷新完成`);
-    // 刷新后重新加载当前页数据
-    if (typeof loadPage === 'function') loadPage();
+    await startBackgroundJob(path, { items }, { toast: `${label}刷新已开始，进度见顶部` });
   } catch (e) {
-    document.getElementById('statusText').textContent = '刷新失败';
+    if (st) st.textContent = '刷新失败';
     toast('刷新失败：' + e.message, 4000);
   } finally {
     btn.disabled = false;
@@ -590,8 +957,9 @@ function renderFundflowPersistedPanel(el, r) {
 async function refreshFlowBeforeAnalysis(code) {
   try {
     const body = { items: ['flow', 'price'] };
-    if (code) await api('/stocks/' + code + '/refresh', { method: 'POST', body, silent: true });
-    else await api('/refresh', { method: 'POST', body, silent: true });
+    const path = code ? '/stocks/' + code + '/refresh' : '/refresh';
+    const job = await startBackgroundJob(path, body, { silent: true });
+    await waitForJob(job.job_id);
   } catch (e) { /* 刷新失败不阻断，分析用缓存数据 */ }
 }
 
@@ -653,10 +1021,12 @@ async function runFundflowAi({ code, window, btn, panel }) {
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🔄 刷新资金流数据…</div>';
     try {
       await refreshFlowBeforeAnalysis(code);
-      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 分析中…</div>';
+      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
       const body = { code: code || '', window: window || '15m', intensity };
       if (systemPrompt) body.system_prompt = systemPrompt;
-      const d = await api('/ai/fundflow-analysis', { method: 'POST', body });
+      const job = await startBackgroundJob('/ai/fundflow-analysis', body, { toast: '资金流 AI 已开始' });
+      await waitForJob(job.job_id);
+      const d = await api('/ai/fundflow-report/' + encodeURIComponent(code) + '?window=' + encodeURIComponent(window || '15m'), { silent: true });
       renderFundflowAiPanel(panel, d);
     } catch (e) {
       panel.innerHTML = `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
@@ -758,9 +1128,11 @@ async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weigh
         body.tags = tags || null;
         await refreshFlowBeforeAnalysis('');
       }
-      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量 AI 分析中…</div>';
-      const d = await api('/ai/fundflow-batch', { method: 'POST', body });
-      renderFundflowBatchPanel(panel, d);
+      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量 AI 已提交，进度见顶部…</div>';
+      const job = await startBackgroundJob('/ai/fundflow-batch', body, { toast: '批量资金流 AI 已开始' });
+      await waitForJob(job.job_id);
+      // 完成后由页面 onDone 重载持久化面板
+      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
       if (typeof onDone === 'function') onDone();
     } catch (e) {
       panel.innerHTML = `<div class="empty" style="padding:10px;margin:0">批量分析失败：${esc(e.message)}</div>`;

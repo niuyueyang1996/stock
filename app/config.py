@@ -61,3 +61,6 @@ QUANTILE_MIN_SAMPLES = 60
 # 默认 high；用户可在「🤖 AI」设置弹窗里自行选择（写 config 表 ai_reasoning_effort）
 # provider 不支持该参数时会被忽略
 AI_REASONING_EFFORT = "high"
+
+# 测试设为 True，跳过 create_app 启动后台预热（避免占全局任务槽）
+SKIP_STARTUP_TASKS = False

@@ -135,3 +135,121 @@ def refresh_all_indices() -> dict:
     if fail:
         logger.warning("[指数] 预热失败 %d 个: %s", len(fail), fail)
     return {"codes": codes, "ok": len(codes) - len(fail), "fail": fail}
+
+
+def _a_share_session_progress(as_of: str) -> float:
+    """A 股交易时段进度 0~1（09:30-11:30 + 13:00-15:00，共 240 分钟）。as_of='HH:MM'。"""
+    try:
+        hh, mm = (as_of or "00:00").split(":")[:2]
+        mins = int(hh) * 60 + int(mm)
+    except (TypeError, ValueError):
+        return 0.0
+    # 09:30=570, 11:30=690, 13:00=780, 15:00=900
+    if mins <= 570:
+        elapsed = 0
+    elif mins <= 690:
+        elapsed = mins - 570
+    elif mins < 780:
+        elapsed = 120
+    elif mins <= 900:
+        elapsed = 120 + (mins - 780)
+    else:
+        elapsed = 240
+    return min(1.0, max(0.0, elapsed / 240.0))
+
+
+def index_turnover_compare(code: str) -> dict:
+    """指数成交额 + 较上一交易日同时段成交额（纯缓存零网络）。
+
+    口径（额，非量）：
+    - amount：行情当日成交额（腾讯三元组，权威）
+    - 分时只有量无额 → 用「额/量」比例折成金额（与 combo_index_volume 同构）：
+        scale_today = 今日额 / 今日分时累计量
+        scale_prev  = 昨全日额/昨全日量（昨额为 0 时退回 scale_today）
+    - 同比优先：今日累计额 vs 昨同时钟分时量×scale_prev
+    - 昨无分时：昨全日量 × 交易进度 × scale_prev（basis=scaled）
+    - 都无分时：今/昨全日额；昨额缺失则用量×scale 估（basis=daily）
+    - state：expand 放量 / shrink 缩量 / flat 持平（阈值 ±3%）
+    """
+    from datetime import date, timedelta
+
+    from app.data.cache import get_daily_price, get_daily_prices, get_index_intraday
+    from app.services.quote import get_quote
+
+    out = {
+        "amount": None, "prev_amount": None, "chg_pct": None,
+        "state": None, "as_of": None, "basis": None,
+    }
+    try:
+        q = get_quote(code) or {}
+    except Exception:  # noqa: BLE001
+        q = {}
+    today_amt = q.get("amount")
+    out["amount"] = float(today_amt) if today_amt is not None else None
+
+    today = date.today().isoformat()
+    start = (date.today() - timedelta(days=21)).isoformat()
+    bars = get_daily_prices(code, start, today)
+    prev_dates = [r["trade_date"] for r in bars if r["trade_date"] < today]
+    if not prev_dates:
+        return out
+    prev_date = prev_dates[-1]
+    prev_bar = get_daily_price(code, prev_date)
+    prev_vol_full = float(prev_bar["volume"] or 0.0) if prev_bar else 0.0
+    prev_amt_full = float(prev_bar["amount"] or 0.0) if prev_bar else 0.0
+
+    def _set_amt_chg(today_a: float, prev_a: float) -> None:
+        if prev_a <= 0 or today_a < 0:
+            return
+        chg = (today_a / prev_a - 1.0) * 100.0
+        out["chg_pct"] = round(chg, 1)
+        out["prev_amount"] = round(prev_a, 0)
+        out["state"] = "expand" if chg > 3 else ("shrink" if chg < -3 else "flat")
+
+    today_intra = get_index_intraday(code, today)
+    prev_intra = get_index_intraday(code, prev_date)
+
+    if today_intra and out["amount"] is not None:
+        as_of = today_intra[-1].get("ts") or ""
+        today_vol = sum(float(r.get("volume") or 0.0) for r in today_intra)
+        out["as_of"] = as_of or None
+        if today_vol <= 0:
+            return out
+        scale_today = out["amount"] / today_vol
+        scale_prev = (prev_amt_full / prev_vol_full) if (prev_amt_full > 0 and prev_vol_full > 0) else scale_today
+
+        if prev_intra:
+            prev_vol = sum(
+                float(r.get("volume") or 0.0)
+                for r in prev_intra
+                if (r.get("ts") or "") <= as_of
+            )
+            out["basis"] = "intraday"
+            _set_amt_chg(out["amount"], prev_vol * scale_prev)
+        elif prev_vol_full > 0:
+            progress = _a_share_session_progress(as_of)
+            out["basis"] = "scaled"
+            _set_amt_chg(out["amount"], prev_vol_full * progress * scale_prev)
+        return out
+
+    # 无今日分时：全日额对比
+    today_a = out["amount"]
+    if today_a is None:
+        today_vol = float(q.get("volume") or 0.0)
+        if today_vol > 0 and prev_vol_full > 0 and prev_amt_full > 0:
+            # 仅有量：用昨比例估今额再比（弱）
+            today_a = today_vol * (prev_amt_full / prev_vol_full)
+            out["amount"] = today_a
+    if today_a is not None and today_a > 0:
+        if prev_amt_full > 0:
+            out["basis"] = "daily"
+            _set_amt_chg(today_a, prev_amt_full)
+        elif prev_vol_full > 0:
+            # 昨额缺失：用今额/今量比例估昨全日额
+            today_vol = float(q.get("volume") or 0.0)
+            if today_vol <= 0 and bars and bars[-1]["trade_date"] == today:
+                today_vol = float(bars[-1]["volume"] or 0.0)
+            if today_vol > 0 and today_a > 0:
+                out["basis"] = "daily"
+                _set_amt_chg(today_a, prev_vol_full * (today_a / today_vol))
+    return out

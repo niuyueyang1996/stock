@@ -46,7 +46,7 @@ def _cny_rate(currency: str | None) -> float | None:
 
 # ---------- 个股快照 ----------
 
-def _passthrough(code: str, quantity: float) -> dict | None:
+def _passthrough(code: str, quantity: float, fin=None) -> dict | None:
     """穿透式归属指标。无基本面返回 None。
 
     {attr_profit, attr_net_assets, ttm_cur, ttm_prev}
@@ -54,8 +54,10 @@ def _passthrough(code: str, quantity: float) -> dict | None:
     财务已由数据转换层统一人民币 → attr_* 直接人民币口径，**不再乘汇率**（乘了就是
     对人民币报表股二次折算）。港股持仓市值折人民币仍需汇率：缺汇率剔除（不按 1:1，
     与 missing_fx 同口径），保证本股 attr_* 与组合市值可同时进入分母/分子。
+    fin：可选预加载财务行，避免与 snapshot/compute_live 重复读库。
     """
-    fin = get_financials(code)
+    if fin is None:
+        fin = get_financials(code)
     if not fin:
         return None
     # 港股 → 持仓市值折人民币需 HKD→CNY；缺汇率剔除（不按 1:1）
@@ -112,8 +114,25 @@ def _passthrough(code: str, quantity: float) -> dict | None:
     }
 
 
+def _load_day_trades(codes: list[str], trade_date: str) -> dict[str, list]:
+    """一次查出多只股票当日买卖流水，返回 {code: [rows]}。"""
+    if not codes:
+        return {}
+    out: dict[str, list] = {c: [] for c in codes}
+    placeholders = ",".join("?" * len(codes))
+    with get_conn() as c:
+        rows = c.execute(
+            f"SELECT code, side, price, quantity, fee FROM trades "
+            f"WHERE code IN ({placeholders}) AND date(trade_time)=? ORDER BY id",
+            (*codes, trade_date),
+        ).fetchall()
+    for r in rows:
+        out.setdefault(r["code"], []).append(r)
+    return out
+
+
 def _day_pnl(code: str, quantity: float, price: float, prev_close: float | None,
-             trade_date: str) -> float | None:
+             trade_date: str, rows: list | None = None) -> float | None:
     """今日盈亏（券商口径，避免「按现价买入却按昨收算成本」的误判）：
 
     - 前日持仓浮动：(现价 − 昨收) × 前日剩余持仓
@@ -122,14 +141,16 @@ def _day_pnl(code: str, quantity: float, price: float, prev_close: float | None,
     - 减去当日费用
 
     先卖前日持仓（昨收成本），再卖当日买入（买入均价成本）。
+    rows：可选预加载的当日 trades（批量路径传入，避免每只开连）。
     """
     if prev_close is None:
         return None
-    with get_conn() as c:
-        rows = c.execute(
-            "SELECT side, price, quantity, fee FROM trades WHERE code=? AND date(trade_time)=? ORDER BY id",
-            (code, trade_date),
-        ).fetchall()
+    if rows is None:
+        with get_conn() as c:
+            rows = c.execute(
+                "SELECT side, price, quantity, fee FROM trades WHERE code=? AND date(trade_time)=? ORDER BY id",
+                (code, trade_date),
+            ).fetchall()
     buy_qty = sum(r["quantity"] for r in rows if r["side"] == "buy")
     sell_qty = sum(r["quantity"] for r in rows if r["side"] == "sell")
     sell_amt = sum(r["price"] * r["quantity"] for r in rows if r["side"] == "sell")
@@ -153,7 +174,9 @@ def _day_pnl(code: str, quantity: float, price: float, prev_close: float | None,
 def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
                     tag: str | None = None, is_etf: bool = False,
                     currency: str = "CNY", avg_cost_cny: float | None = None,
-                    total_dividend: float = 0.0) -> dict:
+                    total_dividend: float = 0.0,
+                    day_trade_rows: list | None = None,
+                    trade_date: str | None = None) -> dict:
     """单股当前快照：行情 + 人民币/原币价值 + 穿透基本面 + 累计分红。"""
     try:
         q = get_quote(code)
@@ -176,15 +199,18 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
     pnl_pct = round((value_cny / cost_cny - 1) * 100, 2) if (value_cny is not None and cost_cny) else None
 
     prev_close = q.get("prev_close") if q else None
-    day_pnl_native = _day_pnl(code, quantity, price, prev_close, date.today().isoformat())
+    td = trade_date or date.today().isoformat()
+    day_pnl_native = _day_pnl(code, quantity, price, prev_close, td, rows=day_trade_rows)
     day_pnl_cny = round(day_pnl_native * rate, 2) if (day_pnl_native is not None and rate) else None
 
     val = get_valuation_safe(code)
     ql = get_latest_quantile_safe(code, QUANTILE_PERIOD)
 
+    # 财务只读一次：供 compute_live + 股息/ROE 兜底 + 外层 _passthrough 复用
+    fin = get_financials(code)
     live = {}
     try:
-        live = compute_live(code, price)
+        live = compute_live(code, price, fin=fin)
     except Exception:  # noqa: BLE001 实时值失败不阻断组合
         pass
     pe = live.get("pe")
@@ -197,27 +223,20 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
     # 亏损股（TTM 净利≤0）不派息：不用过时每股股息兜底
     ttm_neg = live.get("ttm_net_profit") is not None and live["ttm_net_profit"] <= 0
     if dv is None and not ttm_neg:
-        fin = get_financials(code)
         if fin and fin["dv_per_share"] and price:
             # 每股股息已统一人民币；价格按原生币种（港股港元）→ 折人民币后算比率
             price_cny = price * rate if rate else None
             if price_cny:
                 dv = round(fin["dv_per_share"] / price_cny * 100, 2)
     roe = live.get("roe_ttm")
-    if roe is None:
-        fin = get_financials(code)
-        if fin:
-            roe = fin["roe"]
+    if roe is None and fin:
+        roe = fin["roe"]
     revenue_yoy = live.get("revenue_yoy_ttm")
-    if revenue_yoy is None:
-        fin = get_financials(code)
-        if fin:
-            revenue_yoy = fin["revenue_yoy"]
+    if revenue_yoy is None and fin:
+        revenue_yoy = fin["revenue_yoy"]
     profit_yoy = live.get("profit_yoy_ttm")
-    if profit_yoy is None:
-        fin = get_financials(code)
-        if fin:
-            profit_yoy = fin["profit_yoy"]
+    if profit_yoy is None and fin:
+        profit_yoy = fin["profit_yoy"]
 
     tag = tag or get_instrument(code).tag
     is_etf = is_etf or get_instrument(code).is_etf or tag in ("ETF",)
@@ -279,6 +298,8 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
         "ps_ttm": live.get("ps_ttm"),
         "ps_fwd": live.get("ps_fwd"),
         "missing": False,
+        "_live": live,   # 内部：供序列当前 PE/PB 复用，响应前剥离
+        "_fin": fin,     # 内部：供 _passthrough 复用
     }
 
 
@@ -385,14 +406,26 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
         holdings = [h for h in all_holdings if (h.get("tag") or "") in tag_set]
     holding_codes = {h["code"] for h in holdings}
     # 全部持仓快照只算一次：子集聚合用 stocks，左侧标签卡片侧栏用 all_stocks
+    today = date.today().isoformat()
+    day_trades = _load_day_trades([h["code"] for h in all_holdings], today)
+    live_by_code: dict[str, dict] = {}
     all_stocks = []
     for h in all_holdings:
         s = _stock_snapshot(h["code"], h["name"], h["quantity"], h["avg_cost"],
                             h.get("tag"), h.get("is_etf", False),
                             h.get("currency", "CNY"), h.get("avg_cost_cny"),
-                            h.get("total_dividend", 0.0))
+                            h.get("total_dividend", 0.0),
+                            day_trade_rows=day_trades.get(h["code"], []),
+                            trade_date=today)
         if not s.get("missing"):
-            s["passthrough"] = _passthrough(s["code"], s["quantity"])
+            live = s.pop("_live", None) or {}
+            fin = s.pop("_fin", None)
+            if live:
+                live_by_code[s["code"]] = live
+            s["passthrough"] = _passthrough(s["code"], s["quantity"], fin=fin)
+        else:
+            s.pop("_live", None)
+            s.pop("_fin", None)
         all_stocks.append(s)
     stocks = [s for s in all_stocks if s["code"] in holding_codes]
 
@@ -495,12 +528,14 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
 
     # 打包后的组合历史序列分位（首页 pe_pct/pb_pct）
     if tags is not None:
-        # 子集：按选中持仓实时打包（读各股缓存序列 + compute_live，零网络），不写缓存
+        # 子集：按选中持仓实时打包（读各股缓存序列 + 复用已算 live，零网络），不写缓存
         sub_weights = {s["code"]: s["value_cny"] for s in cny}
         tot = sum(sub_weights.values())
-        series = compute_portfolio_series({c: v / tot for c, v in sub_weights.items()}) if tot else {}
+        series = (compute_portfolio_series(
+            {c: v / tot for c, v in sub_weights.items()}, live_by_code=live_by_code
+        ) if tot else {})
     else:
-        series = get_portfolio_series()   # 全选/默认视图读缓存（快路径）
+        series = get_portfolio_series(live_by_code=live_by_code)   # 全选/默认视图读缓存（快路径）
     s1 = series.get("1y", {})
     pe_pct = s1.get("pe_pct")
     pb_pct = s1.get("pb_pct")
@@ -675,18 +710,24 @@ def _combo_weighted(day_map: dict, weights: dict) -> float | None:
     return val
 
 
-def _combo_current(weights: dict, indicator: str) -> float | None:
+def _combo_current(weights: dict, indicator: str,
+                   live_by_code: dict[str, dict] | None = None) -> float | None:
     """当前综合 PE/PB：当前权重 × 各股实时值（实时市值/TTM 口径）。亏损股允许参与。
 
     亏损股（live.pe 为 None 但 TTM 净利为负）用 市值/负TTM 得到负 PE 参与，
     与历史样本（百度负 PE 序列）口径一致，避免「当前排除、历史参与」导致分位失真。
+    live_by_code：可选预计算的 compute_live 结果，避免序列当前点再次逐只拉财务。
     """
     items = []
     for code, w in weights.items():
-        try:
-            live = compute_live(code)
-        except Exception:  # noqa: BLE001
-            continue
+        live = None
+        if live_by_code is not None and code in live_by_code:
+            live = live_by_code[code]
+        else:
+            try:
+                live = compute_live(code)
+            except Exception:  # noqa: BLE001
+                continue
         if not isinstance(live, dict):
             continue
         v = live.get(indicator)
@@ -740,11 +781,13 @@ def _portfolio_hash() -> str:
     return hashlib.md5(repr(rows).encode()).hexdigest()[:16]
 
 
-def compute_portfolio_series(weights: dict | None = None) -> dict:
+def compute_portfolio_series(weights: dict | None = None,
+                             live_by_code: dict[str, dict] | None = None) -> dict:
     """用人民币市值权重 × 各股历史序列，构建组合综合 PE/PB 序列（1y/3y/5y）。
 
     综合 PE_t = 1/Σ(w_i/PE_i(t))；当前值用实时值；分位 = 当前值在「当前日期之前 + 覆盖≥90%」样本的分位。
     weights：可选指定权重（标签子集复用；缺省取当前全部持仓市值权重）。
+    live_by_code：可选预计算 live，避免当前 PE/PB 再逐只 compute_live。
     返回 {period: {dates, pe, pb, cur_pe, cur_pb, pe_pct, pb_pct, sample_days}}。
     """
     if weights is None:
@@ -767,8 +810,8 @@ def compute_portfolio_series(weights: dict | None = None) -> dict:
             pb_series.append(pb_v)
             pe_cov_series.append(round(pe_cov, 4))
             pb_cov_series.append(round(pb_cov, 4))
-        cur_pe = _combo_current(weights, "pe")
-        cur_pb = _combo_current(weights, "pb")
+        cur_pe = _combo_current(weights, "pe", live_by_code=live_by_code)
+        cur_pb = _combo_current(weights, "pb", live_by_code=live_by_code)
         # 分位样本：当前估值日期之前 + 市值覆盖率≥90%
         sample_pe, sample_pb = [], []
         for d in dates:
@@ -820,10 +863,11 @@ def rebuild_portfolio_series() -> int:
     return sum(len(d["dates"]) for d in data.values())
 
 
-def get_portfolio_series() -> dict:
+def get_portfolio_series(live_by_code: dict[str, dict] | None = None) -> dict:
     """读取最近一次缓存的组合序列（纯读缓存零网络零写入）。
 
     缓存缺失/失效时返回空 dict，不联网、不写库、不懒重建（由刷新/交易写路径负责重建）。
+    live_by_code：可选预计算 live，供当前 PE/PB 复用。
     """
     today = date.today().isoformat()
     with get_conn() as c:
@@ -851,8 +895,8 @@ def get_portfolio_series() -> dict:
         return {}
     weights = _portfolio_weights()
     for period, d in out.items():
-        cur_pe = _combo_current(weights, "pe")
-        cur_pb = _combo_current(weights, "pb")
+        cur_pe = _combo_current(weights, "pe", live_by_code=live_by_code)
+        cur_pb = _combo_current(weights, "pb", live_by_code=live_by_code)
         d["cur_pe"], d["cur_pb"] = cur_pe, cur_pb
         sample_pe, sample_pb = [], []
         for i, dd in enumerate(d["dates"]):

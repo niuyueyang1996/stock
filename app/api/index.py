@@ -17,6 +17,7 @@ from app.services.indices import (
     get_etf_index_mapping,
     get_index_def,
     get_index_defs,
+    index_turnover_compare,
     set_etf_index_mapping,
     update_index_def,
 )
@@ -37,7 +38,7 @@ def _safe_quote(code: str) -> dict | None:
 
 
 def _index_summary(d: dict) -> dict:
-    """指数摘要行：注册表信息 + 点位。指数 PE/PB 已停用（用户确认不关注），不返回估值。纯读缓存零网络。"""
+    """指数摘要行：注册表信息 + 点位 + 成交额/同时段量能。纯读缓存零网络。"""
     code = d["code"]
     quote = _safe_quote(code)
     return {
@@ -48,6 +49,7 @@ def _index_summary(d: dict) -> dict:
         "pe_source": d["pe_source"],
         "pb_source": d["pb_source"],
         "quote": quote,
+        "turnover": index_turnover_compare(code),
     }
 
 
@@ -93,18 +95,16 @@ def indices_fundflow(codes: str):
 
 @router.post("/indices/refresh-all")
 def indices_refresh_all():
-    """一键刷新全部指数：日K增量 + 实时点位 + 估值(序列末值+分位) + 资金流(东财五档)。
-
-    与启动预热同逻辑（refresh_all_indices，并发限流 6，单指数失败不中断）。
-    分时资金流按 ts UPSERT 覆盖——盘中早段抓到的残缺分钟（如 09:33 只有 3 条）
-    会在收盘后重拉时补齐为全天 240 条。估值分位 force 重算由 sync_valuation 内部
-    「分位缺失即重算」保证（指数 PB 序列样本不足时 pb_pct=None 不跳过）。
-    """
+    """一键刷新全部指数：后台异步，进度见 GET /status/jobs。"""
     from app.services.indices import refresh_all_indices
+    from app.services.job_runners import start_simple
 
-    r = refresh_all_indices()
-    logger.info("[指数] 刷新全部完成：ok=%d 失败=%s", r["ok"], r["fail"])
-    return {"ok": True, "data": r}
+    job_id = start_simple(
+        "index.refresh.all", "刷新全部指数",
+        refresh_all_indices,
+        step="同步全部指数",
+    )
+    return {"ok": True, "data": {"job_id": job_id, "async": True}}
 
 
 class IndexDefBody(BaseModel):
@@ -186,9 +186,15 @@ def put_index_def(code: str, body: IndexDefBody):
 
 @router.post("/indices/{code}/refresh")
 def index_refresh(code: str):
-    """单指数手动刷新（日K增量 + 点位 + 估值 + 资金流）。"""
+    """单指数手动刷新：后台异步，进度见 GET /status/jobs。"""
     if not get_index_def(code):
         raise HTTPException(404, f"指数不存在: {code}")
+    from app.services.job_runners import start_simple
     from app.services.refresh import refresh_index
 
-    return {"ok": True, "data": refresh_index(code)}
+    job_id = start_simple(
+        "index.refresh", f"刷新指数 {code}",
+        lambda: refresh_index(code),
+        step=f"同步 {code}",
+    )
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
