@@ -6,14 +6,18 @@ import pytest
 
 
 def _await_job(client, job_id=None, timeout=60):
-    """轮询 /status/jobs，在 recent 中找到 job/batch 即返回。"""
+    """轮询 /status/jobs，在 recent 中找到 job/batch 即返回。
+
+    只按 job_id 匹配：全局刷新的 batch 收尾写入 recent 时 job_id==batch_id。
+    勿用 batch_id 匹配，否则会提前命中扇出子任务（kind=refresh.stock.*）。
+    """
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
         last = client.get("/api/status/jobs").json()["data"]
         if job_id:
             for r in last.get("recent") or []:
-                if r.get("job_id") == job_id or r.get("batch_id") == job_id:
+                if r.get("job_id") == job_id:
                     return r
         else:
             active = (last.get("jobs") or []) or (last.get("batches") or [])

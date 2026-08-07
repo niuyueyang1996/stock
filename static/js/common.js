@@ -497,7 +497,9 @@ function waitForJob(jobId, timeoutMs = 600000) {
     function match(d) {
       if (!d) return false;
       if (!jobId) return true;
-      return d.job_id === jobId || d.batch_id === jobId;
+      // 只认 job_id：batch 收尾写入 recent 时 job_id===batch_id。
+      // 勿用 batch_id 匹配，否则会提前命中扇出子任务（kind=refresh.stock.*）。
+      return d.job_id === jobId;
     }
     function onDone(e) {
       const d = e.detail || {};
