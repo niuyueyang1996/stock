@@ -18,7 +18,7 @@ from app.data.base import is_hk_code, to_symbol
 # 全局刷新并发时会多只股票并行拉分笔，锁保护「读游标 → 合并快照」内存序列，
 # 防同股并发重复合并快照、撕裂读写。
 _TICK_LOCK = threading.Lock()
-_TICK_SNAPSHOT: dict[tuple[str, str], list[tuple[str, float, int]]] = {}
+_TICK_SNAPSHOT: dict[tuple[str, str], list[tuple[str, float, int, float]]] = {}
 _TICK_CURSOR: dict[tuple[str, str], dict] = {}
 
 # 腾讯 detail 接口每页约 70 条（约 5 分钟成交）；全天约 35 页。
@@ -26,8 +26,12 @@ _TICK_PAGE_SIZE = 70
 _TICK_MAX_PAGE = 200
 
 
-def _parse_tick_page(text: str) -> list[tuple[str, float, int]]:
-    """解析腾讯分笔一页。格式 `1500,"序号/时间/价格/变动/量/金额/性质|..."`。"""
+def _parse_tick_page(text: str) -> list[tuple[str, float, int, float]]:
+    """解析腾讯分笔一页。格式 `1500,"序号/时间/价格/变动/量/金额/性质|..."`。
+
+    返回 (time 'HH:MM:SS', amount, sign, price)。价格取第 3 段，解析失败取 0.0
+    （资金流聚合用不到价，但分时股价折线要；存 0.0 后由聚合层按 is not None 判断）。
+    """
     i = text.find("[")
     j = text.rfind("]")
     if i < 0 or j <= i:
@@ -46,13 +50,17 @@ def _parse_tick_page(text: str) -> list[tuple[str, float, int]]:
             amount = float(f[5])
         except (TypeError, ValueError):
             continue
+        try:
+            price = float(f[2])
+        except (TypeError, ValueError):
+            price = 0.0
         prop = f[6]
         sign = 1 if prop == "B" else (-1 if prop == "S" else 0)
-        out.append((f[1], amount, sign))
+        out.append((f[1], amount, sign, price))
     return out
 
 
-def _fetch_tick_page(symbol: str, page: int) -> list[tuple[str, float, int]]:
+def _fetch_tick_page(symbol: str, page: int) -> list[tuple[str, float, int, float]]:
     """拉取第 page 页分笔（腾讯正序：p=0 最早、新分笔追加在尾部页）。空页返回 []。"""
     resp = requests.get(
         "http://stock.gtimg.cn/data/index.php",

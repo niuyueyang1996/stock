@@ -54,8 +54,10 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setattr(dmod, "get_quote", _mock_quote)
     # 全市场代码名称列表：测试打桩为空，避免名称回填/搜索读开发机真实列表文件
     monkeypatch.setattr(smod, "_load_stock_list", lambda: [])
+    monkeypatch.setattr(smod, "_load_etf_list", lambda: [])
     monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
     monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [])
+    monkeypatch.setattr(smod, "_read_etf_stock_list_cache", lambda: [])
     monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [])
     # AI 自动打分后台线程在测试环境会逃逸：monkeypatch 还原后可能打到真实库/真实网络。
     # 测试里 maybe_auto_score_daily 退化为「只失效、不后台打分」，打分一律由测试显式调用。

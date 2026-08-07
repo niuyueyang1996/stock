@@ -59,9 +59,16 @@ def test_migration_v1_to_v2(tmp_path, monkeypatch):
         # AI 评分三表就位
         for t in ("tag_prefs", "ai_portfolio_reports", "ai_daily_reports"):
             assert t in tables
-        # 版本号升级到当前版本（7：日级资金流补 buy/sell 列）
+        # 版本号升级到当前版本（9：分时资金流补 price 列）
         ver = c.execute("SELECT value FROM config WHERE key='db_schema_version'").fetchone()[0]
-        assert ver == "7"
+        assert ver == "9"
+        # v8：ai_fundflow_reports / ai_fundflow_coherence_reports 补 html 列
+        for t in ("ai_fundflow_reports", "ai_fundflow_coherence_reports"):
+            info = {r["name"] for r in c.execute(f"PRAGMA table_info({t})").fetchall()}
+            assert "html" in info
+        # v9：fundflow_15m_cache 补 price 列（股价折线用）
+        finfo = {r["name"] for r in c.execute("PRAGMA table_info(fundflow_15m_cache)").fetchall()}
+        assert "price" in finfo
         info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_fundflow_cache)").fetchall()}
         for col in ("p50", "p80", "p95", "xs_net", "p15", "p40", "p75"):
             assert info[col]["name"] == col

@@ -557,6 +557,78 @@ def test_api_fundflow_report_missing(client):
     assert r.json()["data"] is None
 
 
+# ============================================================ 深入模式 HTML 报告
+
+def test_analyze_fundflow_intensity_html_gating(monkeypatch):
+    """个股资金流：深入 → system 含 HTML 要求 + schema 保留 html；快速/普通 → 快报式、无 html。"""
+    _activate_mock_model()
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
+    _seed_day("600000")
+    monkeypatch.setattr(ai_svc, "_minute_price_map", lambda code, w: {"09:30": 10.0})
+    captured = {}
+    monkeypatch.setattr(ai_mod, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(system=system, user=user)
+                        or {"summary": "主力净流入", "correlation": "positive"})
+    # 快速/普通：快报式提示在、无 HTML 要求、schema 无 html
+    ai_svc.analyze_fundflow("600000", "15m", intensity="normal")
+    assert "不要 HTML" in captured["system"]
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert '"html"' not in captured["user"]
+    # 深入：HTML 要求 + 快报式移除 + schema 保留 html
+    ai_svc.analyze_fundflow("600000", "15m", intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert "不要 HTML" not in captured["system"]
+    assert '"html"' in captured["user"]
+
+
+def test_fundflow_html_persist_roundtrip(monkeypatch):
+    """深入生成的 html 落库并可读回（F5 后📄按钮恢复）。"""
+    _activate_mock_model()
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
+    _seed_day("600000")
+    monkeypatch.setattr(ai_svc, "_minute_price_map", lambda code, w: {"09:30": 10.0})
+    _fake_chat(monkeypatch, {"summary": "主力净流入", "correlation": "positive",
+                             "main_force": "吸筹", "html": "<html>资金面报告</html>"})
+    r = ai_svc.analyze_fundflow("600000", "15m", intensity="deep")
+    assert r["analysis"]["html"] == "<html>资金面报告</html>"
+    rep = ai_svc.get_stock_fundflow_report("600000", "15m")
+    assert rep and rep["html"] == "<html>资金面报告</html>"
+    # 规整透传
+    n = ai_svc._normalize_fundflow_analysis({"correlation": "positive", "html": "<h1>报告</h1>"})
+    assert n["html"] == "<h1>报告</h1>"
+    assert ai_svc._normalize_fundflow_analysis({"correlation": "positive"})["html"] == ""
+
+
+def test_analyze_batch_intensity_html(monkeypatch):
+    """批量资金流：深入 → system 含 HTML 要求 + 返回并落库批量 html（coherence 报告读回）。"""
+    _activate_mock_model()
+    _seed_trade("600000", tag="红利")
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
+    captured = {}
+    payload = {}
+
+    def fake_chat(cfg, system, user, **kw):
+        captured.update(system=system, user=user)
+        return payload
+
+    monkeypatch.setattr(ai_mod, "chat_json", fake_chat)
+    # 普通：无 HTML 要求、schema 无 html；AI 不返回 html
+    payload = {"coherence": {"correlation": "positive", "summary": "共振", "points": [], "conclusion": "持有"},
+               "stocks": [{"code": "600000", "correlation": "positive", "summary": "流入"}]}
+    r = ai_svc.analyze_batch_fundflow(tags=["红利"], window="15m", intensity="normal")
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert '"html"' not in captured["user"]
+    assert r["html"] == ""
+    # 深入：HTML 要求 + schema 保留 html + 返回 html + 落库到 coherence 报告
+    payload = {**payload, "html": "<html>批量资金面</html>"}
+    r2 = ai_svc.analyze_batch_fundflow(tags=["红利"], window="15m", intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert '"html"' in captured["user"]
+    assert r2["html"] == "<html>批量资金面</html>"
+    coh = ai_svc.get_coherence_report("portfolio", "红利", "15m")
+    assert coh and coh["html"] == "<html>批量资金面</html>"
+
+
 def test_api_fundflow_reports_empty(client):
     r = client.get("/api/ai/fundflow-reports")
     assert r.status_code == 200

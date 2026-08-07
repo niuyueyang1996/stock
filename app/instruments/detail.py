@@ -11,6 +11,7 @@ from app.analysis.valuation import PERIODS, compute_live, get_quantiles
 from app.data.cache import (
     get_daily_fundflow,
     get_daily_fundflows,
+    get_daily_prices,
     get_financials,
     get_fundflow_min,
     get_index_intraday,
@@ -83,9 +84,10 @@ def build_detail(
         flow_latest = {k: flow_latest[k] for k in _FLOW_LATEST_FIELDS}
         flow_latest["xs_net"] = xs_net
 
-    # 近45日净流入历史
+    # 近45日净流入历史（日级收盘价作股价折线）
     today = date.today().isoformat()
     flow_start = (date.today() - timedelta(days=45)).isoformat()
+    close_map = {r["trade_date"]: r["close"] for r in get_daily_prices(code, flow_start, today)}
     flow_hist = [
         {
             "trade_date": r["trade_date"],
@@ -98,6 +100,7 @@ def build_detail(
             "xs_net": r["xs_net"],
             "buy_amount": r["buy_amount"],
             "sell_amount": r["sell_amount"],
+            "price": close_map.get(r["trade_date"]),   # 当日收盘价（股价折线）
         }
         for r in get_daily_fundflows(code, flow_start, today)
     ]
@@ -115,6 +118,7 @@ def build_detail(
             "xs_net": r["xs_net"],
             "buy_amount": r["buy_amount"],
             "sell_amount": r["sell_amount"],
+            "price": r["price"] if r.get("price") is not None else None,   # 分钟末笔价（股价折线）
         }
         for r in min_rows
     ]

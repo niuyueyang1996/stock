@@ -879,15 +879,50 @@ def portfolio_fundflow(tags: list[str] | None = None) -> dict:
       fundflow_latest：当日五档汇总 + netamount
       fundflow_history：近30日逐日净流入（按 trade_date 并集求和）
       covered/total：有当日分时数据的持仓数 / 参与持仓数（A股/ETF，港股排除）
+    每个点额外带 price = 组合净值线（Σ 价格×股数，仅参与资金流的 A股/ETF 人民币持仓，
+    避免与港股混币）：分时用分笔末笔价、日级用收盘价。港股无分时价、币种不同，不纳入净值线。
     """
     from app.analysis.instrument_fundflow import combo_fundflow
+    from app.data.cache import get_daily_prices, get_fundflow_min
+    from app.instruments import get_instrument
     from app.services.holdings import get_holdings
 
     all_holdings = [h for h in get_holdings(active_only=True) if h["quantity"] > 0]
     if tags is not None:
         tag_set = set(tags)
         all_holdings = [h for h in all_holdings if (h.get("tag") or "") in tag_set]
-    return combo_fundflow(
+    out = combo_fundflow(
         [h["code"] for h in all_holdings],
         note="持仓穿透求和（A股/ETF 腾讯分笔；港股无资金流排除）",
     )
+    # 组合净值线：Σ(价格 × 股数)，仅参与资金流的 A股/ETF（人民币），避免与港股混币。
+    # 分时价「前向沿用」：某持仓某分钟缺价（数据结束/盘后）→ 沿用最近一次价，保证净值线连续不砍半/不 null。
+    participants = [h for h in all_holdings if get_instrument(h["code"]).participates_fundflow]
+    if participants:
+        from datetime import date, timedelta
+
+        today = date.today().isoformat()
+        start = (date.today() - timedelta(days=45)).isoformat()
+        qty = {h["code"]: h["quantity"] for h in participants}
+        union_ts = [pt["ts"] for pt in out.get("fundflow_15m", [])]   # 已按 ts 升序
+        min_val: dict[str, float] = {}
+        day_val: dict[str, float] = {}
+        for h in participants:
+            rows = get_fundflow_min(h["code"], today)
+            if rows:
+                by_ts = {r["ts"]: r["price"] for r in rows if r.get("price") is not None}
+                last = None
+                for ts in union_ts:
+                    if by_ts.get(ts) is not None:
+                        last = by_ts[ts]
+                    if last is not None:
+                        min_val[ts] = min_val.get(ts, 0.0) + last * qty[h["code"]]
+            for r in get_daily_prices(h["code"], start, today):
+                c = r["close"]
+                if c:
+                    day_val[r["trade_date"]] = day_val.get(r["trade_date"], 0.0) + c * qty[h["code"]]
+        for pt in out.get("fundflow_15m", []):
+            pt["price"] = round(min_val[pt["ts"]], 2) if pt["ts"] in min_val else None
+        for pt in out.get("fundflow_history", []):
+            pt["price"] = round(day_val[pt["trade_date"]], 2) if pt["trade_date"] in day_val else None
+    return out

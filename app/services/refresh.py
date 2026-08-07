@@ -58,12 +58,11 @@ def get_index_codes() -> list[str]:
 
 
 def refresh_index(code: str, now: datetime | None = None) -> dict:
-    """单指数一站式同步：日K(增量) + 实时点位 + 资金流(东财五档)。
+    """单指数一站式同步：日K(增量) + 实时点位 + 估值(乐咕源) + 资金流(腾讯量价)。
 
-    指数不做估值（用户确认指数 PE/PB 不关注），故不调 sync_valuation。
-    复用 sync_daily_bars/sync_fundflow 的增量与「当日已算跳过」逻辑：
-    二次启动日K只拉缺失、资金流当日覆盖。不碰财务/持仓。
-    单指数任一步异常整体捕获返回 error，不中断并发预热。
+    估值：仅注册表 pe/pb_source=legu 的指数（沪深300/上证50/科创50/中证红利/恒指）调 sync_valuation
+    拉序列+分位+实时值；其余源 none → 跳过（不联网）。复用 sync_daily_bars/sync_fundflow 的增量与
+    「当日已算跳过」逻辑。不碰财务/持仓。单指数任一步异常整体捕获返回 error，不中断并发预热。
     """
     now = now or datetime.now()
     out = {"code": code}
@@ -71,6 +70,10 @@ def refresh_index(code: str, now: datetime | None = None) -> dict:
         out["daily"] = sync_daily_bars(code, now)
         q = _sync_realtime_quote(code, now)
         out["quote"] = bool(q)
+        # 指数估值：乐咕源才拉（index_defs pe/pb_source 判定）；none 源跳过
+        inst = get_instrument(code)
+        if inst.valuation_source("pe") == "legu" or inst.valuation_source("pb") == "legu":
+            out["valuation"] = sync_valuation(code, now, price=q.price if q else None)
         # 恒指等无东财资金流源的指数：sync_fundflow 内部按 has_fundflow/空源返回空
         out["fundflow"] = sync_fundflow(code, now)
         return out

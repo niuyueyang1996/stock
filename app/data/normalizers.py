@@ -300,14 +300,17 @@ def normalize_index_valuation(df, indicator: str, period: str) -> list[Valuation
 
 
 def normalize_index_valuation_http(df, indicator: str, period: str) -> list[ValuationPoint]:
-    """乐咕 HTTP 指数估值 DataFrame（英文列 date/close/ttmPe/addLyrPe/pb）→ 指定周期序列。
+    """乐咕 HTTP 指数估值 DataFrame（英文列 date/close/ttmPe/addLyrPe/pb/addPb）→ 指定周期序列。
 
-    indicator='pe' 主取 ttmPe 列、全 0/缺才回退 addLyrPe（恒指场景：ttmPe 全 0 仅 addLyrPe 有效）；
-    'pb' 取 pb 列。按 period 截取近 N 天 + 剔非正。无列/全空返回 []。
+    指数标准估值用「整体法/加权」列（add 前缀）：乐咕实测 ttmPe/lyrPe/pb 为等权算术平均，
+    对以银行为主的大盘指数严重虚高（沪深300 ttmPe≈35.7 vs 标准≈13.7、上证50≈39.6 vs ≈11.5、
+    PB 4.47 vs ≈1.44）；addTtmPe/addLyrPe/addPb 与中证官方口径一致。
+    indicator='pe' 主取 addTtmPe、全 0/缺才回退 addLyrPe（恒指场景：addTtmPe 全 0 仅 addLyrPe 有效）；
+    'pb' 取 addPb。按 period 截取近 N 天 + 剔非正。无列/全空返回 []。
     """
     if indicator == "pb":
-        return _clip_positive(df, "pb", period, date_col="date")
-    pts = _clip_positive(df, "ttmPe", period, date_col="date")
+        return _clip_positive(df, "addPb", period, date_col="date")
+    pts = _clip_positive(df, "addTtmPe", period, date_col="date")
     if pts:
         return pts
     return _clip_positive(df, "addLyrPe", period, date_col="date")

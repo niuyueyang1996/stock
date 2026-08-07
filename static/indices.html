@@ -250,7 +250,7 @@
       const coh = await loadCoherence('indices', [...selected].sort().join(','), reports[0].window);
       renderFundflowBatchPanel(panel, {
         mode: 'indices', window: reports[0].window, stocks_count: reports.length,
-        date: reports[0].trade_date, reports, coherence: coh,
+        date: reports[0].trade_date, reports, coherence: coh, html: coh ? coh.html : '',
       });
     }
 

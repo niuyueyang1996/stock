@@ -490,3 +490,40 @@ def test_api_daily_get_after_score(client, monkeypatch):
     assert g["configured"] is True
     assert g["day"]["trades_count"] == 1
     assert g["report"]["score"] == 75.0
+
+
+# ============================================================ 分析强度 → HTML 报告门控
+
+def test_score_portfolio_intensity_html_gating(monkeypatch):
+    """组合打分：HTML 深度报告要求仅「深入」追加；普通不含且 schema 去掉 html。"""
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    captured = {}
+    monkeypatch.setattr(ai_mod, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(system=system, user=user)
+                        or {"score": 82, "rating": "B", "summary": "均衡", "advice": [], "risks": [], "reasons": []})
+    svc.score_portfolio(intensity="normal")
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert '"html"' not in captured["user"]
+    svc.score_portfolio(intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert '"html"' in captured["user"]
+
+
+def test_score_daily_intensity_html_gating(monkeypatch):
+    """每日打分：HTML 深度报告要求仅「深入」追加；普通不含且 schema 去掉 html。"""
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    captured = {}
+    monkeypatch.setattr(ai_mod, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(system=system, user=user)
+                        or {"score": 80, "rating": "B", "summary": "不错", "advice": [], "risks": [], "reasons": [],
+                            "trades": [{"trade_id": 1, "score": 80, "rating": "B", "comment": "ok"}]})
+    d = date.today().isoformat()
+    svc.score_daily(d, intensity="normal")
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert '"html"' not in captured["user"]
+    svc.score_daily(d, intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert '"html"' in captured["user"]

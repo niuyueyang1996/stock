@@ -159,15 +159,16 @@ def upsert_fundflow_min(code: str, trade_date: str, points: list) -> None:
     with get_conn() as c:
         c.executemany(
             """INSERT INTO fundflow_15m_cache(code, trade_date, ts, main_net,
-                 super_large_net, large_net, medium_net, small_net, xs_net, buy_amount, sell_amount)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 super_large_net, large_net, medium_net, small_net, xs_net, buy_amount, sell_amount, price)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(code, trade_date, ts) DO UPDATE SET
                  main_net=excluded.main_net, super_large_net=excluded.super_large_net,
                  large_net=excluded.large_net, medium_net=excluded.medium_net,
                  small_net=excluded.small_net, xs_net=excluded.xs_net,
-                 buy_amount=excluded.buy_amount, sell_amount=excluded.sell_amount""",
+                 buy_amount=excluded.buy_amount, sell_amount=excluded.sell_amount,
+                 price=excluded.price""",
             [(code, trade_date, p.ts, p.main_net, p.super_large_net, p.large_net, p.medium_net, p.small_net,
-              p.xs_net, p.buy_amount, p.sell_amount)
+              p.xs_net, p.buy_amount, p.sell_amount, getattr(p, "price", None))
              for p in points],
         )
 

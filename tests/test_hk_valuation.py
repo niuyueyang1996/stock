@@ -391,11 +391,11 @@ def test_baidu_provider_etf_uses_legu(monkeypatch):
 
     def fake_pe(legu):
         calls.append(("pe", legu))
-        return pd.DataFrame({"date": ["2026-08-06"], "ttmPe": [13.63], "addLyrPe": [0.0]})
+        return pd.DataFrame({"date": ["2026-08-06"], "addTtmPe": [13.63], "addLyrPe": [0.0]})
 
     def fake_pb(legu):
         calls.append(("pb", legu))
-        return pd.DataFrame({"date": ["2026-08-06"], "pb": [1.43]})
+        return pd.DataFrame({"date": ["2026-08-06"], "addPb": [1.43]})
 
     monkeypatch.setattr(raw_legu, "index_pe_hist", fake_pe)
     monkeypatch.setattr(raw_legu, "index_pb_hist", fake_pb)

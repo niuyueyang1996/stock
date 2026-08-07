@@ -54,8 +54,11 @@ def _cache_status(code: str) -> dict:
 
 
 def _resolve_stock_name(code: str) -> str | None:
-    """从全市场列表（A股本地缓存 + 港股）查询代码对应的名称。只读本地缓存，绝不联网。"""
+    """从全市场列表（A股本地缓存 + 港股 + ETF）查询代码对应的名称。只读本地缓存，绝不联网。"""
     for r in _read_stock_list_cache():
+        if r["code"] == code:
+            return r["name"]
+    for r in _read_etf_stock_list_cache():
         if r["code"] == code:
             return r["name"]
     for r in _read_hk_stock_list_cache():
@@ -79,6 +82,7 @@ class TagBody(BaseModel):
 # 约定：搜索 / 名称回填只读本地缓存（GET 零网络）；只有启动预热 preload_market_lists 才联网下载。
 _STOCK_LIST_FILE = None
 _HK_STOCK_LIST_FILE = None
+_ETF_STOCK_LIST_FILE = None
 
 
 def _stock_list_path() -> Path:
@@ -196,13 +200,59 @@ def _fetch_hk_names(codes: list[str]) -> list[dict]:
     return rows
 
 
+def _etf_stock_list_path() -> Path:
+    from app.config import DATA_DIR
+
+    global _ETF_STOCK_LIST_FILE
+    if _ETF_STOCK_LIST_FILE is None:
+        _ETF_STOCK_LIST_FILE = DATA_DIR / "etf_list.json"
+    return _ETF_STOCK_LIST_FILE
+
+
+def _read_etf_stock_list_cache() -> list[dict]:
+    """只读场内 ETF 列表缓存（文件不存在/损坏返回空）。绝不联网。"""
+    try:
+        path = _etf_stock_list_path()
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:  # noqa: BLE001 缓存损坏按空处理
+        pass
+    return []
+
+
+def _load_etf_list() -> list[dict]:
+    """场内 ETF 代码+名称（东财 fund_etf_spot_em）。本地文件缓存每日刷新。
+
+    仅启动预热时联网下载；搜索 / 名称回填只读缓存（GET 零网络）。
+    A股列表 stock_info_a_code_name 不含 ETF，单独拉取。
+    """
+    path = _etf_stock_list_path()
+    if path.exists():
+        mtime = path.stat().st_mtime
+        if (date.today() - date.fromtimestamp(mtime)).days < 1:
+            return _read_etf_stock_list_cache()
+    try:
+        import akshare as ak
+
+        df = ak.fund_etf_spot_em()
+        rows = [{"code": str(r["代码"]).zfill(6), "name": str(r["名称"]), "market": "etf"}
+                for _, r in df.iterrows() if str(r["代码"]).strip()]
+    except Exception:  # noqa: BLE001 ETF 列表失败不影响 A 股/港股搜索
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False)
+    return rows
+
+
 def preload_market_lists() -> None:
-    """启动后台预热：确保 A 股 + 港股全市场列表已缓存。
+    """启动后台预热：确保 A 股 + ETF + 港股全市场列表已缓存。
 
     幂等：缓存新鲜时直接读文件不发网络；单个数据源失败不影响另一个，也不影响服务启动。
     搜索 / 名称回填只读本地缓存，因此列表只能由这里（或旧版自动下载）填充。
     """
-    for loader in (_load_stock_list, _load_hk_stock_list):
+    for loader in (_load_stock_list, _load_etf_list, _load_hk_stock_list):
         try:
             loader()
         except Exception:  # noqa: BLE001 预热失败仅本次缺列表，不影响服务
@@ -211,7 +261,7 @@ def preload_market_lists() -> None:
 
 @router.get("/stocks/search")
 def search_stocks(q: str, limit: int = 10):
-    """按代码前缀或名称模糊搜索 A 股/港股。
+    """按代码前缀或名称模糊搜索 A 股/ETF/港股。
 
     只读本地缓存（列表由启动预热维护），绝不联网、不阻塞；缓存缺失时返回空。
     """
@@ -219,8 +269,9 @@ def search_stocks(q: str, limit: int = 10):
     if not q:
         return {"ok": True, "data": []}
     hits = [r for r in _read_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
+    etf_hits = [r for r in _read_etf_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     hk_hits = [r for r in _read_hk_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
-    return {"ok": True, "data": (hits + hk_hits)[:limit]}
+    return {"ok": True, "data": (hits + etf_hits + hk_hits)[:limit]}
 
 
 @router.get("/stocks/{code}/expected-growth")
@@ -330,6 +381,22 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
     下载由前端调用 POST /stocks/{code}/refresh/full 完成；partial=1 仅打开已有数据（缺失标记）。
     window=1|5|15|30：分时资金流重采样分钟窗口（默认 15）。
     """
+    inst = get_instrument(code)
+    # 指数：走指数详情口径（注册表名称 + 量价 intraday，无 409、无个股名称解析）
+    if inst.is_index:
+        from app.services.indices import get_index_def
+
+        d = get_index_def(code)
+        if not d:
+            raise HTTPException(404, f"指数不存在: {code}")
+        try:
+            q = get_quote(code)
+        except Exception:  # noqa: BLE001 指数无行情缓存按 None 展示
+            q = None
+        return build_detail(
+            inst, d["name"], quote=q, window=window,
+            extra={"symbol": d["symbol"], "is_index": True, "is_etf": False},
+        )
     status = _cache_status(code)
     if status["missing_items"] and not partial:
         return JSONResponse(status_code=409, content={**status, "ok": False})
@@ -341,7 +408,6 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         else:
             raise HTTPException(404, f"行情获取失败: {e}")
 
-    inst = get_instrument(code)
     # 名称：优先 stocks 表（录入时写入）；缺失时从全市场列表查询并回填，保证流水/明细也显示名称
     from app.models.db import get_conn
 

@@ -259,7 +259,7 @@ function stockSearchInput() {
         rows.forEach((r) => {
           const o = document.createElement('div');
           o.className = 'stock-sug-item';
-          o.textContent = `${r.code} ${r.name}` + (r.market === 'hk' ? '（港股）' : '');
+          o.textContent = `${r.code} ${r.name}` + (r.market === 'hk' ? '（港股）' : r.market === 'etf' ? '（ETF）' : '');
           o.onclick = () => {
             input.value = `${r.code} ${r.name}`;
             sug.style.display = 'none';
@@ -544,6 +544,7 @@ function renderFundflowAiPanel(el, d) {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="badge" style="color:#fff;background:${corr[1]}">资金×股价：${corr[0]}</span>
         <span class="muted" style="font-size:12px">${winLabel} · ${d.points_count} 个点 · ${esc(d.date || '')}</span>
+        ${a.html ? aiHtmlButton() : ''}
       </div>
       <div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(a.summary || '')}</div>
       ${rows}
@@ -551,6 +552,7 @@ function renderFundflowAiPanel(el, d) {
       ${alerts ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:var(--red)">🔔 注意</b><ul style="margin:4px 0 0 18px;font-size:13px">${alerts}</ul></div>` : ''}
       ${a.conclusion ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:var(--radius-xs);background:var(--primary-weak);font-size:13px"><b>结论</b>：${esc(a.conclusion)}</div>` : ''}
     </div>`;
+  wireAiHtmlButton(el, a);   // 📄 按钮（深入模式 html 非空时绑定）
 }
 
 // 渲染个股页最近落库资金流 AI 结果（标注来源 组合批量/个股分析 + 日期 + 窗口）
@@ -572,6 +574,7 @@ function renderFundflowPersistedPanel(el, r) {
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         ${fundflowCorrBadge(a)}
         <span class="muted" style="font-size:12px">${src} · ${a.trade_date || ''} · ${winLabel}</span>
+        ${a.html ? aiHtmlButton() : ''}
       </div>
       <div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(a.summary || '')}</div>
       ${rows}
@@ -579,6 +582,7 @@ function renderFundflowPersistedPanel(el, r) {
       ${alerts ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:var(--red)">🔔 注意</b><ul style="margin:4px 0 0 18px;font-size:13px">${alerts}</ul></div>` : ''}
       ${a.conclusion ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:var(--radius-xs);background:var(--primary-weak);font-size:13px"><b>结论</b>：${esc(a.conclusion)}</div>` : ''}
     </div>`;
+  wireAiHtmlButton(el, a);   // 📄 按钮（深入模式 html 非空时绑定）
 }
 
 // 分析前先动态刷新资金流/价格（个股刷该股 flow+price；组合刷全部持仓 flow+price），
@@ -728,9 +732,13 @@ function renderFundflowBatchPanel(el, d) {
   el.innerHTML = `
     <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
       ${cohHtml}
-      <div style="font-size:13px;font-weight:700;margin-bottom:6px">${title}（${d.stocks_count || 0} 只 · ${winLabel}窗口）</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="font-size:13px;font-weight:700;flex:1;min-width:200px">${title}（${d.stocks_count || 0} 只 · ${winLabel}窗口）</div>
+        ${d.html ? aiHtmlButton() : ''}
+      </div>
       ${rows || '<div class="muted">无分析结果</div>'}
     </div>`;
+  wireAiHtmlButton(el, d);   // 📄 按钮（深入模式批量 html 非空时绑定）
 }
 
 // 批量分析资金面：POST 批量端点 → 渲染面板 → onDone 刷新列表列（先弹窗确认/编辑指令）

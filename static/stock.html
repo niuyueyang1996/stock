@@ -71,7 +71,7 @@
 
     <div class="cards" id="quoteCards"></div>
 
-    <div class="panel">
+    <div class="panel" id="growthTablePanel">
       <h2>盈利与成长 <span class="sub">静态 / TTM / 前瞻 对比</span></h2>
       <table>
         <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
@@ -79,12 +79,12 @@
       </table>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="finPanel">
       <h2>财务指标（最新报告期）</h2>
       <div class="cards" id="finCards"></div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="quantilePanel">
       <h2>历史分位（实时值 / 前瞻值 的百分位）</h2>
       <div class="row" style="align-items:stretch">
         <div class="chart sm" id="peQ" style="flex:1;min-width:280px"></div>
@@ -92,27 +92,28 @@
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="valHistPanel">
       <h2>估值历史 <span class="sub">百度源 · 标注实时/前瞻值 · 可拖动缩放切换分位窗口</span></h2>
       <div id="histTabs"></div>
       <div class="chart lg" id="peLine" style="height:340px"></div>
       <div class="chart lg" id="pbLine" style="height:340px"></div>
     </div>
 
-    <div class="panel grow">
+    <div class="panel grow" id="flowBarsPanel">
       <h2>全天五档资金流（最新交易日）</h2>
       <div class="chart sm" id="flowBars"></div>
       <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
     </div>
 
     <div class="panel">
-      <h2>资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
+      <h2 id="flowTitle">资金流趋势 <span class="sub" id="flowTitleSub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
       <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
         <div id="flowTabs"></div>
         <div style="flex:1"></div>
         <div id="flowAiBtn"></div>
       </div>
       <div id="flowAiPanel" style="display:none;margin:0 0 10px"></div>
+      <div class="chart lg" id="flowPrice" style="height:200px"></div>
       <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
       <div class="chart lg" id="flowBuySell" style="height:300px"></div>
@@ -128,6 +129,7 @@
     initNav('stock');
     let currentCode = new URLSearchParams(location.search).get('code') || '';
     const isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）
+    let lastIsIndex = false;    // 当前标的是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定）
     let lastQuote = null;
     let lastName = '';
     let lastLive = {};
@@ -193,6 +195,7 @@
     // 切换/加载股票前清空旧数据，避免残留误导
     function clearStockView() {
       document.getElementById('title').textContent = currentCode ? `正在加载 ${currentCode}…` : '请输入股票代码或名称';
+      lastIsIndex = false;   // 重新加载前复位，由 render 按 payload 重新判定
       document.getElementById('staleTip').style.display = 'none';
       document.getElementById('missingBanner').style.display = 'none';
       document.getElementById('quoteCards').innerHTML = '';
@@ -207,6 +210,8 @@
       document.getElementById('flowBars').innerHTML = '';
       document.getElementById('flowEmpty').style.display = 'block';
       document.getElementById('flowTabs').innerHTML = '';
+      const fpEl = document.getElementById('flowPrice');
+      if (fpEl) { fpEl.innerHTML = ''; fpEl.style.display = ''; }
       document.getElementById('flowIntraday').innerHTML = '';
       document.getElementById('flowBuySell').innerHTML = '';
       document.getElementById('flowIntradayEmpty').style.display = 'block';
@@ -246,7 +251,7 @@
               document.getElementById('title').textContent = '下载中…';
               try {
                 await api('/stocks/' + currentCode + '/refresh/full', { blocking: true,
-                  method: 'POST', body: { items: ['bars', 'financials', 'valuation'] },
+                  method: 'POST', body: { items: ['bars', 'financials', 'valuation', 'flow'] },
                 });
                 // 下载完成后刷新页面：URL 带 ?code=，重载后按最终缓存正常渲染图表（等同 F5）
                 location.reload();
@@ -276,7 +281,7 @@
     // 单股刷新：弹窗多选内容 → 调 /stocks/{code}/refresh[/full] → 重载
     async function refreshStock(full) {
       if (!currentCode) return toast('请先选择股票');
-      if (isIndexMode) {
+      if (isIndexMode || lastIsIndex) {
         // 指数：一键刷新（日K增量 + 点位 + 估值 + 资金流），无财务项弹窗
         const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
         btn.disabled = true;
@@ -296,7 +301,7 @@
     }
 
     async function saveExpectedGrowth() {
-      if (isIndexMode) return toast('指数不可交易');
+      if (isIndexMode || lastIsIndex) return toast('指数不可交易');
       const v = parseFloat(document.getElementById('growthInput').value);
       const rv = parseFloat(document.getElementById('revenueGrowthInput').value);
       const pv = document.getElementById('payoutInput').value;
@@ -345,7 +350,7 @@
 
     // ---------- AI 诊股 ----------
     const AI_DIM_CN = { cyclicality: '周期性', moat: '护城河', fundamentals: '基本面',
-      growth: '增长', dividend: '股息', valuation: '估值', competition: '同业竞争' };
+      growth: '增长', dividend: '股息', valuation: '估值', competition: '同业竞争', fundflow: '资金面' };
     const AI_RATING = { A: ['A 强烈推荐', '#2f9e44'], B: ['B 推荐', '#2563eb'], C: ['C 中性', '#e8590c'], D: ['D 回避', '#e03131'] };
     const AI_RISK = ['低风险', '中风险', '高风险'];
 
@@ -555,7 +560,7 @@
     }
 
     function quickTrade(side) {
-      if (isIndexMode) return toast('指数不可交易');
+      if (isIndexMode || lastIsIndex) return toast('指数不可交易');
       if (!currentCode) return toast('请先选择股票');
       const sideText = side === 'buy' ? '买入' : '卖出';
       const mask = document.createElement('div');
@@ -635,10 +640,41 @@
       }
     }
 
+    // 指数模式：隐藏个股专属面板（无五档/估值/财务/诊股），保留 点位卡 + 资金流趋势 + 刷新
+    function toggleStockPanels(idxMode) {
+      // 个股专属面板：指数模式隐藏；估值/分位面板由 render 按「是否有估值数据」单独控制（指数可拿到乐咕估值）
+      ['growthPanel', 'growthTablePanel', 'finPanel', 'flowBarsPanel']
+        .forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = idxMode ? 'none' : ''; });
+      // 非指数（个股/ETF）：估值/分位面板始终显示；指数由 render 分支按数据决定
+      if (!idxMode) {
+        ['quantilePanel', 'valHistPanel'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = '';
+        });
+      }
+      const aiReport = document.getElementById('aiReportPanel');
+      // 非指数：显示由 loadAiReport/clearStockView 管理，这里只强制隐藏指数模式
+      if (aiReport) aiReport.style.display = idxMode ? 'none' : aiReport.style.display;
+      const aiBtn = document.getElementById('aiBtn');
+      if (aiBtn) aiBtn.style.display = idxMode ? 'none' : '';
+    }
+
+    // 资金流趋势面板标题：指数模式换「指数资金面（全量价）」口径
+    function setFlowTitle(idxMode) {
+      const t = document.getElementById('flowTitle');
+      if (!t) return;
+      t.innerHTML = idxMode
+        ? '指数资金面（全量价） <span class="sub">腾讯量价：Σ累计成交额折线 + 各期成交额柱 + 指数价格 · 分钟窗口=当日分时，天窗口=多日聚合</span>'
+        : '资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span>';
+    }
+
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
-      // 指数模式：只隐藏买卖按钮（指数不可交易）；AI 诊股 / 资金流 AI 照常可用
+      // 指数模式：隐藏买卖/个股面板（无五档/估值/财务），资金流趋势改量价渲染；AI 资金流照常可用
       const idxMode = !!d.is_index;
+      lastIsIndex = idxMode;
+      toggleStockPanels(idxMode);
+      setFlowTitle(idxMode);
       document.getElementById('buyBtn').style.display = idxMode ? 'none' : '';
       document.getElementById('sellBtn').style.display = idxMode ? 'none' : '';
       const q = d.quote;
@@ -668,6 +704,7 @@
         staleTip.style.display = 'none';
         document.getElementById('quoteCards').innerHTML =
           '<div class="empty" style="padding:20px">无行情数据（缓存缺失，请先全量刷新）。</div>';
+        if (idxMode) { renderFlow(d); return; }
         renderQuantiles(d.quantiles);
         renderValuationHistory(d);
         renderFlow(d);
@@ -685,7 +722,7 @@
       lastLive = live;
       renderGrowth(live);
       const growthPanel = document.getElementById('growthPanel');
-      if (live.expected_growth != null) {
+      if (!idxMode && live.expected_growth != null) {
         growthPanel.style.display = '';
         document.getElementById('growthInput').value = live.expected_growth;
         document.getElementById('revenueGrowthInput').value = live.expected_revenue_growth;
@@ -728,6 +765,22 @@
       document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
         `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`).join('');
 
+      if (idxMode) {
+        renderFlow(d);   // 指数资金面：量价图（五档/财务面板已隐藏）
+        // 指数估值：乐咕源有序列才展示估值历史；有分位数据才展示历史分位（拿不到就隐藏）
+        const vh = d.valuation_history || {};
+        const hasSeries = Object.values(vh.periods || {})
+          .some((p) => ((p.pe && p.pe.length) || (p.pb && p.pb.length)));
+        const hasQuantile = Object.values(d.quantiles || {})
+          .some((row) => row && (row.pe_pct != null || row.pb_pct != null));
+        const vPanel = document.getElementById('valHistPanel');
+        const qPanel = document.getElementById('quantilePanel');
+        if (hasSeries) { renderValuationHistory(d); if (vPanel) vPanel.style.display = ''; }
+        else if (vPanel) vPanel.style.display = 'none';
+        if (hasQuantile) { renderQuantiles(d.quantiles); if (qPanel) qPanel.style.display = ''; }
+        else if (qPanel) qPanel.style.display = 'none';
+        return;
+      }
       renderQuantiles(d.quantiles);
       renderValuationHistory(d);
       renderFlow(d);
@@ -843,7 +896,66 @@
       } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
     }
 
+    // 指数资金面：腾讯量价（单指数）→ 量价图随统一时间窗切换（镜像 indices.html renderPfFlow）
+    let indexFlowSeq = 0;
+    async function renderIndexFlow(d) {
+      const seq = ++indexFlowSeq;
+      const intraEl = document.getElementById('flowIntraday');
+      const bsEl = document.getElementById('flowBuySell');
+      const tabsEl = document.getElementById('flowTabs');
+      const bandsEl = document.getElementById('flowBands');
+      const intraEmpty = document.getElementById('flowIntradayEmpty');
+      if (bsEl) bsEl.style.display = 'none';          // 指数无量价买卖盘二图
+      if (bandsEl) bandsEl.style.display = 'none';   // 五档边界不适用
+      const fpEl2 = document.getElementById('flowPrice');
+      if (fpEl2) fpEl2.style.display = 'none';        // 指数用 indexVolumePrice 已带价，隐藏独立股价图
+      try {
+        const fd = await api('/indices/fundflow?codes=' + encodeURIComponent(currentCode), { silent: true });
+        if (seq !== indexFlowSeq) return;
+        const intraday = fd.intraday || [];
+        const daily = fd.daily || [];
+        if (!intraday.length && !daily.length) {
+          intraEmpty.style.display = 'block';
+          intraEmpty.textContent = '暂无分时量价（请先「⚡ 刷新此股」拉取，或今日非交易日）。';
+          tabsEl.innerHTML = '';
+          intraEl.innerHTML = '';
+          return;
+        }
+        intraEmpty.style.display = 'none';
+        const names = { [d.code]: d.name };
+        const draw = (w) => {
+          flowWindow = w;
+          loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
+          if (/m$/.test(w)) {
+            if (!intraday.length) { intraEl.innerHTML = ''; return; }
+            const pts = resampleIndexVolume(intraday, parseInt(w, 10));
+            indexVolumePrice(intraEl, pts, FLOW_WINDOW_LABEL[w] + '分时', names);
+          } else {
+            if (!daily.length) { intraEl.innerHTML = ''; return; }
+            const days = bucketIndexVolume(daily, parseInt(w, 10));
+            indexVolumePrice(intraEl, days, FLOW_WINDOW_LABEL[w], names);
+          }
+        };
+        tabsEl.innerHTML = '';
+        tabsEl.appendChild(periodTabs({
+          periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+          active: FLOW_WINDOW_LABEL[flowWindow],
+          onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+        }));
+        draw(flowWindow);
+      } catch (e) {
+        if (seq !== indexFlowSeq) return;
+        intraEmpty.style.display = 'block';
+        intraEmpty.textContent = '指数资金面加载失败：' + e.message;
+      }
+    }
+
     function renderFlow(d) {
+      if (d.is_index) { renderIndexFlow(d); return; }
+      // 从指数模式切回个股：恢复五档/买卖盘面板可见 + 空态文案复位
+      ['flowBands', 'flowBuySell'].forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = ''; });
+      const fe = document.getElementById('flowIntradayEmpty');
+      if (fe) fe.textContent = '当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。';
       // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
       const bandsEl = document.getElementById('flowBands');
       const bands = d.fundflow_bands;
@@ -867,6 +979,7 @@
       const hist = d.fundflow_history || [];
       const intraEl = document.getElementById('flowIntraday');
       const bsEl = document.getElementById('flowBuySell');
+      const priceEl = document.getElementById('flowPrice');
       const intraEmpty = document.getElementById('flowIntradayEmpty');
       const tabsEl = document.getElementById('flowTabs');
       const isMin = (w) => /m$/.test(w);
@@ -876,21 +989,23 @@
         if (isMin(w)) {
           if (!base.length) {
             intraEmpty.style.display = 'block';
-            intraEl.innerHTML = ''; bsEl.innerHTML = '';
+            intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = '';
             return;
           }
           intraEmpty.style.display = 'none';
           const pts = resampleFlow(base, parseInt(w, 10));
+          fundflowPrice(priceEl, pts, FLOW_WINDOW_LABEL[w] + '分时');   // 股价/净值独立图（最上边）
           fundflowIntraday(intraEl, pts, parseInt(w, 10));
           fundflowBuySell(bsEl, pts, parseInt(w, 10));
         } else {
           const days = bucketFlowDays(hist, parseInt(w, 10));
           if (!days.length) {
             intraEmpty.style.display = 'block';
-            intraEl.innerHTML = ''; bsEl.innerHTML = '';
+            intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = '';
             return;
           }
           intraEmpty.style.display = 'none';
+          fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 股价/净值独立图
           fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
           fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
         }

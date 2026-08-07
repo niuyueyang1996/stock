@@ -14,6 +14,7 @@ _FAKE_AI_OUTPUT = {
         "dividend": {"score": 65, "analysis": "分红稳定", "risk": "low", "data_source": "provided"},
         "valuation": {"score": 80, "analysis": "估值偏低", "risk": "low", "data_source": "provided"},
         "competition": {"score": 60, "analysis": "竞争一般", "risk": "medium", "data_source": "supplemented"},
+        "fundflow": {"score": 62, "analysis": "主力当日小幅净流入", "risk": "low", "data_source": "provided"},
     },
     "cross_analysis": {
         "cycle_trap": {"detected": False, "impact_score": 0, "explanation": ""},
@@ -44,6 +45,7 @@ _CHINESE_KEY_AI_OUTPUT = {
         "股息": {"score": 30, "analysis": "股息率仅0.14%，股东回报弱", "risk": "high", "data_source": "provided"},
         "估值": {"score": 35, "analysis": "PE 74、PB 31 处历史高位", "risk": "high", "data_source": "provided"},
         "同业竞争": {"score": 80, "analysis": "竞争格局良好，头部集中", "risk": "low", "data_source": "provided"},
+        "资金面": {"score": 55, "analysis": "当日主力净流入 1.2 亿，近5日持续流入", "risk": "medium", "data_source": "provided"},
     },
     "cross_analysis": {
         "cycle_trap": {"detected": True, "impact_score": -15, "explanation": "盈利与营收处于AI景气高点，需求透支，警惕周期回落"},
@@ -283,3 +285,26 @@ def test_ai_report_custom_prompt(client, monkeypatch):
     r2 = client.post("/api/stocks/600000/ai-report")
     assert r2.status_code == 200
     assert captured["system"] == ai_svc._SYSTEM_PROMPT
+
+
+def test_analyze_stock_intensity_html_gating(monkeypatch):
+    """HTML 深度报告要求仅「深入」追加：normal/fast 不含且 schema 去 html；deep 含 + 保留 html。"""
+    _add_active_model()
+    captured = {}
+    monkeypatch.setattr(ai_svc, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(system=system, user=user) or _FAKE_AI_OUTPUT)
+    # normal：无 HTML 要求、无强度指令、schema 无 html
+    ai_svc.analyze_stock("600000", intensity="normal")
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert "[分析强度]" not in captured["system"]
+    assert '"html"' not in captured["user"]
+    # fast：仍无 HTML 要求，但附 [分析强度]
+    ai_svc.analyze_stock("600000", intensity="fast")
+    assert "HTML 深度分析强制规范" not in captured["system"]
+    assert "[分析强度]" in captured["system"]
+    assert '"html"' not in captured["user"]
+    # deep：附 HTML 要求 + [分析强度]，schema 保留 html
+    ai_svc.analyze_stock("600000", intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert "[分析强度]" in captured["system"]
+    assert '"html"' in captured["user"]

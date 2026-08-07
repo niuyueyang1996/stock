@@ -420,7 +420,7 @@ function resampleFlow(points, windowMin) {
     const [h, m] = p.ts.split(':').map(Number);
     const start = Math.floor((h * 60 + m) / windowMin) * windowMin;
     const key = String(Math.floor(start / 60)).padStart(2, '0') + ':' + String(start % 60).padStart(2, '0');
-    if (!buckets.has(key)) buckets.set(key, { ts: key, small_net: 0, medium_net: 0, large_net: 0, super_large_net: 0, xs_net: 0, buy_amount: 0, sell_amount: 0 });
+    if (!buckets.has(key)) buckets.set(key, { ts: key, small_net: 0, medium_net: 0, large_net: 0, super_large_net: 0, xs_net: 0, buy_amount: 0, sell_amount: 0, price: null });
     const b = buckets.get(key);
     b.small_net += p.small_net;
     b.medium_net += p.medium_net;
@@ -429,6 +429,7 @@ function resampleFlow(points, windowMin) {
     b.xs_net += p.xs_net;
     b.buy_amount += p.buy_amount;
     b.sell_amount += p.sell_amount;
+    if (p.price != null) b.price = p.price;   // 桶末笔价（股价折线）
   }
   return [...buckets.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1));
 }
@@ -569,6 +570,8 @@ function bucketFlowDays(hist, bucket) {
     const acc = { trade_date: g[0].trade_date + (g.length > 1 ? '~' + g[g.length - 1].trade_date.slice(5) : '') };
     for (const k of FIELDS) acc[k] = 0;
     for (const r of g) for (const k of FIELDS) acc[k] += r[k] || 0;
+    const last = g[g.length - 1];
+    acc.price = last.price != null ? last.price : null;   // 桶末交易日收盘价（股价折线）
     out.push(acc);
   }
   return out;
@@ -671,6 +674,38 @@ function fundflowDayBuySell(el, days, windowLabel) {
 // ============================================================
 // 指数量价图（东财五档弃用后指数资金面全用腾讯量价）
 // ============================================================
+
+// 股价/净值独立折线图（资金流趋势面板最上方）：只看价格/净值自身走势，独立自适应刻度。
+// points 为分时（{ts,price}）或日级（{trade_date,price}）；无 price 返回空。
+function fundflowPrice(el, points, windowLabel) {
+  const chart = initChart(el);
+  if (!chart) return null;
+  const labels = points.map((p) => p.ts || p.trade_date || '');
+  const prices = points.map((p) => (p.price != null ? p.price : null));
+  if (!prices.some((v) => v != null)) { el.innerHTML = ''; el.style.display = 'none'; return null; }
+  el.style.display = '';
+  chart.setOption({
+    title: { text: '股价 / 组合净值（' + windowLabel + '）', left: 'center', textStyle: { fontSize: 13 } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        return [labels[i], '价格 ' + prices[i]].join('<br>');
+      },
+    },
+    grid: { left: 62, right: 20, top: 36, bottom: 30 },
+    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 10, hideOverlap: true },
+             axisPointer: { label: { show: false } } },
+    yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    series: [{
+      name: '股价', type: 'line', smooth: true, symbol: 'none', data: prices,
+      itemStyle: { color: '#1971c2' }, lineStyle: { width: 2, color: '#1971c2' },
+      areaStyle: { color: 'rgba(25,113,194,.08)' },
+    }],
+  }, { notMerge: true });
+  return chart;
+}
 
 // 量价图：Σ累计成交额折线（右轴粗线）+ 各期成交额柱（右轴）+ 各指数价格折线（左轴）。
 // points 为 [{ts|date, amount(该期成交额), prices|closes:{code:price}}]，names={code:指数名}。

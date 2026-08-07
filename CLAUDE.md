@@ -74,7 +74,7 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - **组合打分跟随标签筛选 + 按组合分开存储**：`POST /api/ai-scoring/portfolio?tags=红利,科技` 只打该子组合（只带这些持仓汇总 + 这些标签指引）；「全部」= 全持仓 + 全部已确认偏好。**每个标签组合各存一份**（`ai_portfolio_reports.tags_json` 记录组合），打个股不覆盖 个股+港股，也不覆盖 全部；同一组合画像变化标 `stale` 保留旧分，另一组合不受影响。持仓页（index.html）不打分。
 - **每日打分偏好去重**：一天 50 笔时 `tag_prefs` 只放当天涉及的标签各一份，每笔交易只带 `tag` 名 + 该股因子（`compute_live` 现取）；AI 按 tag 匹配指引逐笔打分再汇总。
 - **触发**：组合 = 手动按钮（GET 读最新报告，`stale`=画像哈希变化提示重新打分）；新交易 = 录入时 `maybe_auto_score_daily` 失效并后台线程重打分（无激活模型/当日无交易不起线程）。
-- **HTML 详细报告**：组合/每日/个股诊股三种打分，AI 都会额外生成一份**自包含 HTML 报告**（`report.html`，内联 CSS、无外部依赖、禁止 `<script>`）；前端「📄 查看详细报告」按钮用 `openAiHtmlReport` 在新窗口打开。**HTML 聚焦深入分析，不罗列用户已可见的原始数据表**（持仓明细/标签板块/交易明细/估值）；内联 `analysis`/`detail` 详细分析文字已去掉（不再生成），详细分析全在 HTML 里，summary/advice/risks/reasons 内联保留。规整函数缺省把 html 置空串（AI 未生成时按钮不显示）。
+- **HTML 详细报告**：个股诊股/组合打分/每日打分/个股资金流/批量资金流五种 AI 分析，仅分析强度「深入」要求生成**自包含 HTML 报告**（`_HTML_REQUIREMENT`/`_PORTFOLIO_HTML_REQUIREMENT`/`_DAILY_HTML_REQUIREMENT`/`_FUNDFLOW_HTML_REQUIREMENT`/`_BATCH_FUNDFLOW_HTML_REQUIREMENT`，≥1000字、内联 CSS、无外部依赖、禁止 `<script>`；基础 prompt 不含 HTML 块）；快速/普通不要求（schema 去 `html` 字段），无「📄」按钮。资金流 HTML 落库：个股存 `ai_fundflow_reports.html`（v8 迁移），批量存 `ai_fundflow_coherence_reports.html`，F5 后 📄 按钮恢复。前端「📄 查看详细报告」按钮用 `openAiHtmlReport` 在新窗口打开。**HTML 聚焦深入分析，不罗列用户已可见的原始数据表**；内联 summary/advice/risks/reasons 保留。规整函数缺省把 html 置空串（AI 未生成时按钮不显示）。
 - **思考级别**：`chat_json` 附带 `reasoning_effort`（默认 `high`，`config.py AI_REASONING_EFFORT`；用户可在「🤖 AI」弹窗选 low/medium/high/max，写 config 表 `ai_reasoning_effort`，端点 `GET/PUT /api/ai/reasoning`）。provider 不支持时 `chat_json` 降级重试会移除该参数。
 - `profile_hash` 只基于持仓(筛选内 code/qty/currency) + 已确认偏好(筛选内) + 标签筛选 + 模型——**绝不含时间戳/价格**。
 
@@ -102,6 +102,8 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - 降级链：增速(用户→TTM→财报同比→0%)、支付率(用户→上年→0%)、上年末净资产(年报→每股净资产×股本→次级推演)。
 - 置信度：完整年报 high / 次级推演 medium / 零假设 low；预测净资产为负 → 负 PB + `invalid`。
 - 组合前瞻 PE/PB 用**穿透汇总**（Σ市值/Σ归属预测净利/净资产），不做个股加权。
+- **指数/ETF 估值列（normalize_index_valuation_http）**：乐咕 `index-basic-pe|pb` 返回多套口径，`ttmPe/lyrPe/pb` 是**等权算术平均**（对银行为主的指数虚高，沪深300 PE≈35.7/PB≈4.47）；标准口径用 `add*` 列（**整体法：总市值÷归母净利/净资产总和**）：`addTtmPe`（缺/全 0 回退 `addLyrPe`，恒指场景）与 `addPb`。已修正：沪深300 PE 13.71/PB 1.44、上证50 11.48/1.23、中证红利 8.32/0.8。
+- **指数估值刷新（refresh_index）**：`pe_source/pb_source=legu` 的指数（沪深300/上证50/科创50/中证红利/恒指）刷新时调 `sync_valuation`（带实时点位价）拉序列+分位；`none` 源跳过。ETF 估值 = 跟踪指数估值（`etf_index_map` → `index_defs` 乐咕代码）。
 
 ### 成本调整与分红除权（holdings.py / dividend.py）
 - `POST /holdings/{code}/cost-adjust`：amount（成本，正=加 负=减）+ delta_qty（股数，拆股/送股）；插入 `adjust` 交易，重放只改成本/股数（adjust 不参与 AI 打分）。
@@ -116,6 +118,8 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 ### 前端约定（static/）
 - **api.js**：所有请求经 `api()`；全屏 loading 屏障**仅** `opts.blocking:true` 的耗时请求（页面加载/刷新/导入/下载）显示，快速操作默认不弹；搜索联想用 `silent:true`。支持 FormData（不 JSON.stringify、不手动 Content-Type）。
 - **交易评分页（trade.html）**：左目录 + 右详情布局。`.row` 高度 `70vh` + `flex-wrap:nowrap`；`day-dir`/`day-detail` 需 `min-height:0` 才让 `overflow-y:auto` 生效（flex 子项默认 min-height:auto 会阻止滚动，踩过坑）。
+- **个股页指数模式（stock.html）**：`render` 按 `d.is_index`（或 URL `?index=1`）隐藏买卖/五档/财务/诊股面板，资金流趋势改「指数资金面（全量价）」量价图（`renderIndexFlow` 调 `/indices/fundflow?codes=X` + `indexVolumePrice`，镜像 indices.html）；**估值历史/历史分位按是否有乐咕数据展示**（有序列才显示估值线，有分位才显示分位图，拿不到隐藏——`render` 指数分支用 `d.valuation_history.periods`/`d.quantiles` 判断）。`/api/stocks/{code}` 对指数代码优雅返回 `is_index=True`（无 409），搜索打开指数也走此模式；前端 `lastIsIndex` 守卫买卖/刷新/预期增速（URL 无 `index=1` 时不可交易）。ETF 页面估值 = 跟踪指数估值，与指数页同源一致。
+- **资金流图股价/净值折线**：腾讯分笔原始行第 3 段是价格，`_parse_tick_page` 返回 4 元组 `(time,amount,sign,price)`，`aggregate_ticks`/`resample_points` 取窗口末笔价存 `fundflow_15m_cache.price`（v9 迁移）。`build_detail` 分时点带 `price`、日级点带 `price`（`daily_price_cache` 收盘价）；`portfolio_fundflow` 额外算**组合净值线** `price`（Σ价×股数，仅参与资金流的 A股/ETF，避免与港股混币），**分时价前向沿用**（持仓缺价 → 沿用最近价，净值不砍半/不 null）。前端股价/净值**独立成图 `fundflowPrice`**：个股页 `#flowPrice` 放资金流趋势面板最上方，只看价格自身走势、独立自适应刻度；**组合页 2×2 布局**（第一排 净值+净流入，第二排 买盘/卖盘+全天五档）。指数模式用 `indexVolumePrice` 已带价故隐藏独立图。`resampleFlow`/`bucketFlowDays` 带桶末价。AI 资金流上下文本已带价格（分钟/日级），无需改。
 - AI 评级徽章：A→优秀 / B→良好 / C→一般 / D→较差；评级由 AI 直接给出，前端只映射中文标签。未配置 AI 时评分区显示「未配置 AI」。
 - **start.cmd 必须纯 ASCII**（cmd 按 GBK 解析 UTF-8 中文会崩）；`if` 括号块内不能有 `(3,10)` 这类括号（被当块结束），版本检查移到独立标签。
 - Windows 打包态的数据库/日志/运行状态位于 `%LOCALAPPDATA%\StockAnalyzer`；静态资源从 PyInstaller `_MEIPASS` 只读加载。`STOCK_APP_HOME` 仅用于测试/便携覆盖。
@@ -126,10 +130,10 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - `_MIGRATE_COLUMNS` 加新列后，旧库需手动 `ALTER TABLE`（migrate 只在版本落后时跑；已到目标版本不会重跑）。
 - **v5 迁移彻底移除公式评分**：`_drop_formula_scoring` DROP `trade_score_snapshots`/`daily_scores`；历史 v2 迁移里的 `_recreate_daily_scores_nullable` 保留只为旧库升级（新库该表未建，`PRAGMA table_info` 空表早退）。
 - AI 打分是慢操作：`chat_json` 最长 180s；后台自动打分失败只记日志，当日保持"未评分"（`maybe_auto_score_daily` 先同步 invalidate）。`_trigger_ai_daily`/`_invalidate_portfolio_ai` 必须放在写事务外调用。
-- 全市场列表只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
+- 全市场列表（A股 `stock_info_a_code_name` + 场内 ETF `fund_etf_spot_em` 存 `etf_list.json` + 港股）只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
 - Windows 跑 pytest 需 `--basetemp`（默认临时目录权限失败）。
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 
 ## 测试
-- 190 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发，mock chat_json 离线）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v5 移除公式表）、api（409 CACHE_MISS/GET 零写入/AI 评分端点）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
+- 287 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发，mock chat_json 离线）、ai（诊股 8 维度含资金面/分析强度 HTML 门控含资金流）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v8 资金流 html 列 + v9 分时 price 列）、api（409 CACHE_MISS/GET 零写入/AI 评分端点/指数代码返回 is_index）、instruments（判型/ETF 名称搜索/指数刷新补估值）、indices（估值列 add* 整体法）、fundflow（分时点带 price）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。

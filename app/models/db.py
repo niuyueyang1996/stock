@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS fundflow_15m_cache (
     xs_net     REAL,                -- 特小单净流入
     buy_amount REAL,                -- 买盘成交金额
     sell_amount REAL,               -- 卖盘成交金额
+    price      REAL,                -- 该分钟末笔成交价（股价折线用）
     PRIMARY KEY (code, trade_date, ts)
 );
 
@@ -252,6 +253,7 @@ CREATE TABLE IF NOT EXISTS ai_fundflow_reports (
     divergence   TEXT,                    -- JSON 数组
     alerts       TEXT,                    -- JSON 数组
     conclusion   TEXT,
+    html         TEXT,                    -- AI「深入」模式生成的 HTML 资金面报告（可空）
     model_name   TEXT, created_at TEXT, updated_at TEXT,
     PRIMARY KEY (code, trade_date, source, window)
 );
@@ -266,6 +268,7 @@ CREATE TABLE IF NOT EXISTS ai_fundflow_coherence_reports (
     summary     TEXT,                    -- 组合整体一句话
     points      TEXT,                    -- JSON 数组：相关性证据点
     conclusion  TEXT,                    -- 组合层面结论
+    html        TEXT,                    -- AI「深入」模式生成的批量 HTML 报告（可空）
     model_name  TEXT, created_at TEXT, updated_at TEXT,
     UNIQUE (scope, scope_key, trade_date, window)
 );
@@ -302,7 +305,7 @@ def get_conn() -> sqlite3.Connection:
 
 # 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
 SCHEMA_VERSION_KEY = "db_schema_version"
-_CURRENT_VERSION = 7
+_CURRENT_VERSION = 9
 
 # 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
 # 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
@@ -344,6 +347,13 @@ _MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
     7: [
         ("buy_amount", "ALTER TABLE daily_fundflow_cache ADD COLUMN buy_amount REAL"),
         ("sell_amount", "ALTER TABLE daily_fundflow_cache ADD COLUMN sell_amount REAL"),
+    ],
+    8: [
+        ("html", "ALTER TABLE ai_fundflow_reports ADD COLUMN html TEXT"),
+        ("html", "ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN html TEXT"),
+    ],
+    9: [
+        ("price", "ALTER TABLE fundflow_15m_cache ADD COLUMN price REAL"),
     ],
 }
 
@@ -489,7 +499,7 @@ def _ensure_fundflow_report_pk_window(conn: sqlite3.Connection) -> None:
             source       TEXT NOT NULL DEFAULT 'batch',
             window       TEXT NOT NULL DEFAULT '15m',
             correlation  TEXT, summary TEXT, main_force TEXT, rhythm TEXT,
-            divergence   TEXT, alerts TEXT, conclusion TEXT,
+            divergence   TEXT, alerts TEXT, conclusion TEXT, html TEXT,
             model_name   TEXT, created_at TEXT, updated_at TEXT,
             PRIMARY KEY (code, trade_date, source, window)
         )"""

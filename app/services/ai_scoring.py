@@ -277,7 +277,13 @@ _PORTFOLIO_SYSTEM = (
     "识别资金驱动的高权重板块。covered/total 表示有资金流数据的持仓占比，低于全部时按可用部分判断。"
     "\n5. missing_fx=该股缺汇率、已从人民币汇总剔除；字段为 null 表示系统无此数据，不得臆造数值；"
     "用领域知识补充时须标 [AI补充] 并注明时效。"
-    "\n\n同时生成一份完整、独立、可读性强的 HTML 详细报告（字段 html），供用户新开页面查看。"
+    "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
+)
+
+
+# HTML 深度报告要求：仅「深入」强度追加（快速/普通不要求生成 HTML 报告）
+_PORTFOLIO_HTML_REQUIREMENT = (
+    "同时生成一份完整、独立、可读性强的 HTML 详细报告（字段 html），供用户新开页面查看。"
     "\n[HTML 深度分析强制规范]"
     "\n1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。"
     "\n2. 结构必须覆盖：核心结论 / 逐标签深度解读 / 结构集中度 / 指标含义与背离 / 资金流与波动率 / 风险与陷阱 / 情景推演 / 操作建议分级。"
@@ -288,7 +294,6 @@ _PORTFOLIO_SYSTEM = (
     "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
     "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
     "简体中文；结构清晰、排版美观、层次分明。"
-    "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
 _PORTFOLIO_OUTPUT_SCHEMA = {
     "score": "0-100 整数总分",
@@ -334,11 +339,15 @@ def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = N
     if not model:
         raise ValueError(_NO_MODEL_MSG)
     ctx = build_portfolio_context(tags)
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
+    schema = {k: v for k, v in _PORTFOLIO_OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = (
         "组合聚合数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(_PORTFOLIO_OUTPUT_SCHEMA, ensure_ascii=False)
+        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
     )
     system = _PORTFOLIO_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_PORTFOLIO_HTML_REQUIREMENT}"
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
     inst = ai._intensity_instruction(intensity)
@@ -617,7 +626,13 @@ _DAILY_SYSTEM = (
     "反映交易当日各档资金节奏，fundflow_daily（完整逐日五档/买卖盘升序序列）与累计速览 "
     "fundflow_30d_net / 5d_net 反映资金中期趋势——用于判断交易当日/近期的资金环境。"
     "\n5. 字段为 null 表示系统无此数据，不得臆造数值；用领域知识补充时须标 [AI补充] 并注明时效。"
-    "\n\n同时生成一份完整、独立、可读性强的 HTML 复盘报告（字段 html），供用户新开页面查看。"
+    "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
+)
+
+
+# HTML 深度报告要求：仅「深入」强度追加（快速/普通不要求生成 HTML 报告）
+_DAILY_HTML_REQUIREMENT = (
+    "同时生成一份完整、独立、可读性强的 HTML 复盘报告（字段 html），供用户新开页面查看。"
     "\n[HTML 深度分析强制规范]"
     "\n1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。"
     "\n2. 结构必须覆盖：核心结论 / 逐笔质量归因（为什么这笔好/差）/ 买卖时机与价格 / 当日节奏与情绪 / "
@@ -629,7 +644,6 @@ _DAILY_SYSTEM = (
     "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
     "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
     "简体中文；结构清晰、排版美观、层次分明。"
-    "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
 _DAILY_OUTPUT_SCHEMA = {
     "score": "0-100 当日综合总分",
@@ -707,11 +721,15 @@ def score_daily(score_date: str, system_prompt: str | None = None,
         invalidate_daily(score_date)
         return None
     ctx = build_daily_context(score_date)
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
+    schema = {k: v for k, v in _DAILY_OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = (
         "当日交易数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(_DAILY_OUTPUT_SCHEMA, ensure_ascii=False)
+        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
     )
     system = _DAILY_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_DAILY_HTML_REQUIREMENT}"
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
     inst = ai._intensity_instruction(intensity)

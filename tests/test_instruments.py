@@ -19,16 +19,16 @@ def _activate_mock_model():
     return ai_svc.activate_model(m["id"])
 
 
-def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net):
-    """插入 1 条分时资金流分钟点（trade_date=今天）。"""
+def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net, price=None):
+    """插入 1 条分时资金流分钟点（trade_date=今天）。price 为分钟末笔价（股价折线）。"""
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO fundflow_15m_cache
                (code, trade_date, ts, main_net, super_large_net, large_net, medium_net, small_net, xs_net,
-                buy_amount, sell_amount)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                buy_amount, sell_amount, price)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (code, date.today().isoformat(), ts,
-             super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0),
+             super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0, price),
         )
 
 
@@ -137,6 +137,63 @@ def test_build_detail_index_no_financials():
     assert data["financials"] is None             # 指数无财务能力
     assert data["partial_missing"] == []
     assert data.get("is_index") is None or "is_index" not in data   # 指数模式 extra 由调用方传入
+
+
+def test_stock_detail_api_index_returns_index_mode(client):
+    """/api/stocks/{index_code} 优雅返回指数详情（is_index=True，无 409/个股名称解析）。"""
+    r = client.get("/api/stocks/000300?window=1")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["is_index"] is True
+    assert d["is_etf"] is False
+    assert d["name"] == "沪深300"                  # 注册表名称
+    assert d["financials"] is None
+    assert d["fundflow_15m"] == []
+    assert d["fundflow_history"] == []
+    assert isinstance(d["intraday"], list)          # 指数量价分时字段在场
+
+
+def test_refresh_index_syncs_valuation_for_legu(monkeypatch):
+    """指数刷新：乐咕源指数（沪深300 等）补 sync_valuation；none 源跳过。"""
+    import types
+
+    from app.services import refresh as rmod
+
+    calls = []
+    monkeypatch.setattr(rmod, "sync_daily_bars", lambda code, now, force=False: {"fetched": 0})
+    monkeypatch.setattr(rmod, "_sync_realtime_quote", lambda code, now: types.SimpleNamespace(price=3900.0))
+    monkeypatch.setattr(rmod, "sync_fundflow", lambda code, now: {"fetched": 0})
+    monkeypatch.setattr(rmod, "sync_valuation",
+                        lambda code, now, price=None, force=False: calls.append((code, price)) or {"fetched": 1})
+
+    # 乐咕源（pe/pb 均 legu）→ 调 sync_valuation，带实时点位价
+    monkeypatch.setattr(rmod, "get_instrument",
+                        lambda code: types.SimpleNamespace(valuation_source=lambda ind: "legu"))
+    rmod.refresh_index("000300")
+    assert len(calls) == 1 and calls[0][0] == "000300" and calls[0][1] == 3900.0
+
+    # none 源 → 跳过（不联网）
+    calls.clear()
+    monkeypatch.setattr(rmod, "get_instrument",
+                        lambda code: types.SimpleNamespace(valuation_source=lambda ind: "none"))
+    rmod.refresh_index("000905")
+    assert calls == []
+
+
+def test_search_and_resolve_etf_name(client, monkeypatch):
+    """ETF 名称搜索/名称回填：预热 ETF 列表（fund_etf_spot_em）后可按名称搜到并解析名称。"""
+    from app.api import stocks as stocks_api
+
+    etf_rows = [{"code": "510300", "name": "沪深300ETF", "market": "etf"},
+                {"code": "515080", "name": "中证红利ETF", "market": "etf"}]
+    monkeypatch.setattr(stocks_api, "_read_etf_stock_list_cache", lambda: etf_rows)
+    # 按名称搜索命中 ETF（前端会显示 （ETF） 后缀）
+    r = client.get("/api/stocks/search", params={"q": "红利ETF"})
+    assert r.status_code == 200
+    hits = r.json()["data"]
+    assert any(x["code"] == "515080" and x["market"] == "etf" for x in hits)
+    # 名称回填：未在 stocks 表的 ETF 代码 → 从 ETF 列表解析名称
+    assert stocks_api._resolve_stock_name("510300") == "沪深300ETF"
 
 
 # ---------- 资金流组合求和（combo_fundflow） ----------
@@ -353,10 +410,15 @@ def test_analyze_batch_custom_system_prompt(monkeypatch):
         "stocks": [{"code": "000300", "correlation": "neutral", "summary": "x"}],
     })
     ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m", system_prompt="重点看虹吸")
-    assert captured["system"] == ai_svc._BATCH_FUNDFLOW_SYSTEM + "\n\n[用户附加要求]\n重点看虹吸"
-    # 不传 → 默认指令
+    assert captured["system"] == ai_svc._BATCH_FUNDFLOW_SYSTEM + "\n\n" + ai_svc._BATCH_FUNDFLOW_QUICK_NOTE \
+        + "\n\n[用户附加要求]\n重点看虹吸"
+    # 不传 → 默认指令（普通强度 = base + 快报式结尾，不生成 HTML）
     ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m")
-    assert captured["system"] == ai_svc._BATCH_FUNDFLOW_SYSTEM
+    assert captured["system"] == ai_svc._BATCH_FUNDFLOW_SYSTEM + "\n\n" + ai_svc._BATCH_FUNDFLOW_QUICK_NOTE
+    # 深入 → 追加 HTML 深度报告要求（连同 [分析强度]）
+    ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m", intensity="deep")
+    assert "HTML 深度分析强制规范" in captured["system"]
+    assert captured["system"].startswith(ai_svc._BATCH_FUNDFLOW_SYSTEM + "\n\n" + ai_svc._BATCH_FUNDFLOW_HTML_REQUIREMENT)
     # 术语统一：组合级说法统一为「组合相关性」；但第 1 种情形保留「共振」字样（用户要求）
     assert "组合共振" not in ai_svc._BATCH_FUNDFLOW_SYSTEM
     assert "1. 共振：" in ai_svc._BATCH_FUNDFLOW_SYSTEM
@@ -414,3 +476,74 @@ def test_coherence_scope_key_sorted(monkeypatch):
         keys = [r["scope_key"] for r in c.execute(
             "SELECT scope_key FROM ai_fundflow_coherence_reports WHERE scope='indices'")]
     assert n == len(keys) and all(k == "000688,000922" for k in keys)
+
+
+# ---------- 资金流点带 price（股价/净值折线） ----------
+
+def test_build_detail_fundflow_has_price():
+    """build_detail 分时/日级资金流点带 price（分笔末笔价 + 日收盘价，股价折线数据）。"""
+    from app.instruments.detail import build_detail
+
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6, price=10.1)
+    _seed_day("600000", 1.5e6)
+    _seed_index_price("600000", date.today().isoformat(), 10.15, 1e6)
+    d = build_detail(get_instrument("600000"), "浦发银行")
+    data = d["data"]
+    assert data["fundflow_15m"] and data["fundflow_15m"][0]["price"] == 10.1
+    assert data["fundflow_history"] and data["fundflow_history"][0]["price"] == 10.15
+
+
+def test_portfolio_fundflow_value_line():
+    """组合净值线：分时 Σ(分笔价×股数)、日级 Σ(收盘价×股数) 并入资金流点（仅参与资金流的 A股）。"""
+    from app.analysis.portfolio import portfolio_fundflow
+
+    today = date.today().isoformat()
+    with get_conn() as c:
+        c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600000','浦发银行','sh')")
+        c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600519','贵州茅台','sh')")
+        c.execute("INSERT OR REPLACE INTO holdings(code,quantity,avg_cost,total_buy,status) "
+                  "VALUES('600000',100,10,1000,'active')")
+        c.execute("INSERT OR REPLACE INTO holdings(code,quantity,avg_cost,total_buy,status) "
+                  "VALUES('600519',10,1500,15000,'active')")
+    # 同 ts 分时价 + 资金流（两只 A 股都参与）
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, 0, 0, 0, price=10.0)
+    _seed_flow("600519", "09:31", 0.5e6, 0.1e6, 0, 0, 0, price=1500.0)
+    _seed_day("600000", 1.5e6)
+    _seed_day("600519", 0.6e6)
+    _seed_index_price("600000", today, 10.0, 1e6)
+    _seed_index_price("600519", today, 1500.0, 1e5)
+    out = portfolio_fundflow()
+    # 分时净值 = 10×100 + 1500×10 = 16000
+    p = next((x for x in out["fundflow_15m"] if x["ts"] == "09:31"), None)
+    assert p and p["price"] == 16000.0
+    # 日级净值 = 10×100 + 1500×10 = 16000
+    h = next((x for x in out["fundflow_history"] if x["trade_date"] == today), None)
+    assert h and h["price"] == 16000.0
+
+
+def test_portfolio_fundflow_value_line_forward_fill():
+    """组合净值线前向沿用：持仓某分钟缺价 → 沿用最近价，净值不砍半/不 null。"""
+    from app.analysis.portfolio import portfolio_fundflow
+
+    today = date.today().isoformat()
+    with get_conn() as c:
+        c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600000','浦发银行','sh')")
+        c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600519','贵州茅台','sh')")
+        c.execute("INSERT OR REPLACE INTO holdings(code,quantity,avg_cost,total_buy,status) "
+                  "VALUES('600000',100,10,1000,'active')")
+        c.execute("INSERT OR REPLACE INTO holdings(code,quantity,avg_cost,total_buy,status) "
+                  "VALUES('600519',10,1500,15000,'active')")
+    # 600000 只在 09:31 有价；600519 09:31/09:36 都有价
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, 0, 0, 0, price=10.0)
+    _seed_flow("600519", "09:31", 0.5e6, 0.1e6, 0, 0, 0, price=1500.0)
+    _seed_flow("600519", "09:36", 0.5e6, 0.1e6, 0, 0, 0, price=1502.0)
+    _seed_day("600000", 1.5e6)
+    _seed_day("600519", 0.6e6)
+    _seed_index_price("600000", today, 10.0, 1e6)
+    _seed_index_price("600519", today, 1500.0, 1e5)
+    out = portfolio_fundflow()
+    p31 = next((x for x in out["fundflow_15m"] if x["ts"] == "09:31"), None)
+    p36 = next((x for x in out["fundflow_15m"] if x["ts"] == "09:36"), None)
+    assert p31 and p31["price"] == 16000.0          # 10×100 + 1500×10
+    # 09:36：600000 缺价 → 沿用 09:31 的 10.0；600519 用 1502
+    assert p36 and p36["price"] == 10 * 100 + 1502 * 10  # = 16020，不砍半

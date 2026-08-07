@@ -16,7 +16,7 @@ from app.data.base import FundflowDay
 
 @dataclass
 class FundflowPoint:
-    """一个分钟窗口的五档净流入（元，正=净流入、负=净流出）+ 买/卖盘成交金额。"""
+    """一个分钟窗口的五档净流入（元，正=净流入、负=净流出）+ 买/卖盘成交金额 + 窗口末成交价。"""
     ts: str              # 窗口起点 'HH:MM'
     main_net: float      # 主力净流入 = 特大 + 大单（评分/AI 派生用，API 不再下发）
     super_large_net: float
@@ -26,6 +26,7 @@ class FundflowPoint:
     xs_net: float = 0.0         # 特小单净流入
     buy_amount: float = 0.0     # 本窗口买盘成交金额（sign>0 累计）
     sell_amount: float = 0.0    # 本窗口卖盘成交金额（sign<0 累计）
+    price: float | None = None  # 本窗口末笔成交价（股价折线用）
 
 
 # 前端可切换的分钟窗口（1 分钟为基础存储粒度，5/15/30 由 resample_points 派生）
@@ -61,24 +62,25 @@ def classify_tick(amount: float, p15: float, p40: float, p75: float, p95: float)
     return "xs"
 
 
-def aggregate_ticks(ticks: list[tuple[str, float, int]], window_min: int) -> list[FundflowPoint]:
+def aggregate_ticks(ticks: list[tuple[str, float, int, float]], window_min: int) -> list[FundflowPoint]:
     """把原始分笔按 window_min 分钟窗口聚合成五档净流入（先算全量分位再逐笔定档）。
 
-    ticks: [(time 'HH:MM:SS', amount, sign)]。窗口按绝对分钟对齐（09:30~09:44 归 09:30 桶）。
+    ticks: [(time 'HH:MM:SS', amount, sign, price)]。窗口按绝对分钟对齐（09:30~09:44 归 09:30 桶）。
+    窗口末笔价格作为该窗口收盘价（股价折线用；价格解析失败可能为 None/0）。
     """
     if not ticks:
         return []
-    p15, p40, p75, p95 = compute_quantiles([a for _, a, _ in ticks])
-    buckets: dict[str, dict[str, float]] = {}
+    p15, p40, p75, p95 = compute_quantiles([a for _, a, _, _ in ticks])
+    buckets: dict[str, dict[str, float | None]] = {}
 
-    for time_str, amount, sign in ticks:
+    for time_str, amount, sign, price in ticks:
         hm = time_str[:5]
         minute = int(hm[:2]) * 60 + int(hm[3:5])
         bucket_start = (minute // window_min) * window_min
         ts = f"{bucket_start // 60:02d}:{bucket_start % 60:02d}"
         b = buckets.setdefault(ts, {
             "super": 0.0, "large": 0.0, "medium": 0.0, "small": 0.0, "xs": 0.0,
-            "buy": 0.0, "sell": 0.0,
+            "buy": 0.0, "sell": 0.0, "price": None,
         })
         cls = classify_tick(amount, p15, p40, p75, p95)
         b[cls] += amount * sign
@@ -86,6 +88,8 @@ def aggregate_ticks(ticks: list[tuple[str, float, int]], window_min: int) -> lis
             b["buy"] += amount
         elif sign < 0:
             b["sell"] += amount
+        if price is not None and price > 0:
+            b["price"] = price   # 末笔即窗口末价（0/解析失败跳过）
 
     out = []
     for ts in sorted(buckets):
@@ -101,6 +105,7 @@ def aggregate_ticks(ticks: list[tuple[str, float, int]], window_min: int) -> lis
             buy_amount=round(b["buy"], 2),
             sell_amount=round(b["sell"], 2),
             main_net=round(sp + lg, 2),
+            price=round(float(b["price"]), 3) if b["price"] is not None else None,
         ))
     return out
 
@@ -109,12 +114,12 @@ def resample_points(points: list[FundflowPoint], window_min: int) -> list[Fundfl
     """把 1 分钟基础行重聚合到更大窗口（读取侧：前端切换 5/15/30 分钟用）。"""
     if window_min <= 1:
         return list(points)
-    buckets: dict[str, list[float]] = {}
+    buckets: dict[str, list[float | None]] = {}
     for p in points:
         minute = int(p.ts[:2]) * 60 + int(p.ts[3:5])
         bucket_start = (minute // window_min) * window_min
         ts = f"{bucket_start // 60:02d}:{bucket_start % 60:02d}"
-        b = buckets.setdefault(ts, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        b = buckets.setdefault(ts, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None])
         b[0] += p.super_large_net
         b[1] += p.large_net
         b[2] += p.medium_net
@@ -122,9 +127,11 @@ def resample_points(points: list[FundflowPoint], window_min: int) -> list[Fundfl
         b[4] += p.xs_net
         b[5] += p.buy_amount
         b[6] += p.sell_amount
+        if p.price is not None:
+            b[7] = p.price   # 桶末价（覆盖式）
     out = []
     for ts in sorted(buckets):
-        sp, lg, md, sm, xs, buy, sell = buckets[ts]
+        sp, lg, md, sm, xs, buy, sell, price = buckets[ts]
         out.append(FundflowPoint(
             ts=ts,
             super_large_net=round(sp, 2),
@@ -135,6 +142,7 @@ def resample_points(points: list[FundflowPoint], window_min: int) -> list[Fundfl
             buy_amount=round(buy, 2),
             sell_amount=round(sell, 2),
             main_net=round(sp + lg, 2),
+            price=round(float(price), 3) if price is not None else None,
         ))
     return out
 
@@ -222,24 +230,24 @@ def index_intraday_window_series(rows: list[dict], window_min: int = 15) -> list
     return out
 
 
-def tick_bands(ticks: list[tuple[str, float, int]]) -> dict | None:
+def tick_bands(ticks: list[tuple[str, float, int, float]]) -> dict | None:
     """当日自适应分档阈值 {p15,p40,p75,p95}，供前端展示各档组成条件。无分笔返回 None。"""
     if not ticks:
         return None
-    p15, p40, p75, p95 = compute_quantiles([a for _, a, _ in ticks])
+    p15, p40, p75, p95 = compute_quantiles([a for _, a, _, _ in ticks])
     return {"p15": p15, "p40": p40, "p75": p75, "p95": p95}
 
 
-def ticks_to_day(ticks: list[tuple[str, float, int]], trade_date: str) -> FundflowDay | None:
+def ticks_to_day(ticks: list[tuple[str, float, int, float]], trade_date: str) -> FundflowDay | None:
     """全天五档汇总（日级缓存用）。无分笔返回 None。"""
     if not ticks:
         return None
-    p15, p40, p75, p95 = compute_quantiles([a for _, a, _ in ticks])
+    p15, p40, p75, p95 = compute_quantiles([a for _, a, _, _ in ticks])
     tot = {"super": 0.0, "large": 0.0, "medium": 0.0, "small": 0.0, "xs": 0.0}
     total_amount = 0.0
     buy = 0.0
     sell = 0.0
-    for _, amount, sign in ticks:
+    for _, amount, sign, _ in ticks:
         total_amount += amount
         if sign > 0:
             buy += amount

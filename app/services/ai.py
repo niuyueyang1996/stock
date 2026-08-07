@@ -15,18 +15,19 @@ from app.models.db import get_conn
 
 logger = logging.getLogger("ai")
 
-# 诊股 7 维度（固定，用于 prompt 与输出校验）
-DIMENSIONS = ["cyclicality", "moat", "fundamentals", "growth", "dividend", "valuation", "competition"]
+# 诊股 8 维度（固定，用于 prompt 与输出校验）
+DIMENSIONS = ["cyclicality", "moat", "fundamentals", "growth", "dividend", "valuation", "competition", "fundflow"]
 DIMENSION_CN = {
     "cyclicality": "周期性", "moat": "护城河", "fundamentals": "基本面",
     "growth": "增长", "dividend": "股息", "valuation": "估值", "competition": "同业竞争",
+    "fundflow": "资金面",
 }
 # dimensions 键名别名：AI 偶发把维度 JSON 键名写成中文（prompt 要求正文用中文维度名），映射回英文键
 DIM_KEY_ALIASES = {k: (k, cn) for k, cn in DIMENSION_CN.items()}
 
 _SYSTEM_PROMPT = (
-    "你是资深股票分析师。根据给定的个股结构化数据，从周期性、护城河、基本面、增长、股息、估值、同业竞争 "
-    "7 个维度分析该股，给出买入评级（A=强烈推荐/B=推荐/C=中性/D=回避）、买入风险系数（0-100，越高风险越大）与原因。\n\n"
+    "你是资深股票分析师。根据给定的个股结构化数据，从周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面 "
+    "8 个维度分析该股，给出买入评级（A=强烈推荐/B=推荐/C=中性/D=回避）、买入风险系数（0-100，越高风险越大）与原因。\n\n"
     "[数据使用规范]\n"
     "1. 系统提供的所有结构化字段都必须纳入分析（行情/估值/财务/分位/资金流/持仓），"
     "不得只挑少数指标或只看总分——漏用数据视为不合格。\n"
@@ -44,9 +45,9 @@ _SYSTEM_PROMPT = (
     "6. data_source 字段：provided=基于系统数据；supplemented=AI 补充/推断。\n"
     "7. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、html、"
     "预期增速依据）一律使用简体中文，禁止混入英文单词；若在正文中提及维度，用中文名"
-    "（周期性、护城河、基本面、增长、股息、估值、同业竞争），不要写 growth/fundamentals 等英文。\n"
-    "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 7 个键固定为 "
-    "cyclicality/moat/fundamentals/growth/dividend/valuation/competition，禁止改名。\n"
+    "（周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面），不要写 growth/fundamentals 等英文。\n"
+    "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 8 个键固定为 "
+    "cyclicality/moat/fundamentals/growth/dividend/valuation/competition/fundflow，禁止改名。\n"
     "8. expected_growth 字段：基于系统财务数据（最新财报同比、TTM 同比、ROE、支付率、前瞻指标）与陷阱判断，"
     "给出你对该股未来一年净利与营收年同比增速的预判（%，可为负），并用 net_profit_reason / revenue_reason 简述依据。"
     "若识别出周期陷阱，勿把历史高点同比直接外推到未来，增速应回归行业中枢。\n\n"
@@ -71,6 +72,12 @@ _SYSTEM_PROMPT = (
     "需结合派息率、盈利趋势、现金流判断；若分红不可持续，股息维度评分应下调。\n"
     "2. cross_analysis 输出每个陷阱是否识别、对得分的调整量（impact_score 负数=下调）、以及识别依据（结合哪些维度数据）。\n"
     "3. 最终 rating / risk_score / summary 必须综合陷阱判断，不可仅按孤立维度加权。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+
+# HTML 深度报告要求：仅「深入」强度追加（快速/普通不要求生成 HTML 报告）
+_HTML_REQUIREMENT = (
     "同时生成一份完整、独立、可读性强的 HTML 诊股报告（字段 html），供用户新开页面查看。\n"
     "[HTML 深度分析强制规范]\n"
     "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止泛泛复述 prompt 结构、禁止空话套话，浅尝辄止视为不合格重写。\n"
@@ -84,7 +91,6 @@ _SYSTEM_PROMPT = (
     "6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
     "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
     "简体中文；结构清晰、排版美观、层次分明。\n"
-    "严格输出 JSON，不要输出任何额外文字。"
 )
 
 _OUTPUT_SCHEMA = {
@@ -495,11 +501,15 @@ def analyze_stock(code: str, system_prompt: str | None = None,
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
     ctx = build_stock_context(code)
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
+    schema = {k: v for k, v in _OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = (
         "个股结构化数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(_OUTPUT_SCHEMA, ensure_ascii=False)
+        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
     )
     system = _SYSTEM_PROMPT
+    if intensity == "deep":
+        system = f"{system}\n\n{_HTML_REQUIREMENT}"
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
     inst = _intensity_instruction(intensity)
@@ -582,7 +592,25 @@ _FUNDFLOW_ANALYSIS_SYSTEM = (
     "（天窗口看逐日净流入与涨跌幅 pct_chg；分钟窗口看累计主力 cum 与分时价。）\n"
     "3. 主力行为：从节奏判断吸筹（尾盘/近日放量流入）/出货（拉高派发、早盘冲高后持续流出）/分歧（时进时出）。\n"
     "4. 结合 day_net/total_net 与累计走势给出一句话结论。\n"
+)
+
+# 快速/普通：快报式简明输出，不生成 HTML
+_FUNDFLOW_QUICK_NOTE = (
     "5. 输出简体中文，简明扼要、可直接阅读；这是快报，不要长篇大论，不要 HTML。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+# HTML 深度报告要求：仅「深入」强度追加（快速/普通保持快报式）
+_FUNDFLOW_HTML_REQUIREMENT = (
+    "5. 同时生成一份完整、独立、可读性强的 HTML 资金面报告（字段 html），供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。\n"
+    "2. 结构必须覆盖：核心结论 / 各档资金动向（主力/散户结构、拆单识别）/ 资金×股价相关性或背离 / 分时与多日节奏 / 风险点 / 操作提示。\n"
+    "3. 每个判断必须带具体数字（窗口、成交额、净流入、档位）与上下文；禁止「资金流入」「有背离」这类无数字断言。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的数据点表格。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
     "严格输出 JSON，不要输出任何额外文字。"
 )
 
@@ -594,6 +622,7 @@ _FUNDFLOW_ANALYSIS_SCHEMA = {
     "rhythm": "全天资金节奏（早盘/午盘/尾盘各自表现）",
     "alerts": ["要注意的风险点数组"],
     "conclusion": "简明操作提示（要注意什么、怎么做）",
+    "html": "完整独立 HTML 资金面报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
 }
 
 # ---------- 组合批量资金 AI 分析：所有持仓个股一次分析（省 token），逐只精简输出 ----------
@@ -636,7 +665,25 @@ _BATCH_FUNDFLOW_SYSTEM = (
     "main_force（主力行为，可选）、alerts（注意点，可选）。\n"
     "2. 必须覆盖 stocks 中出现的每只 code，不要遗漏；不要新增 stocks 中没有的 code。\n"
     "3. 每只精简到几句话，不展开；简体中文。\n"
+)
+
+# 快速/普通：仅输出精简 JSON
+_BATCH_FUNDFLOW_QUICK_NOTE = (
     "严格输出 JSON，结构如下，不要输出任何额外文字。"
+)
+
+# HTML 深度报告要求：仅「深入」强度追加（快速/普通保持精简 JSON）
+_BATCH_FUNDFLOW_HTML_REQUIREMENT = (
+    "4. 同时生成一份完整、独立、可读性强的 HTML 批量资金面报告（字段 html），供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。\n"
+    "2. 结构必须覆盖：核心结论 / 组合资金面格局（共振/跷跷板虹吸/分化）与证据 / 逐只资金×股价与主力行为 / 风险点 / 组合层面操作建议分级。\n"
+    "3. 每个判断必须带具体数字（窗口、标的、成交额、净流入）与上下文；禁止「资金共振」「明显流入」这类无数字断言。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的逐只表格。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
 )
 
 _BATCH_FUNDFLOW_SCHEMA = {
@@ -654,7 +701,8 @@ _BATCH_FUNDFLOW_SCHEMA = {
             "main_force": "主力行为（可选）",
             "alerts": ["注意点（可选）"],
         }
-    ]
+    ],
+    "html": "完整独立 HTML 批量资金面报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
 }
 
 
@@ -920,6 +968,7 @@ def _normalize_fundflow_analysis(data: dict) -> dict:
         "rhythm": str(data.get("rhythm") or ""),
         "alerts": _list(data.get("alerts")),
         "conclusion": str(data.get("conclusion") or ""),
+        "html": str(data.get("html") or ""),   # AI「深入」模式生成的 HTML 资金面报告（可空 → 前端无 📄 按钮）
     }
 
 
@@ -938,11 +987,17 @@ def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | 
     ctx = build_fundflow_analysis_context(code, window)
     if not ctx["points"]:
         raise ValueError("该时间窗资金流数据为空，请先刷新资金流")
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通快报式，不生成 HTML）
+    schema = {k: v for k, v in _FUNDFLOW_ANALYSIS_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = (
         "资金流与股价数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(_FUNDFLOW_ANALYSIS_SCHEMA, ensure_ascii=False)
+        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
     )
     system = _FUNDFLOW_ANALYSIS_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_FUNDFLOW_HTML_REQUIREMENT}"
+    else:
+        system = f"{system}\n\n{_FUNDFLOW_QUICK_NOTE}"
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
     inst = _intensity_instruction(intensity)
@@ -987,19 +1042,19 @@ def _upsert_fundflow_report(code: str, trade_date: str, source: str, window: str
         c.execute(
             """INSERT INTO ai_fundflow_reports
                  (code, trade_date, source, window, correlation, summary, main_force, rhythm,
-                  divergence, alerts, conclusion, model_name, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  divergence, alerts, conclusion, html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(code, trade_date, source, window) DO UPDATE SET
                  correlation=excluded.correlation, summary=excluded.summary,
                  main_force=excluded.main_force, rhythm=excluded.rhythm, divergence=excluded.divergence,
-                 alerts=excluded.alerts, conclusion=excluded.conclusion,
+                 alerts=excluded.alerts, conclusion=excluded.conclusion, html=excluded.html,
                  model_name=excluded.model_name, updated_at=excluded.updated_at""",
             (code, trade_date, source, window,
              analysis.get("correlation"), analysis.get("summary"), analysis.get("main_force"),
              analysis.get("rhythm"),
              json.dumps(analysis.get("divergence") or [], ensure_ascii=False),
              json.dumps(analysis.get("alerts") or [], ensure_ascii=False),
-             analysis.get("conclusion"), model_name, now, now),
+             analysis.get("conclusion"), analysis.get("html"), model_name, now, now),
         )
 
 
@@ -1086,11 +1141,12 @@ def _normalize_coherence(data) -> dict:
         "summary": str(data.get("summary") or ""),
         "points": [str(x) for x in (data.get("points") or []) if str(x).strip()],
         "conclusion": str(data.get("conclusion") or ""),
+        "html": str(data.get("html") or ""),   # AI「深入」模式生成的批量 HTML 报告（可空）
     }
 
 
 def _upsert_coherence_report(scope: str, scope_key: str, trade_date: str, window: str,
-                             coherence: dict, model_name: str = "") -> None:
+                             coherence: dict, model_name: str = "", html: str = "") -> None:
     """组合级资金相关性结果写入 ai_fundflow_coherence_reports（UPSERT，同 scope+key+日期+窗覆盖）。"""
     from datetime import datetime
 
@@ -1101,16 +1157,16 @@ def _upsert_coherence_report(scope: str, scope_key: str, trade_date: str, window
         c.execute(
             """INSERT INTO ai_fundflow_coherence_reports
                  (scope, scope_key, trade_date, window, correlation, summary, points,
-                  conclusion, model_name, created_at, updated_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                  conclusion, html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(scope, scope_key, trade_date, window) DO UPDATE SET
                  correlation=excluded.correlation, summary=excluded.summary, points=excluded.points,
-                 conclusion=excluded.conclusion, model_name=excluded.model_name,
+                 conclusion=excluded.conclusion, html=excluded.html, model_name=excluded.model_name,
                  updated_at=excluded.updated_at""",
             (scope, scope_key, trade_date, window,
              coherence.get("correlation"), coherence.get("summary"),
              json.dumps(coherence.get("points") or [], ensure_ascii=False),
-             coherence.get("conclusion"), model_name, now, now),
+             coherence.get("conclusion"), html, model_name, now, now),
         )
 
 
@@ -1132,10 +1188,8 @@ def get_coherence_report(scope: str, scope_key: str | None = None,
         where += " AND window=?"
         params.append(window)
     sql = (f"SELECT scope, scope_key, trade_date, window, correlation, summary, points, conclusion, "
-           f"model_name FROM ai_fundflow_coherence_reports {where} "
+           f"html, model_name FROM ai_fundflow_coherence_reports {where} "
            f"ORDER BY trade_date DESC, updated_at DESC LIMIT 1")
-    with get_conn() as c:
-        row = c.execute(sql, params).fetchone()
     with get_conn() as c:
         row = c.execute(sql, params).fetchone()
     if not row:
@@ -1150,7 +1204,8 @@ def get_coherence_report(scope: str, scope_key: str | None = None,
         "trade_date": row["trade_date"], "window": row["window"],
         "correlation": row["correlation"], "summary": row["summary"],
         "points": [str(x) for x in points if str(x).strip()],
-        "conclusion": row["conclusion"], "model_name": row["model_name"],
+        "conclusion": row["conclusion"], "html": row["html"] or "",
+        "model_name": row["model_name"],
     }
 
 
@@ -1176,11 +1231,17 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
     ctx = build_batch_fundflow_context(tags, w, codes=codes, weights=weights)
     if not ctx["stocks"]:
         raise ValueError("该组合暂无有资金流数据的标的，请先全量刷新")
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通精简 JSON，不生成 HTML）
+    schema = {k: v for k, v in _BATCH_FUNDFLOW_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = (
         "组合标的资金流数据（列表）：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(_BATCH_FUNDFLOW_SCHEMA, ensure_ascii=False)
+        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
     )
     system = _BATCH_FUNDFLOW_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_BATCH_FUNDFLOW_HTML_REQUIREMENT}"
+    else:
+        system = f"{system}\n\n{_BATCH_FUNDFLOW_QUICK_NOTE}"
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
     inst = _intensity_instruction(intensity)
@@ -1212,11 +1273,13 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
     # 组合级相关性：落库 ai_fundflow_coherence_reports，批量面板顶部展示
     # scope_key 排序归一：同一组合无论选择顺序都唯一（选中 A,B 与 B,A 同 key，F5 才能精确匹配）
     coherence = _normalize_coherence(raw.get("coherence"))
+    batch_html = str(raw.get("html") or "")   # AI「深入」模式生成的批量 HTML 报告
     scope = "indices" if ctx["mode"] == "indices" else "portfolio"
     scope_key = ",".join(sorted(codes)) if codes else (",".join(sorted(tags)) if tags else "全部")
     try:
         _upsert_coherence_report(scope, scope_key, ctx["date"], w, coherence,
-                                 model_cfg.get("model") or model_cfg.get("name", ""))
+                                 model_cfg.get("model") or model_cfg.get("name", ""),
+                                 html=batch_html)
     except Exception:  # noqa: BLE001 组合相关性落库失败不阻断批量
         pass
     logger.info("[AI资金流-批量] %s %s%s 分析 %d/%d 只",
@@ -1226,7 +1289,7 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
         "mode": ctx["mode"], "window": w, "date": ctx["date"],
         "covered": ctx["covered"], "total": ctx["total"],
         "stocks_count": len(reports), "reports": reports,
-        "coherence": coherence,
+        "coherence": coherence, "html": batch_html,
     }
 
 
@@ -1234,7 +1297,7 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
 # 只展示用户可能想改的「要求块」；用户改了才作为「用户附加要求」追加到完整指令后。
 _EDITABLE_PROMPTS = {
     "stock": (
-        "请从基本面、成长性、估值、股息、护城河、周期性、同业竞争七个维度分析该股，"
+        "请从基本面、成长性、估值、股息、护城河、周期性、同业竞争、资金面八个维度分析该股，"
         "重点提示风险与交叉陷阱，给出明确评级与买卖建议。"
     ),
     "fundflow": (
@@ -1277,7 +1340,7 @@ def get_stock_fundflow_report(code: str, window: str | None = None) -> dict | No
     if window:
         sql, params = (
             """SELECT code, trade_date, source, window, correlation, summary, main_force, rhythm,
-                      divergence, alerts, conclusion, model_name
+                      divergence, alerts, conclusion, html, model_name
                FROM ai_fundflow_reports WHERE code=? AND window=?
                ORDER BY trade_date DESC, updated_at DESC LIMIT 1""",
             (code, window),
@@ -1285,7 +1348,7 @@ def get_stock_fundflow_report(code: str, window: str | None = None) -> dict | No
     else:
         sql, params = (
             """SELECT code, trade_date, source, window, correlation, summary, main_force, rhythm,
-                      divergence, alerts, conclusion, model_name
+                      divergence, alerts, conclusion, html, model_name
                FROM ai_fundflow_reports WHERE code=?
                ORDER BY trade_date DESC, updated_at DESC LIMIT 1""",
             (code,),
@@ -1308,7 +1371,8 @@ def get_stock_fundflow_report(code: str, window: str | None = None) -> dict | No
         "window": row["window"], "correlation": row["correlation"],
         "summary": row["summary"], "main_force": row["main_force"], "rhythm": row["rhythm"],
         "divergence": _loads(row["divergence"]), "alerts": _loads(row["alerts"]),
-        "conclusion": row["conclusion"], "model_name": row["model_name"],
+        "conclusion": row["conclusion"], "html": row["html"] or "",
+        "model_name": row["model_name"],
     }
 
 

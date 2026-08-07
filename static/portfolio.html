@@ -75,10 +75,13 @@
           </div>
           <div id="pfFlowBatchPanel" style="display:none;margin:0 0 10px"></div>
           <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:340px"></div>
-            <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:340px"></div>
+            <div class="chart sm" id="pfFlowPrice" style="flex:1;min-width:280px;height:280px"></div>
+            <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:280px"></div>
           </div>
-          <div class="chart sm" id="pfFlowBars" style="height:240px"></div>
+          <div class="row" style="align-items:stretch">
+            <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:280px"></div>
+            <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:280px"></div>
+          </div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流（请先「全量刷新」，或今日非交易日）。</div>
         </div>
         <div class="panel" id="chartRow">
@@ -550,9 +553,11 @@
         const intraEl = document.getElementById('pfFlowIntraday');
         const bsEl = document.getElementById('pfFlowBuySell');
         const barsEl = document.getElementById('pfFlowBars');
+        const priceEl = document.getElementById('pfFlowPrice');
         if (!base.length && !hist.length && !hasBars) {
           empty.style.display = 'block';
           tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = ''; barsEl.innerHTML = '';
+          if (priceEl) priceEl.innerHTML = '';
           return;
         }
         empty.style.display = 'none';
@@ -561,13 +566,15 @@
         const draw = (w) => {
           pfFlowWindow = w;
           if (isMin(w)) {
-            if (!base.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; return; }
+            if (!base.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = ''; return; }
             const pts = resampleFlow(base, parseInt(w, 10));
+            fundflowPrice(priceEl, pts, FLOW_WINDOW_LABEL[w] + '分时');   // 组合净值独立图（最上边）
             fundflowIntraday(intraEl, pts, parseInt(w, 10));
             fundflowBuySell(bsEl, pts, parseInt(w, 10));
           } else {
             const days = bucketFlowDays(hist, parseInt(w, 10));
-            if (!days.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; return; }
+            if (!days.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = ''; return; }
+            fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 组合净值独立图
             fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
             fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
           }
@@ -627,7 +634,7 @@
       const coh = await loadCoherence('portfolio', key, reports[0].window);
       renderFundflowBatchPanel(panel, {
         window: reports[0].window, stocks_count: reports.length,
-        date: reports[0].trade_date, reports, coherence: coh,
+        date: reports[0].trade_date, reports, coherence: coh, html: coh ? coh.html : '',
       });
     }
 

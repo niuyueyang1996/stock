@@ -11,21 +11,25 @@ from app.services.indices import auto_map_etf_index, auto_map_holdings_etfs
 
 # ---------- 估值转换（normalize_index_valuation_http） ----------
 
-def test_normalize_index_valuation_http_uses_ttm():
+def test_normalize_index_valuation_http_uses_add_ttm():
+    # 指数标准估值用「整体法」列 addTtmPe（乐咕 ttmPe 为等权算术平均，大盘指数严重虚高）
     df = pd.DataFrame({
         "date": ["2026-08-05", "2026-08-06"],
-        "ttmPe": [13.5, 13.63],
+        "addTtmPe": [13.5, 13.63],
         "addLyrPe": [0.0, 0.0],
-        "pb": [1.40, 1.43],
+        "addPb": [1.40, 1.43],
     })
     pts = normalize_index_valuation_http(df, "pe", "近一年")
     assert [p.value for p in pts] == [13.5, 13.63]
     assert [p.date for p in pts] == ["2026-08-05", "2026-08-06"]
+    # pb 取 addPb 列（整体法市净率）
+    pb = normalize_index_valuation_http(df, "pb", "近一年")
+    assert [p.value for p in pb] == [1.40, 1.43]
 
 
 def test_normalize_index_valuation_http_fallback_addlyrpe():
-    # 恒指场景：ttmPe 全 0 仅 addLyrPe 有效 → 回退
-    df = pd.DataFrame({"date": ["2026-08-06"], "ttmPe": [0.0], "addLyrPe": [9.3], "pb": [None]})
+    # 恒指场景：addTtmPe 全 0 仅 addLyrPe 有效 → 回退
+    df = pd.DataFrame({"date": ["2026-08-06"], "addTtmPe": [0.0], "addLyrPe": [9.3], "addPb": [None]})
     pts = normalize_index_valuation_http(df, "pe", "近一年")
     assert [p.value for p in pts] == [9.3]
     # pb 列值全 None → []
@@ -39,7 +43,7 @@ def test_normalize_index_valuation_http_empty_and_clip():
     # 超出近一年（cutoff=今日-365 天）截断 + 负值剔除
     df = pd.DataFrame({
         "date": ["2024-01-01", "2025-01-01", "2026-08-06", "2026-08-05"],
-        "ttmPe": [-5.0, 10.0, 12.0, 11.0],
+        "addTtmPe": [-5.0, 10.0, 12.0, 11.0],
     })
     pts = normalize_index_valuation_http(df, "pe", "近一年")
     # 2024/2025 距今 >365 截断，-5.0 剔除；保留近一年内两个正值（df 原序）
