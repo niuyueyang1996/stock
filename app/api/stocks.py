@@ -1,17 +1,13 @@
 """个股分析路由：分位/估值/财务/资金流详情 + 股票搜索 + 个股刷新 + 缓存状态。"""
 import json
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from app.analysis.valuation import PERIODS, compute_live, get_quantiles
-from app.data.base import auto_tag, is_etf_code, is_hk_code
+from app.analysis.valuation import PERIODS
 from app.data.cache import (
-    get_daily_fundflow,
-    get_daily_fundflows,
-    get_fundflow_min,
     get_expected_growth,
     get_expected_payout,
     get_expected_revenue_growth,
@@ -23,7 +19,8 @@ from app.data.cache import (
     upsert_expected_payout,
     upsert_expected_revenue_growth,
 )
-from app.data.fundflow import FUNDFLOW_WINDOWS
+from app.instruments import get_instrument
+from app.instruments.detail import build_detail
 from app.services.quote import get_quote
 from app.services.holdings import set_tag
 
@@ -33,24 +30,20 @@ router = APIRouter()
 def _cache_status(code: str) -> dict:
     """检查个股缓存状态（行情/财务/估值历史是否齐全）。纯读零网络。
 
-    港股无财务数据源（新浪 stock_financial_abstract 不支持港股），
-    因此港股不把 financials 计入缺失项，避免 409 死循环。
+    只有缺日K行情(bars)才计入缺失项并触发 409 弹窗——ETF/港股等无财务数据源、
+    估值历史缺失的标的，页面照常打开（对应区域显示暂无），不做下载弹窗死循环。
+    financials/valuation 有数据仍照常进 available_items。
     """
     missing, available = [], []
-    is_hk = is_hk_code(code)
     if get_latest_daily_price(code):
         available.append("bars")
     else:
         missing.append("bars")
     if get_financials(code):
         available.append("financials")
-    elif not is_hk:
-        missing.append("financials")
     has_series = any(get_valuation_series(code, "pe", p) for p in PERIODS)
     if has_series and get_valuation(code):
         available.append("valuation")
-    else:
-        missing.append("valuation")
     return {
         "code": "CACHE_MISS" if missing else "CACHE_OK",
         "stock": code,
@@ -81,9 +74,6 @@ class ExpectedGrowthBody(BaseModel):
 
 class TagBody(BaseModel):
     tag: str
-
-# 折线图默认展示周期
-DEFAULT_CHART_PERIOD = "3y"
 
 # 股票名称列表缓存（首次经 akshare 全量拉取，存本地文件）
 # 约定：搜索 / 名称回填只读本地缓存（GET 零网络）；只有启动预热 preload_market_lists 才联网下载。
@@ -351,25 +341,19 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         else:
             raise HTTPException(404, f"行情获取失败: {e}")
 
+    inst = get_instrument(code)
     # 名称：优先 stocks 表（录入时写入）；缺失时从全市场列表查询并回填，保证流水/明细也显示名称
     from app.models.db import get_conn
 
     with get_conn() as c:
         row = c.execute("SELECT name, tag, market, currency FROM stocks WHERE code=?", (code,)).fetchone()
-    currency = (row["currency"] if row and row["currency"] else "CNY") or "CNY"
-    # 港股：当前汇率（人民币折算展示用）
-    fx_rate = None
-    if currency != "CNY":
-        from app.services.fx import get_fx_rate_cny
-
-        fx_rate = get_fx_rate_cny(currency, date.today().isoformat())
     name = row["name"] if row and row["name"] else None
     # name 缺失或被误存为代码本身（如 '601728'）时，从全市场列表回填
     if not name or str(name).strip() == code:
         resolved = _resolve_stock_name(code)
         if resolved:
             name = resolved
-            mkt = row["market"] if row and row["market"] else ("hk" if is_hk_code(code) else "sh")
+            mkt = row["market"] if row and row["market"] else ("hk" if inst.currency == "HKD" else "sh")
             with get_conn() as c:
                 c.execute(
                     """INSERT INTO stocks(code, name, market) VALUES(?,?,?)
@@ -378,94 +362,35 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
                 )
     if not name:
         name = code
-    tag = row["tag"] if row and row["tag"] else auto_tag(code, name)
-    is_etf = is_etf_code(code) or tag == "ETF"
+    tag = row["tag"] if row and row["tag"] else inst.tag
+    is_etf = inst.is_etf or tag == "ETF"
 
-    # 实时估值（市值/TTM口径）——纯本地计算，读缓存零网络
-    live = compute_live(code, quote["price"] if quote else None)
-    val = get_valuation(code)
-    ql = get_quantiles(code)
-    fin = get_financials(code)
+    # ETF 跟踪指数：已映射 → {code,name,source}（前端显示链接，可点入指数页）；未映射 → None
+    tracked_index = None
+    if is_etf:
+        from app.services.indices import get_etf_index_mapping
 
-    # 百度历史序列（画折线图，1y/3y/5y 多周期，前端可切换）
-    valuation_history = {
-        "periods": {
-            p: {
-                "pe": [{"date": d, "value": v} for d, v in get_valuation_series(code, "pe", p)],
-                "pb": [{"date": d, "value": v} for d, v in get_valuation_series(code, "pb", p)],
-            }
-            for p in PERIODS
-        },
-        "default": DEFAULT_CHART_PERIOD,
-    }
+        m = get_etf_index_mapping(code)
+        if m and m["index_code"]:
+            tracked_index = {"code": m["index_code"], "name": m["index_name"], "source": m["source"]}
 
-    # 最新一天五档资金流 + 近30日净流入历史
-    row = get_daily_fundflow(code)
-    flow_latest = dict(row) if row else None
-    # 当日自适应分档阈值 P15/P40/P75/P95（前端展示各档组成条件）
-    bands = {k: flow_latest[k] for k in ("p15", "p40", "p75", "p95")
-             if flow_latest and flow_latest.get(k) is not None} or None
-    if flow_latest:
-        # 前端五档柱只需各档净额 + 总净流入（主力由评分/AI 内部派生，不下发）
-        flow_latest = {
-            "trade_date": flow_latest["trade_date"],
-            "netamount": flow_latest["netamount"],
-            "super_large_net": flow_latest["super_large_net"],
-            "large_net": flow_latest["large_net"],
-            "medium_net": flow_latest["medium_net"],
-            "small_net": flow_latest["small_net"],
-            "xs_net": flow_latest.get("xs_net"),
-        }
-    today = date.today().isoformat()
-    flow_start = (date.today() - timedelta(days=45)).isoformat()
-    flow_hist = [
-        {"trade_date": r["trade_date"], "netamount": r["netamount"]}
-        for r in get_daily_fundflows(code, flow_start, today)
-    ]
+    # 港股：当前汇率（人民币折算展示用）
+    fx_rate = None
+    if inst.currency != "CNY":
+        from app.services.fx import get_fx_rate_cny
 
-    # 当日分时五档资金流：始终返回 1 分钟基础粒度（前端本地按 1/5/15/30 重采样）
-    fundflow_window = window if window in FUNDFLOW_WINDOWS else 15
-    min_rows = get_fundflow_min(code, today)
-    fundflow_15m = [
-        {
-            "ts": r["ts"],
-            "super_large_net": r["super_large_net"],
-            "large_net": r["large_net"],
-            "medium_net": r["medium_net"],
-            "small_net": r["small_net"],
-            "xs_net": r["xs_net"],
-            "buy_amount": r["buy_amount"],
-            "sell_amount": r["sell_amount"],
-        }
-        for r in min_rows
-    ]
+        fx_rate = get_fx_rate_cny(inst.currency, date.today().isoformat())
 
-    return {
-        "ok": True,
-        "data": {
-            "code": code,
-            "name": name,
-            "tag": tag,
-            "is_etf": is_etf,
-            "currency": currency,
-            "fx_rate": fx_rate,
-            "quote": quote,
-            "live": live,                     # 实时估值+前瞻+分位（实时市值/TTM 口径）
-            "valuation": {"pe_ttm": val["pe_ttm"] if val else None, "pb": val["pb"] if val else None},
-            "quantiles": ql,                  # {1y:{pe_pct,pb_pct,sample_days}, 3y, 5y}
-            "valuation_history": valuation_history,  # 百度序列折线图
-            "financials": dict(fin) if fin else None,
-            "dv_ratio": live.get("dv_ratio"),
-            "fundflow_latest": flow_latest,
-            "fundflow_bands": bands,
-            "fundflow_history": flow_hist,
-            "fundflow_15m": fundflow_15m,
-            "fundflow_window": fundflow_window,
-            "fundflow_windows": FUNDFLOW_WINDOWS,
-            "fundflow_15m_note": "当日分笔派生，历史从接入日起累积",
-            "partial_missing": status["missing_items"] if partial else [],
-        },
-    }
+    # 共享四段（估值序列/日资金流/近45日历史/分时）+ 统一装配（detail.py）
+    return build_detail(
+        inst,
+        name,
+        quote=quote,
+        window=window,
+        fx_rate=fx_rate,
+        partial_missing=status["missing_items"] if partial else [],
+        extra={"tag": tag, "is_etf": is_etf, "tracked_index": tracked_index},
+    )
 
 
 @router.post("/stocks/{code}/refresh")

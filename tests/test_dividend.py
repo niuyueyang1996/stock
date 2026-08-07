@@ -111,9 +111,9 @@ def test_etf_daily_bars_em_fallback_sina(monkeypatch):
         "volume": [1000, 1200], "amount": [4050, 4980],
     })
     monkeypatch.setattr(ak, "stock_zh_a_daily", lambda **k: df)
-    from app.data.providers import SinaProvider
+    from app.instruments.etf import EtfInstrument
 
-    bars = SinaProvider().daily_bars("510300", "2026-08-04", "2026-08-05")
+    bars = EtfInstrument("510300").daily_bars("2026-08-04", "2026-08-05")
     assert len(bars) == 2
     assert bars[-1].date == "2026-08-05"
     assert bars[-1].close == pytest.approx(4.15)

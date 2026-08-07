@@ -7,6 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
+import pandas as pd
 import requests
 
 from app.config import HTTP_HEADERS, REQUEST_TIMEOUT
@@ -121,10 +122,10 @@ def fetch_ticks(code: str) -> list[tuple[str, float, int]]:
         return snap
 
 
-def hk_quote_raw(code: str) -> list[str] | None:
-    """港股实时行情原始字段（腾讯 qt.gtimg.cn，~分隔）。失败返回 None。"""
+def tencent_quote_raw(symbol: str) -> list[str] | None:
+    """腾讯实时行情原始字段（qt.gtimg.cn，~分隔）。symbol 为腾讯行情代码（sh000300/sz399001/hkHSI/…）。失败返回 None。"""
     resp = requests.get(
-        f"https://qt.gtimg.cn/q=hk{code}",
+        f"https://qt.gtimg.cn/q={symbol}",
         headers=HTTP_HEADERS,
         timeout=REQUEST_TIMEOUT,
     )
@@ -133,3 +134,47 @@ def hk_quote_raw(code: str) -> list[str] | None:
     if "=" not in text:
         return None
     return text.split("=", 1)[1].strip('";').split("~")
+
+
+def hk_quote_raw(code: str) -> list[str] | None:
+    """港股实时行情原始字段（腾讯 qt.gtimg.cn，~分隔）。失败返回 None。"""
+    return tencent_quote_raw(f"hk{code}")
+
+
+def index_min_kline(symbol: str, count: int = 320) -> list[list]:
+    """指数分钟K线（腾讯 ifzq mkline，m1 分钟粒度）。symbol 为腾讯行情代码（sh000300/hkHSI/…）。
+
+    指数无逐笔成交、东财分钟级资金流反爬封死 → 分时只能拿量价，腾讯 mkline 是稳定源。
+    返回原始行列表，每行 [时间戳'YYYYMMDDHHMM', 开, 收, 高, 低, 量(手), {}, 涨跌幅]，
+    跨最近 count 个交易分钟（含前一日尾盘）。空返回 []。
+    """
+    resp = requests.get(
+        "https://ifzq.gtimg.cn/appstock/app/kline/mkline",
+        params={"param": f"{symbol},m1,,{count}"},
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = (resp.json().get("data") or {}).get(symbol) or {}
+    return data.get("m1") or []
+
+
+def index_daily(symbol: str, start: str = "", end: str = "") -> pd.DataFrame | None:
+    """指数日K（腾讯 fqkline，qfq）。支持日期范围增量：start/end 为空拉全量（约 400 根）。
+
+    symbol 为腾讯行情代码（如 sh000300）。返回 DataFrame（date/open/close/high/low/volume），
+    与 normalize_bars 英文列兼容；失败/空返回 None。
+    """
+    param = f"{symbol},day,{start},{end},400,qfq"
+    resp = requests.get(
+        "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
+        params={"param": param},
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = (resp.json().get("data") or {}).get(symbol) or {}
+    rows = data.get("qfqday") or data.get("day") or []
+    if not rows:
+        return None
+    return pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume"])

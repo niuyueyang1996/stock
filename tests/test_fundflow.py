@@ -7,6 +7,7 @@ from app.data.fundflow import (
     aggregate_ticks,
     classify_tick,
     compute_quantiles,
+    intraday_window_series,
     resample_points,
     ticks_to_day,
 )
@@ -131,6 +132,31 @@ def test_resample_points():
     assert len(resample_points(pts, 1)) == len(pts)
 
 
+# ---------- 分钟窗口序列（含买卖盘） ----------
+
+def test_intraday_window_series_buysell():
+    """intraday_window_series 按窗口重聚合五档 + buy/sell（与天窗口 buy_amount/sell_amount 同义）。"""
+    rows = [
+        {"ts": "09:31", "super_large_net": 1000.0, "large_net": 200.0, "medium_net": -100.0,
+         "small_net": -50.0, "xs_net": 20.0, "buy_amount": 500.0, "sell_amount": 700.0},
+        {"ts": "09:44", "super_large_net": 500.0, "large_net": 100.0, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 300.0, "sell_amount": 400.0},
+        {"ts": "09:50", "super_large_net": 0.0, "large_net": 0.0, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 200.0, "sell_amount": 100.0},
+    ]
+    # 09:31/09:44 → 09:30 窗口（00-14 分钟）；09:50 → 09:45 窗口（45-59）
+    out = intraday_window_series(rows, 15)
+    assert [p["ts"] for p in out] == ["09:30", "09:45"]
+    p0, p1 = out[0], out[1]
+    assert p0["super"] == 1500.0 and p0["main"] == 1800.0 and p0["cum"] == 1800.0
+    assert p0["buy"] == 800.0 and p0["sell"] == 1100.0      # 同窗口买卖盘求和
+    assert p1["buy"] == 200.0 and p1["sell"] == 100.0
+    # 缺 buy_amount/sell_amount 的旧数据兜底为 0，不报错
+    out2 = intraday_window_series([{"ts": "09:31", "super_large_net": 1.0, "large_net": 1.0,
+                                    "medium_net": 0.0, "small_net": 0.0, "xs_net": 0.0}], 15)
+    assert out2[0]["buy"] == 0.0 and out2[0]["sell"] == 0.0
+
+
 # ---------- 日级汇总 ----------
 
 def test_ticks_to_day():
@@ -160,6 +186,10 @@ def test_ticks_to_day():
     assert day.main_net == 4880          # 主力 = 特大 + 大单 = 20000-15120
     assert day.netamount == 7990         # -10+240+2880-15120+20000
     assert day.main_net_pct == round(4880 / 40230 * 100, 2)
+    # 全天买盘/卖盘成交金额：buy = Σ sign>0 金额，sell = Σ sign<0 金额；buy-sell == netamount
+    assert day.buy_amount == 24110       # 10+20+80+160+1280+2560+20000
+    assert day.sell_amount == 16120      # 40+320+640+5120+10000
+    assert round(day.buy_amount - day.sell_amount, 2) == day.netamount
     assert ticks_to_day([], "2026-08-06") is None
 
 
@@ -179,6 +209,10 @@ def test_sync_fundflow_persists():
     rows = get_fundflow_min("600036", "2026-08-06")
     assert rows and rows[0]["ts"].startswith("09:")
     assert "xs_net" in rows[0] and "buy_amount" in rows[0] and "sell_amount" in rows[0]
+    # 日级 buy/sell 已落库，且等于全天分钟点求和（净流入口径一致）
+    assert day["buy_amount"] is not None and day["sell_amount"] is not None
+    assert round(sum(float(p["buy_amount"]) for p in rows), 2) == round(day["buy_amount"], 2)
+    assert round(sum(float(p["sell_amount"]) for p in rows), 2) == round(day["sell_amount"], 2)
 
 
 def test_sync_fundflow_skips_hk_and_weekend():
@@ -222,6 +256,14 @@ def test_stock_fundflow_api(client):
     p0 = data["fundflow_15m"][0]
     assert p0["xs_net"] == 2 and p0["buy_amount"] == 10 and p0["sell_amount"] == 6
     assert "main_net" not in p0     # 前端不再下主力
+
+    # flow_hist 已从只发 netamount 补全为五档 + 买卖盘（供多日堆叠柱/买卖盘图）
+    assert data["fundflow_history"]
+    fh0 = data["fundflow_history"][0]
+    assert fh0["trade_date"] == today
+    assert fh0["netamount"] == 1 and fh0["large_net"] == 1
+    for k in ("super_large_net", "medium_net", "small_net", "xs_net", "buy_amount", "sell_amount"):
+        assert k in fh0
 
     # window=15：后端始终返回 1 分钟基础粒度（前端本地重采样），只回显 window
     r2 = client.get(f"/api/stocks/600000?window=15&partial=1")
@@ -274,8 +316,9 @@ def test_portfolio_fundflow_aggregates(client):
     r = client.get("/api/portfolio/fundflow")
     assert r.status_code == 200
     d = r.json()["data"]
-    # ETF 不计入：total/covered 只算 A 股（510300 排除）
-    assert d["total"] == 2 and d["covered"] == 2
+    # ETF 参与穿透（participates_fundflow=True）：total=3 含 510300；
+    # 但 510300 无当日分时数据 → covered 只算有数据的 2 个
+    assert d["total"] == 3 and d["covered"] == 2
     # 09:31 求和：buy 10+8=18 / sell 6+0=6 / small_net 5+0=5
     p31 = next(p for p in d["fundflow_15m"] if p["ts"] == "09:31")
     assert p31["buy_amount"] == 18 and p31["sell_amount"] == 6 and p31["small_net"] == 5
@@ -283,6 +326,13 @@ def test_portfolio_fundflow_aggregates(client):
     # 日级求和：large_net = 1+1 = 2, netamount = 1+2 = 3
     assert d["fundflow_latest"]["large_net"] == 2
     assert d["fundflow_latest"]["netamount"] == 3
+    # fundflow_history 补全五档 + 买卖盘（供多日堆叠柱/买卖盘图）
+    assert d["fundflow_history"]
+    fh = d["fundflow_history"][0]
+    assert fh["trade_date"] == today
+    assert fh["netamount"] == 3 and fh["large_net"] == 2
+    for k in ("super_large_net", "medium_net", "small_net", "xs_net", "buy_amount", "sell_amount"):
+        assert k in fh
 
     # 单标签过滤：只聚合该标签
     r2 = client.get("/api/portfolio/fundflow?tags=银行")
@@ -291,3 +341,33 @@ def test_portfolio_fundflow_aggregates(client):
     assert len(d2["fundflow_15m"]) == 1
     assert d2["fundflow_15m"][0]["buy_amount"] == 10
     assert d2["fundflow_latest"]["netamount"] == 1
+
+
+def test_backfill_daily_buysell():
+    """历史天（日级 buy/sell 为空）从分时分钟点按日聚合回填，且幂等。"""
+    from app.data.cache import backfill_daily_buysell, get_daily_fundflow, upsert_fundflow_min
+    from app.models.db import get_conn
+
+    today = date.today().isoformat()
+    upsert_fundflow_min("600000", today, [
+        FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
+                      medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6),
+        FundflowPoint(ts="09:36", main_net=8, super_large_net=0, large_net=8,
+                      medium_net=0, small_net=0, xs_net=1, buy_amount=8, sell_amount=0),
+    ])
+    # 模拟历史天：日级行已存在但 buy/sell 为空
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO daily_fundflow_cache(code, trade_date, netamount, main_net,
+                 super_large_net, large_net, medium_net, small_net, main_net_pct, xs_net,
+                 p15, p40, p75, p95)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ("600000", today, 12, 13, 0, 13, 0, 5, 100, 3, 1, 2, 3, 4),
+        )
+    n = backfill_daily_buysell()
+    assert n == 1
+    row = get_daily_fundflow("600000", today)
+    assert row["buy_amount"] == 18      # 10+8
+    assert row["sell_amount"] == 6
+    # 幂等：再跑不重复处理
+    assert backfill_daily_buysell() == 0

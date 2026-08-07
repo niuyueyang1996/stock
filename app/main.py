@@ -74,6 +74,27 @@ def create_app() -> FastAPI:
                 logger.warning("[预热] 市场列表预热失败（不影响服务，可稍后全量刷新重试）")
             complete("全市场列表")
 
+            try:
+                from app.services.indices import auto_map_holdings_etfs, refresh_all_indices
+
+                mark("预热指数")
+                r = refresh_all_indices()
+                auto_map_holdings_etfs()
+                logger.info("[预热] 指数预热完成：%d 个成功，失败 %d 个（%s），ETF 自动映射已跑",
+                            r.get("ok", 0), len(r.get("fail", [])), r.get("fail", []))
+            except Exception:  # noqa: BLE001 指数预热失败不影响服务
+                logger.warning("[预热] 指数预热失败（不影响服务，可手动刷新）")
+            complete("指数")
+
+            try:
+                from app.services.ai_scoring import catchup_pending_daily
+
+                mark("补打今日 AI 评分")
+                catchup_pending_daily()   # 已收盘 + 有交易 + 无报告 → 后台补打一次（内部有守卫）
+            except Exception:  # noqa: BLE001 补打失败不影响服务
+                logger.warning("[预热] 补打今日 AI 评分失败（不影响服务，可手动重打）")
+            complete("今日 AI 评分")
+
             finish()
 
         threading.Thread(target=_startup_tasks, daemon=True).start()
@@ -111,9 +132,9 @@ def create_app() -> FastAPI:
     )
 
     # API 路由
-    from app.api import ai, ai_scoring, stocks, system, trades, portfolio, holdings
+    from app.api import ai, ai_scoring, index, stocks, system, trades, portfolio, holdings
 
-    for mod in (system, holdings, trades, stocks, portfolio, ai, ai_scoring):
+    for mod in (system, holdings, trades, stocks, portfolio, index, ai, ai_scoring):
         app.include_router(mod.router, prefix="/api")
 
     # 全局异常兜底：未捕获异常 → HTTP 500 + 明确原因（前端 api.js 读 detail 展示），并打印完整堆栈

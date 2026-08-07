@@ -27,6 +27,19 @@ class ReasoningBody(BaseModel):
     effort: str
 
 
+class ReportBody(BaseModel):
+    system_prompt: str | None = None   # 覆盖默认诊股指令（前端弹窗可编辑后透传）
+
+
+class FundflowAnalysisBody(BaseModel):
+    code: str = ""          # 个股模式必填（fundflow-batch 用 tags/codes，忽略 code）
+    window: int | str = "15m"   # 统一时间窗：'1m'/'5m'/'15m'/'30m'/'1d'/'7d'/'30d'（兼容 int 旧值）
+    tags: str | None = None     # 持仓组合：逗号分隔标签筛选（缺省=全部持仓）
+    codes: str | None = None    # 指数组合：逗号分隔标的代码（指数页批量分析用）
+    weights: str | None = None  # codes 模式对应权重（逗号分隔，缺省=等权）
+    system_prompt: str | None = None   # 覆盖默认指令（前端弹窗可编辑后透传）
+
+
 @router.get("/ai/models")
 def list_models():
     """模型配置列表 + 当前激活。"""
@@ -116,11 +129,84 @@ def get_ai_report(code: str):
 
 
 @router.post("/stocks/{code}/ai-report")
-def analyze_ai(code: str):
-    """触发诊股：用激活模型分析该股并落库。无激活模型或 AI 调用失败返回 400。"""
+def analyze_ai(code: str, body: ReportBody | None = None):
+    """触发诊股：用激活模型分析该股并落库。无激活模型或 AI 调用失败返回 400。
+    body.system_prompt 覆盖默认诊股指令（前端弹窗可编辑）。"""
     try:
-        result = ai_svc.analyze_stock(code)
+        result = ai_svc.analyze_stock(code, body.system_prompt if body else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI诊股] %s 完成", code)
     return {"ok": True, "data": result}
+
+
+@router.post("/ai/fundflow-analysis")
+def fundflow_analysis(body: FundflowAnalysisBody):
+    """个股 AI 资金流实时分析（按选定窗口；无 HTML，简明结论）。
+    无激活模型/选定窗口无资金流数据 → 400。"""
+    try:
+        result = ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    logger.info("[AI资金流] %s %s分析完成", body.code, body.window)
+    return {"ok": True, "data": result}
+
+
+@router.get("/ai/prompts")
+def default_prompts():
+    """各 AI 分析入口默认 system prompt（前端弹窗预览/编辑，单一来源）。纯常量零网络。"""
+    return {"ok": True, "data": ai_svc.get_default_prompts()}
+
+
+@router.post("/ai/fundflow-batch")
+def fundflow_batch(body: FundflowAnalysisBody):
+    """批量分析资金面：持仓组合（tags，缺省=全部持仓）或指数组合（codes，逗号分隔指数代码）。
+    一次发给 AI（省 token），逐只落库 source='batch'；组合级相关性（coherence）落库 ai_fundflow_coherence_reports。
+    仅支持 15m 及以上（1m/5m 拒绝）；无激活模型/组合无资金流数据标的 → 400。
+    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
+    codes = None
+    weights = None
+    if body.codes:
+        codes = [c.strip() for c in body.codes.split(",") if c.strip()] or None
+    if body.weights:
+        weights = [float(w.strip()) for w in body.weights.split(",") if w.strip()]
+    tags = None
+    if body.tags:
+        tags = [t.strip() for t in body.tags.split(",") if t.strip()] or None
+    if codes and tags:
+        raise HTTPException(400, "codes（指数组合）与 tags（持仓组合）只能二选一")
+    try:
+        result = ai_svc.analyze_batch_fundflow(tags, body.window, codes=codes, weights=weights,
+                                               system_prompt=body.system_prompt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    logger.info("[AI资金流] 批量分析完成 %s 只", result.get("stocks_count"))
+    return {"ok": True, "data": result}
+
+
+@router.get("/ai/fundflow-report/{code}")
+def fundflow_report(code: str, window: str = ""):
+    """读取该股最近一次落库的资金流 AI 结果（batch/single 跨来源）。
+
+    window 指定时仅该时间窗内精确匹配（无则 null）；缺省取跨窗最近一条。
+    """
+    return {"ok": True, "data": ai_svc.get_stock_fundflow_report(code, window or None)}
+
+
+@router.get("/ai/fundflow-reports")
+def fundflow_reports(codes: str = ""):
+    """按代码列表批量读取最近落库结果，返回 {code:{...}} map（列表「资金面」列一次拉取）。"""
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    return {"ok": True, "data": ai_svc.list_fundflow_reports(code_list)}
+
+
+@router.get("/ai/fundflow-coherence")
+def fundflow_coherence(scope: str = "indices", scope_key: str = "", window: str = ""):
+    """读取最近一次组合级资金相关性报告（批量分析落库，F5 后批量面板顶部「组合相关性」块重建用）。
+
+    scope='indices'|'portfolio'；scope_key=逗号 codes 或逗号 tags 或 '全部'；window 精确匹配，缺省取最近。
+    """
+    return {
+        "ok": True,
+        "data": ai_svc.get_coherence_report(scope, scope_key, window or None),
+    }

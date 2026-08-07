@@ -10,7 +10,7 @@
 import io
 from datetime import datetime
 
-from app.data.base import auto_tag, is_etf_code, is_hk_code
+from app.instruments import get_instrument
 from app.models.db import get_conn
 
 # 交易必须字段
@@ -101,15 +101,19 @@ def rebuild(code: str, conn) -> dict:
     return holding
 
 
+def _market_of(inst) -> str:
+    """标的交易所代码（stocks.market）：腾讯/新浪 symbol 前缀 → hk/sh/sz/bj。"""
+    sym = inst.symbol()
+    return sym[:2] if sym and sym[:2] in ("hk", "sh", "sz", "bj") else "sh"
+
+
 def _ensure_stock(conn, code: str, name: str | None) -> None:
     if name:
-        mkt = "hk" if is_hk_code(code) else ("sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz")
-        tag = auto_tag(code, name)
-        currency = "HKD" if is_hk_code(code) else "CNY"
+        inst = get_instrument(code)
         conn.execute(
             """INSERT INTO stocks(code, name, market, tag, currency) VALUES(?,?,?,?,?)
                ON CONFLICT(code) DO UPDATE SET name=excluded.name, currency=excluded.currency""",
-            (code, name, mkt, tag, currency),
+            (code, name, _market_of(inst), inst.tag, inst.currency),
         )
 
 
@@ -121,7 +125,7 @@ def parse_holdings_excel(data: bytes) -> tuple[list[dict], list[dict]]:
     """
     from openpyxl import load_workbook
 
-    from app.data.base import to_symbol
+    from app.instruments import get_instrument
 
     wb = load_workbook(io.BytesIO(data), data_only=True)
     ws = wb["持仓数据"] if "持仓数据" in wb.sheetnames else wb.worksheets[0]
@@ -154,7 +158,7 @@ def parse_holdings_excel(data: bytes) -> tuple[list[dict], list[dict]]:
         if not code or qty <= 0:
             continue
         try:
-            to_symbol(code)
+            get_instrument(code).symbol()
         except ValueError:
             skipped.append({"code": code, "name": name, "reason": "非A股/代码格式不支持"})
             continue
@@ -204,6 +208,8 @@ def _compute_cny(currency: str, amount: float, trade_date: str) -> tuple[float |
 
 def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=None, name=None) -> dict:
     """录入交易并重放持仓。返回 {trade_id, holding}。"""
+    if not get_instrument(code).can_trade:
+        raise ValueError("指数不可交易")
     for f in _REQUIRED:
         if locals().get(f) is None:
             raise ValueError(f"缺少必填字段: {f}")
@@ -214,7 +220,7 @@ def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=Non
     trade_time = trade_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     amount = round(price * quantity, 4)
     # 汇率计算放在事务外：内部需独立连接写 fx_rate_cache，事务内写会锁库
-    currency = "HKD" if is_hk_code(code) else "CNY"
+    currency = get_instrument(code).currency
     fx_rate, amount_cny = _compute_cny(currency, amount, trade_time[:10])
     with get_conn() as conn:
         _ensure_stock(conn, code, name)
@@ -299,8 +305,11 @@ def update_trade(trade_id: int, **fields) -> dict:
         if not row:
             raise ValueError(f"交易不存在: {trade_id}")
 
+        new_code = fields.get("code") or row["code"]
+        if new_code != row["code"] and not get_instrument(new_code).can_trade:
+            raise ValueError("指数不可交易")
         new = {
-            "code": fields.get("code") or row["code"],
+            "code": new_code,
             "side": fields.get("side") or row["side"],
             "price": fields.get("price") if fields.get("price") is not None else row["price"],
             "quantity": fields.get("quantity") if fields.get("quantity") is not None else row["quantity"],
@@ -468,9 +477,9 @@ def get_holdings(active_only: bool = True) -> list[dict]:
         )
     for r in rows:
         r["currency"] = r.get("currency") or "CNY"
-        r["tag"] = r.get("tag") or auto_tag(r["code"], r.get("name"))
+        r["tag"] = r.get("tag") or get_instrument(r["code"]).tag
         # 港股不再复用 ETF 分类：is_etf 仅按场内基金代码/ETF 标签判定
-        r["is_etf"] = is_etf_code(r["code"]) or r["tag"] == "ETF"
+        r["is_etf"] = get_instrument(r["code"]).is_etf or r["tag"] == "ETF"
         # 人民币成本口径：港股缺汇率时置 None（missing_fx）
         if r["avg_cost_cny"] is None and r["currency"] == "CNY":
             r["avg_cost_cny"] = r["avg_cost"]
@@ -485,7 +494,7 @@ def set_tag(code: str, tag: str, name: str | None = None) -> str:
     tag = (tag or "").strip()
     if not tag:
         raise ValueError("标签不能为空")
-    mkt = "hk" if is_hk_code(code) else ("sh" if code.startswith(("60", "68", "90", "50", "51", "56", "58")) else "sz")
+    mkt = _market_of(get_instrument(code))
     with get_conn() as c:
         c.execute(
             """INSERT INTO stocks(code, name, market, tag) VALUES(?,?,?,?)

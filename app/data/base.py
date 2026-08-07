@@ -1,4 +1,11 @@
-"""数据源抽象：统一数据模型 + DataSource 接口 + SourceManager。"""
+"""数据模型 + 判型基础函数（类型层 instruments 的对内基础）。
+
+对外数据入口已迁移到 app/instruments（get_instrument），本文件保留：
+- 统一数据模型（Quote/Bar/ValuationPoint/Financials/FundflowDay）
+- DataSource 能力接口（作为类型层能力对照，不再有 SourceManager 降级链）
+- 判型基础函数（is_hk_code/is_etf_code/is_index_code/to_symbol/auto_tag/index_*）
+  供 instruments.registry/transform 内部使用
+"""
 from dataclasses import dataclass
 
 
@@ -72,6 +79,8 @@ class FundflowDay:
     small_net: float
     main_net_pct: float        # 主力净流入占比 %
     xs_net: float = 0.0        # 特小单净流入
+    buy_amount: float = 0.0    # 全天买盘成交金额
+    sell_amount: float = 0.0   # 全天卖盘成交金额
 
 
 class DataSource:
@@ -132,6 +141,87 @@ def is_hk_code(code: str) -> bool:
     return len(code) == 5 and code.isdigit()
 
 
+# ---------- 指数注册表 ----------
+# 内存索引：code → {name, symbol, legu_code, pe_source, pb_source}。
+# load_index_registry() 从 index_defs 表载入（排除 stocks 表已登记的同 code 个股冲突，
+# 如平安银行 000001 vs 上证指数 000001）。指数代码与 A 股前缀重叠（000300 会被 to_symbol
+# 误判 sz000300）——指数一律经 index_symbol 取腾讯代码，完全绕过 to_symbol。
+# _INDEX_REGISTRY_LOADED 标记「已尝试从库加载」：首次判型时若未加载则自动加载（懒加载），
+# 避免绕过 init_db 的入口（脚本/后台线程/验证）把指数代码误判为 A 股而污染真实库。
+_INDEX_REGISTRY: dict[str, dict] = {}
+_STOCK_CONFLICTS: set[str] = set()
+_INDEX_REGISTRY_LOADED = False
+
+
+def load_index_registry() -> dict[str, dict]:
+    """从 index_defs 表读入内存注册表；stocks 表已登记的同 code 个股视为个股（排除）。
+
+    建库/换库（测试临时库）后需重调，保证注册表与库一致。
+    """
+    global _INDEX_REGISTRY, _STOCK_CONFLICTS, _INDEX_REGISTRY_LOADED
+    registry: dict[str, dict] = {}
+    conflicts: set[str] = set()
+    try:
+        from app.models.db import get_conn
+
+        with get_conn() as c:
+            rows = c.execute(
+                "SELECT code,name,symbol,legu_code,pe_source,pb_source FROM index_defs"
+            ).fetchall()
+            stock_codes = {r["code"] for r in c.execute("SELECT code FROM stocks").fetchall()}
+        for r in rows:
+            registry[r["code"]] = {
+                "name": r["name"],
+                "symbol": r["symbol"],
+                "legu_code": r["legu_code"],
+                "pe_source": r["pe_source"] or "none",
+                "pb_source": r["pb_source"] or "none",
+            }
+        conflicts = {c for c in registry if c in stock_codes}
+    except Exception:  # noqa: BLE001 表未建/无库时注册表为空，指数不可用
+        registry = {}
+        conflicts = set()
+    _INDEX_REGISTRY = registry
+    _STOCK_CONFLICTS = conflicts
+    _INDEX_REGISTRY_LOADED = True
+    return registry
+
+
+def ensure_index_registry() -> None:
+    """确保注册表已加载（未加载则从库载入一次）。判型入口应显式调用，防指数误判 A 股。"""
+    if not _INDEX_REGISTRY_LOADED:
+        load_index_registry()
+
+
+def is_index_code(code: str) -> bool:
+    """指数代码判定：在注册表且未被 stocks 表登记为个股。"""
+    ensure_index_registry()
+    return code in _INDEX_REGISTRY and code not in _STOCK_CONFLICTS
+
+
+def index_symbol(code: str) -> str | None:
+    """指数腾讯行情代码（sh000300/sz399001/hkHSI）；非指数返回 None。"""
+    ensure_index_registry()
+    d = _INDEX_REGISTRY.get(code)
+    return d["symbol"] if d else None
+
+
+def index_legu_code(code: str) -> str | None:
+    """指数乐咕估值代码（000300.SH/000922.CSI/HSI）；非指数/未登记返回 None。"""
+    ensure_index_registry()
+    d = _INDEX_REGISTRY.get(code)
+    return d["legu_code"] if d else None
+
+
+def index_valuation_source(code: str, indicator: str) -> str:
+    """指数估值源：'legu'/'none'。indicator='pe'/'pb'；非指数返回 'none'。"""
+    ensure_index_registry()
+    d = _INDEX_REGISTRY.get(code)
+    if not d:
+        return "none"
+    return d["pb_source"] if indicator == "pb" else d["pe_source"]
+
+
 def auto_tag(code: str, name: str | None = None) -> str:
     """默认标签：港股标 港股，ETF/基金标 ETF，其余标 个股。"""
     if is_hk_code(code):
@@ -141,62 +231,3 @@ def auto_tag(code: str, name: str | None = None) -> str:
     return "个股"
 
 
-class SourceManager:
-    """组合数据源并按能力遍历降级；记录各源健康状态供 /api/status。"""
-
-    def __init__(self, sources: list[DataSource]):
-        self.sources = sources
-        self.status: dict[str, bool] = {}
-
-    def _call(self, method: str, *args, **kwargs):
-        errors = []
-        for s in self.sources:
-            fn = getattr(s, method, None)
-            if fn is None:
-                continue
-            try:
-                r = fn(*args, **kwargs)
-                self.status[s.name()] = True
-                if r:
-                    return r
-            except Exception as e:  # noqa: BLE001
-                self.status[s.name()] = False
-                errors.append(f"{s.name()}: {type(e).__name__}")
-        raise RuntimeError(f"{method} 所有数据源失败: {'; '.join(errors)}")
-
-    def quote(self, code: str) -> Quote:
-        return self._call("quote", code)
-
-    def daily_bars(self, code: str, start: str, end: str) -> list[Bar]:
-        return self._call("daily_bars", code, start, end)
-
-    def valuation_history(self, code: str, indicator: str, period: str) -> list[ValuationPoint]:
-        return self._call("valuation_history", code, indicator, period)
-
-    def financials(self, code: str) -> Financials:
-        return self._call("financials", code)
-
-    def daily_fundflow(self, code: str) -> list[FundflowDay]:
-        return self._call("daily_fundflow", code)
-
-    def fundflow_intraday(self, code: str) -> list:
-        return self._call("fundflow_intraday", code)
-
-    def fundflow_bands(self, code: str) -> dict | None:
-        return self._call("fundflow_bands", code)
-
-    def dividend_per_share(self, code: str) -> float | None:
-        return self._call("dividend_per_share", code)
-
-
-def build_manager() -> SourceManager:
-    """按 config.SOURCE 构建数据源管理器（三层门面：providers 组合 raw + normalizer）。"""
-    from app.config import SOURCE
-
-    if SOURCE == "mock":
-        from app.data.providers import MockProvider
-
-        return SourceManager([MockProvider()])
-    from app.data.providers import BaiduProvider, EmProvider, SinaProvider
-
-    return SourceManager([EmProvider(), SinaProvider(), BaiduProvider()])

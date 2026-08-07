@@ -156,7 +156,7 @@ def _holdings_tuples(tags: list[str] | None = None) -> list[tuple]:
     标签解析与 compute_portfolio/get_holdings 同口径（NULL 标签按 auto_tag 兜底），
     保证 profile_hash 与组合筛选视角一致。
     """
-    from app.data.base import auto_tag
+    from app.instruments import get_instrument
 
     with get_conn() as c:
         rows = c.execute(
@@ -167,7 +167,7 @@ def _holdings_tuples(tags: list[str] | None = None) -> list[tuple]:
         ).fetchall()
     if tags is not None:
         tag_set = set(tags)
-        rows = [r for r in rows if ((r["tag"] or auto_tag(r["code"], r["name"]) or "") in tag_set)]
+        rows = [r for r in rows if ((r["tag"] or get_instrument(r["code"]).tag or "") in tag_set)]
     out = []
     for r in rows:
         out.append((str(r["code"]), round(float(r["quantity"] or 0.0), 6), str(r["currency"])))
@@ -191,20 +191,56 @@ def portfolio_profile_hash(tags: list[str] | None = None) -> str:
     return hashlib.md5(seed.encode("utf-8")).hexdigest()[:16]
 
 
+def _portfolio_fundflow_summary(tags: list[str] | None) -> dict:
+    """组合资金流穿透摘要（当日五档汇总 + 近30日趋势 + 当日分时 15 分钟序列），供 AI 使用。缺失返回空 dict。"""
+    try:
+        from app.analysis.portfolio import portfolio_fundflow
+        from app.data.fundflow import intraday_window_series
+
+        ff = portfolio_fundflow(tags) or {}
+        hist = ff.get("fundflow_history") or []
+        nets = [float(h["netamount"]) for h in hist if h.get("netamount") is not None]
+        out = {
+            "latest": ff.get("fundflow_latest") or {},
+            "covered": ff.get("covered", 0),
+            "total": ff.get("total", 0),
+            "trade_date": ff.get("trade_date"),
+        }
+        if nets:
+            out["history_30d_net"] = round(sum(nets), 0)
+            out["history_5d_net"] = round(sum(nets[-5:]), 0)
+            out["history_days"] = len(nets)
+            # 完整逐日五档 + 买卖盘（升序，跨天结构/趋势判断用）
+            out["daily"] = [
+                {
+                    "date": h["trade_date"],
+                    "netamount": h["netamount"],
+                    "main_net": h.get("main_net"),
+                    "super_large_net": h.get("super_large_net"),
+                    "large_net": h.get("large_net"),
+                    "medium_net": h.get("medium_net"),
+                    "small_net": h.get("small_net"),
+                    "xs_net": h.get("xs_net"),
+                    "buy_amount": h.get("buy_amount"),
+                    "sell_amount": h.get("sell_amount"),
+                }
+                for h in hist
+            ]
+        base = ff.get("fundflow_15m") or []
+        if base:
+            series = intraday_window_series(base, 15)
+            if series:
+                out["intraday_15m"] = series
+        return out
+    except Exception:  # noqa: BLE001 资金流摘要缺失不阻断打分
+        return {}
+
+
 def build_portfolio_context(tags: list[str] | None = None) -> dict:
-    """组合汇总好的所有信息（compute_portfolio 全量聚合）+ 各标签「评分指引」。"""
+    """组合汇总好的所有信息（compute_portfolio 全量聚合，单股/标签全字段）+ 资金流穿透 + 各标签「评分指引」。"""
     from app.analysis.portfolio import compute_portfolio
 
     p = compute_portfolio(tags=tags)
-    _KEEP_STOCK = (
-        "code", "name", "tag", "is_etf", "currency", "weight", "value_cny", "pnl_pct",
-        "day_pnl", "pe", "pb", "pe_pct", "pb_pct", "dv", "roe", "profit_yoy",
-        "missing_fx", "missing",
-    )
-    _KEEP_TAG = (
-        "tag", "stocks_count", "total_value", "weight", "pnl_pct", "pe", "pb",
-        "pe_pct", "pb_pct", "dv", "roe", "profit_yoy",
-    )
     prefs = confirmed_prefs()
     if tags is not None:
         tag_set = set(tags)
@@ -212,9 +248,10 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
     return {
         "portfolio": p["portfolio"],
         "weights": p["weights"],
-        "stocks": [{k: s.get(k) for k in _KEEP_STOCK} for s in p["stocks"]],
+        "stocks": p["stocks"],
         "tag_weights": p["tag_weights"],
-        "tags": [{k: t.get(k) for k in _KEEP_TAG} for t in p.get("tags", [])],
+        "tags": p.get("tags", []),
+        "fundflow": _portfolio_fundflow_summary(tags),
         "all_tags": p["all_tags"],
         "selected_tags": sorted(tags) if tags else [],
         "tag_prefs": prefs,
@@ -222,15 +259,34 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
 
 
 _PORTFOLIO_SYSTEM = (
-    "你是资深个人投资组合分析师。系统提供当前组合的聚合数据（人民币口径）与各标签的「评分指引」。"
+    "你是资深个人投资组合分析师。系统提供当前组合的聚合数据（人民币口径）、单股与标签板块全量指标、"
+    "组合资金流穿透（fundflow），以及各标签的「评分指引」。"
     "请综合打分：优先依据提供的结构化数据；各持仓所属标签的「评分指引」是评分的核心准则，"
     "不同标签的持仓按各自指引分别衡量后形成整体判断。"
     "直接给出 0-100 总分与评级（A=优秀/B=良好/C=一般/D=较差），并给出总结、建议、风险、核心理由。"
-    "同时生成一份完整、独立、可读性强的 HTML 详细报告（字段 html），供用户新开页面查看。"
-    "已提供的持仓明细、标签板块、估值等原始数据用户在本应用已可查看，HTML 中**不要原样罗列这些数据表格**；"
-    "把篇幅全部用于**深入分析**：逐标签的深度解读、组合结构与集中度问题、指标背后的含义、"
-    "风险与机会、情景推演、具体操作建议及理由，多给有洞察力的判断而非数据复述。"
-    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "\n\n[数据使用规范]"
+    "\n1. 系统提供的所有结构化字段都必须纳入分析（组合聚合/单股估值/标签板块/资金流穿透/覆盖率），不得只挑少数指标——漏用数据视为不合格。"
+    "\n2. 字段带 *_source / *_confidence 后缀表示可靠度：user=你的输入、ttm=滚动口径、latest_report=最新财报、"
+    "zero_conservative=零增长保守假设；confidence 为 high/medium/low/invalid。来源为 user 的优先采信；"
+    "zero_conservative / low / invalid 的须保守解读并在报告注明。"
+    "\n3. *_static 后缀=按去年年报口径，无后缀/ttm=滚动口径；两者明显背离时分析差异原因，不得只报其一。"
+    "\n4. fundflow（组合资金流穿透：当日五档汇总、当日分时 15 分钟五档序列 intraday_15m（每窗口"
+    "super/large/medium/small/xs 与 main=主力/cum=累计）、近30日完整逐日五档/买卖盘序列 daily（升序，含 "
+    "netamount/main_net/各档净额/buy_amount/sell_amount）、累计速览 history_30d_net/history_5d_net、"
+    "covered/total）必须纳入分析：评估组合整体资金面（净流入/流出、各档主力态度、全天节奏与跨日趋势），"
+    "识别资金驱动的高权重板块。covered/total 表示有资金流数据的持仓占比，低于全部时按可用部分判断。"
+    "\n5. missing_fx=该股缺汇率、已从人民币汇总剔除；字段为 null 表示系统无此数据，不得臆造数值；"
+    "用领域知识补充时须标 [AI补充] 并注明时效。"
+    "\n\n同时生成一份完整、独立、可读性强的 HTML 详细报告（字段 html），供用户新开页面查看。"
+    "\n[HTML 深度分析强制规范]"
+    "\n1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。"
+    "\n2. 结构必须覆盖：核心结论 / 逐标签深度解读 / 结构集中度 / 指标含义与背离 / 资金流与波动率 / 风险与陷阱 / 情景推演 / 操作建议分级。"
+    "\n3. 每个判断必须带具体数字与上下文（如「组合综合 PE 15.2，处近1年约 30% 分位，但覆盖率仅 65% 需谨慎」）；"
+    "禁止「估值合理」「组合稳健」这类无数字断言。"
+    "\n4. 操作建议分级：加仓/持有/减仓/清仓四档，每档给出触发条件，不得含糊。"
+    "\n5. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的持仓明细/标签板块/估值数据表。"
+    "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
+    "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
     "简体中文；结构清晰、排版美观、层次分明。"
     "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
@@ -241,7 +297,7 @@ _PORTFOLIO_OUTPUT_SCHEMA = {
     "advice": ["建议数组（简体中文）"],
     "risks": ["风险数组（简体中文）"],
     "reasons": ["核心理由数组（简体中文）"],
-    "html": "完整独立 HTML 详细报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文，聚焦深入分析，不罗列原始数据）",
+    "html": "完整独立 HTML 详细报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
 }
 
 
@@ -266,10 +322,11 @@ def _tags_key(tags: list[str] | None = None) -> list[str]:
     return sorted(tags) if tags else []
 
 
-def score_portfolio(tags: list[str] | None = None) -> dict:
+def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = None) -> dict:
     """手动触发组合 AI 打分：AI 一次调用 → 规整 → 按画像哈希落库。
 
     **每个标签组合各自存一份**（tags_json 区分）：打个股不覆盖 个股+港股，也不覆盖 全部。
+    system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
     """
     model = ai.get_active_model()
     if not model:
@@ -279,7 +336,10 @@ def score_portfolio(tags: list[str] | None = None) -> dict:
         "组合聚合数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
         "请输出严格 JSON，结构如下：\n" + json.dumps(_PORTFOLIO_OUTPUT_SCHEMA, ensure_ascii=False)
     )
-    raw = ai.chat_json(model, _PORTFOLIO_SYSTEM, user)
+    system = _PORTFOLIO_SYSTEM
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    raw = ai.chat_json(model, system, user)
     report = _normalize_portfolio_report(raw)
     phash = portfolio_profile_hash(tags)
     tags_json = json.dumps(_tags_key(tags))
@@ -358,37 +418,160 @@ def _trade_rows(score_date: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _stock_factors(code: str) -> dict:
-    """该股当前估值/分位/涨跌因子（读缓存零网络；缺失留 None）。"""
-    from app.analysis.valuation import compute_live
-    from app.services.quote import get_quote
+def _fundflow_factor(code: str, as_of: str | None) -> dict:
+    """资金流因子：≤as_of 最近一条（当日）五档净流入 + 近30日完整逐日五档/买卖盘序列。缺失留 None。"""
+    from datetime import date, timedelta
 
-    f = {}
+    from app.data.cache import get_daily_fundflow, get_daily_fundflows, get_fundflow_asof
+
+    out = {}
     try:
-        live = compute_live(code) or {}
-        for k in ("pe", "pb", "pe_pct", "pb_pct", "dv_ratio", "roe_ttm", "profit_yoy_ttm",
-                  "revenue_yoy_ttm", "fwd_pe", "fwd_pb", "total_mv"):
-            f[k] = live.get(k)
-    except Exception:  # noqa: BLE001 单股因子缺失不阻断整日打分
+        row = get_fundflow_asof(code, as_of) if as_of else get_daily_fundflow(code)
+        if row:
+            for k in ("netamount", "main_net", "main_net_pct", "super_large_net", "large_net",
+                      "medium_net", "small_net", "xs_net", "p15", "p40", "p75", "p95"):
+                if row[k] is not None:
+                    out[f"fundflow_{k}"] = row[k]
+            out["fundflow_date"] = row["trade_date"]
+    except Exception:  # noqa: BLE001 资金流缺失不阻断
         pass
     try:
-        q = get_quote(code) or {}
-        f["pct_chg"] = q.get("pct_chg")
+        end = as_of or date.today().isoformat()
+        start = (date.fromisoformat(end) - timedelta(days=45)).isoformat()
+        rows = get_daily_fundflows(code, start, end)
+        nets = [float(r["netamount"]) for r in rows if r["netamount"] is not None]
+        if nets:
+            out["fundflow_30d_net"] = round(sum(nets), 0)
+            out["fundflow_5d_net"] = round(sum(nets[-5:]), 0)
+            out["fundflow_days"] = len(nets)
+            # 完整逐日五档 + 买卖盘（升序，跨天结构/趋势判断用）
+            out["fundflow_daily"] = [
+                {
+                    "date": r["trade_date"],
+                    "netamount": r["netamount"],
+                    "main_net": r["main_net"],
+                    "super_large_net": r["super_large_net"],
+                    "large_net": r["large_net"],
+                    "medium_net": r["medium_net"],
+                    "small_net": r["small_net"],
+                    "xs_net": r["xs_net"],
+                    "buy_amount": r["buy_amount"],
+                    "sell_amount": r["sell_amount"],
+                }
+                for r in rows
+            ]
     except Exception:  # noqa: BLE001
         pass
+    # 当日分时 15 分钟主力净流入序列（观察全天资金节奏；历史日缺 15m 缓存时省略）
+    try:
+        from app.data.cache import get_fundflow_min
+        from app.data.fundflow import intraday_window_series
+
+        fdate = out.get("fundflow_date")
+        if fdate:
+            series = intraday_window_series(get_fundflow_min(code, fdate), 15)
+            if series:
+                out["fundflow_intraday_15m"] = series
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _stock_factors(code: str, as_of: str | None = None) -> dict:
+    """该股估值/分位/涨跌/资金流因子（读缓存零网络；缺失留 None）。
+
+    as_of 非空：取该交易日收盘价口径的 asof 快照——估值用当日 close 计算、分位序列按 ≤as_of 截断
+    （不用「未来」数据）、资金流取 ≤as_of 最近一条；当日无行情 → 回退当前值并标 asof_fallback=true。
+    as_of 为空：当前最新。
+    """
+    from app.analysis.valuation import compute_live, percentile_in_series
+    from app.data.cache import get_daily_price
+    from app.services.quote import get_quote
+
+    f = {"asof": as_of, "asof_fallback": False}
+    price, pct_chg = None, None
+    if as_of:
+        try:
+            row = get_daily_price(code, as_of)
+            if row and row["close"]:
+                price = float(row["close"])
+                pct_chg = float(row["pct_change"]) if row["pct_change"] is not None else None
+        except Exception:  # noqa: BLE001
+            pass
+    live = {}
+    try:
+        live = compute_live(code, price, as_of) or {}
+    except Exception:  # noqa: BLE001 单股因子缺失不阻断整日打分
+        pass
+    if as_of and price is None:
+        # 当日无行情缓存 → 回退当前最新值，并标注供 AI 保守解读
+        f["asof_fallback"] = True
+        try:
+            live = compute_live(code) or {}
+        except Exception:  # noqa: BLE001
+            live = {}
+    _LIVE_KEYS = (
+        "price", "total_shares", "total_mv", "ttm_net_profit", "ttm_revenue",
+        "pe", "pb", "pe_static", "pb_static", "ps_static", "ps_ttm", "ps_fwd",
+        "dv_ratio", "dv_static", "roe_ttm", "roe_static",
+        "profit_yoy_ttm", "profit_yoy_static", "revenue_yoy_ttm", "revenue_yoy_static",
+        "payout_ratio", "g", "expected_growth", "expected_payout",
+        "fwd_pe", "fwd_pb", "fwd_pb_confidence", "fwd_roe", "fwd_dv_ratio",
+        "fwd_profit_yoy", "fwd_revenue_yoy", "pe_pct", "pb_pct", "fwd_pe_pct", "fwd_pb_pct",
+    )
+    for k in _LIVE_KEYS:
+        f[k] = live.get(k)
+    # 1y 分位已在 compute_live 内；3y/5y 分位用序列截断补算（不依赖当日落库）
+    if live.get("pe") is not None:
+        for period in ("3y", "5y"):
+            try:
+                f[f"pe_pct_{period}"] = percentile_in_series(code, "pe", period, live["pe"], as_of)
+                f[f"pb_pct_{period}"] = percentile_in_series(code, "pb", period, live["pb"], as_of)
+            except Exception:  # noqa: BLE001
+                pass
+    if pct_chg is None:
+        try:
+            pct_chg = (get_quote(code) or {}).get("pct_chg")
+        except Exception:  # noqa: BLE001
+            pass
+    f["pct_chg"] = pct_chg
+    f.update(_fundflow_factor(code, as_of))
     return f
 
 
+def _holding_snapshot(code: str) -> dict | None:
+    """该股当前持仓位置（权重/成本/盈亏/今日盈亏/累计分红）；不在仓返回 None。"""
+    try:
+        from app.analysis.portfolio import compute_portfolio
+
+        p = compute_portfolio() or {}
+        st = next((s for s in p.get("stocks", []) if s["code"] == code), None)
+        if not st:
+            return None
+        return {
+            "in_portfolio": True,
+            "weight_pct": st.get("weight"),
+            "avg_cost": st.get("avg_cost"),
+            "value_cny": st.get("value_cny"),
+            "pnl_pct": st.get("pnl_pct"),
+            "day_pnl": st.get("day_pnl"),
+            "total_dividend": st.get("total_dividend"),
+            "tag": st.get("tag"),
+        }
+    except Exception:  # noqa: BLE001 持仓快照缺失不阻断
+        return None
+
+
 def build_daily_context(score_date: str) -> dict:
-    """当日每笔交易 + 每股因子 + 标签；tag_prefs 按当天涉及标签去重（各一份）。"""
-    from app.data.base import auto_tag
+    """当日每笔交易 + 每股 asof 因子 + 持仓位置 + 标签；tag_prefs 按当天涉及标签去重（各一份）。"""
+    from app.instruments import get_instrument
 
     rows = _trade_rows(score_date)
     prefs = confirmed_prefs()
     trades = []
     used_tags: set[str] = set()
     for r in rows:
-        tag = (r.get("tag") or "").strip() or auto_tag(r["code"], r.get("name") or "")
+        tag = (r.get("tag") or "").strip() or get_instrument(r["code"]).tag
         used_tags.add(tag)
         trades.append({
             "trade_id": r["id"],
@@ -402,7 +585,8 @@ def build_daily_context(score_date: str) -> dict:
             "amount_cny": r["amount_cny"],
             "fee": r["fee"] or 0.0,
             "trade_time": r["trade_time"],
-            "factors": _stock_factors(r["code"]),
+            "factors": _stock_factors(r["code"], as_of=score_date),
+            "holding": _holding_snapshot(r["code"]),
         })
     tag_prefs = {
         t: prefs.get(t) or "（该标签无已确认评分指引，请按一般投资纪律评判）"
@@ -412,15 +596,33 @@ def build_daily_context(score_date: str) -> dict:
 
 
 _DAILY_SYSTEM = (
-    "你是交易复盘分析师。系统提供某交易日的每笔买卖交易、该股估值因子，以及各标签的「评分指引」。"
+    "你是资深交易复盘分析师。系统提供某交易日的每笔买卖交易、该股当日 asof 因子与持仓位置、"
+    "当日/近30日资金流，以及各标签的「评分指引」。"
     "请按每笔交易所属标签的「评分指引」逐笔评分并给出评级，再综合当日多笔交易的节奏/集中度/方向"
     "给出当日总分与评级。评分准则：不同标签的交易按各自指引分别衡量。"
     "直接给出 0-100 总分与评级（A/B/C/D），每笔交易也给出分数、评级与一句话点评。"
-    "同时生成一份完整、独立、可读性强的 HTML 复盘报告（字段 html），供用户新开页面查看。"
-    "已提供的每笔交易明细（价格/数量/金额/估值因子）用户在本应用已可查看，HTML 中**不要原样罗列交易数据表**；"
-    "把篇幅全部用于**深入复盘**：逐笔交易质量背后的原因、买卖时机与价格判断、当日节奏与情绪、"
-    "与各标签偏好的吻合度、集中度与风险、改进点与后续策略，多给有洞察力的判断而非数据复述。"
-    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "\n\n[数据使用规范]"
+    "\n1. 系统提供的所有结构化字段都必须纳入分析（交易明细/估值/分位/资金流/持仓位置），不得只挑少数指标——漏用数据视为不合格。"
+    "\n2. 每股 factors 为该笔交易「当日」的 asof 快照（当日收盘价口径的估值/分位/资金流）——"
+    "不要用当前时点的数据评价历史交易；字段含 asof_fallback=true 表示当日数据缺失、已回退当前值，须保守解读。"
+    "\n3. holding 字段是该股在你组合中的当前位置（权重/成本/盈亏/今日盈亏/累计分红，不在仓为 null）——"
+    "评估每笔买卖对组合的意义（加仓集中度、摊薄成本、兑现盈亏）时必须结合。"
+    "\n4. 资金流字段为净流入（元，正=流入负=流出）；五档 super=超大单/large=大单/medium=中单/small=小单/xs=特小单，"
+    "main=主力（超大+大单）。fundflow_intraday_15m（当日 15 分钟五档序列，每窗口含各档净额与累计主力）"
+    "反映交易当日各档资金节奏，fundflow_daily（完整逐日五档/买卖盘升序序列）与累计速览 "
+    "fundflow_30d_net / 5d_net 反映资金中期趋势——用于判断交易当日/近期的资金环境。"
+    "\n5. 字段为 null 表示系统无此数据，不得臆造数值；用领域知识补充时须标 [AI补充] 并注明时效。"
+    "\n\n同时生成一份完整、独立、可读性强的 HTML 复盘报告（字段 html），供用户新开页面查看。"
+    "\n[HTML 深度分析强制规范]"
+    "\n1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。"
+    "\n2. 结构必须覆盖：核心结论 / 逐笔质量归因（为什么这笔好/差）/ 买卖时机与价格 / 当日节奏与情绪 / "
+    "与标签偏好吻合度 / 集中度与风险 / 改进与后续策略。"
+    "\n3. 每个判断必须带具体数字与上下文（如「该笔买入价 12.3，当日 PE 11 处于近1年约20%分位，"
+    "但 asof 数据缺失已回退当前值」）；禁止「价格合理」「买入时机好」这类无数字断言。"
+    "\n4. 操作建议分级：加仓/持有/减仓/清仓四档，每档给出触发条件，不得含糊。"
+    "\n5. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的交易数据表。"
+    "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
+    "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
     "简体中文；结构清晰、排版美观、层次分明。"
     "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
@@ -431,7 +633,7 @@ _DAILY_OUTPUT_SCHEMA = {
     "advice": ["建议数组（简体中文）"],
     "risks": ["风险数组（简体中文）"],
     "reasons": ["核心理由数组（简体中文）"],
-    "html": "完整独立 HTML 复盘报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文，聚焦深入分析，不罗列原始数据）",
+    "html": "完整独立 HTML 复盘报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
     "trades": [
         {"trade_id": "整数，对应输入交易", "score": "0-100 该笔得分", "rating": "A|B|C|D 该笔评级",
          "comment": "该笔一句话点评"}
@@ -483,8 +685,13 @@ def _normalize_daily_report(data: dict, trades: list[dict]) -> dict:
     }
 
 
-def score_daily(score_date: str) -> dict | None:
-    """当日 AI 打分：一次调用逐笔+汇总 → 落库。当日无 buy/sell 交易 → 失效并返回 None。"""
+def score_daily(score_date: str, system_prompt: str | None = None) -> dict | None:
+    """当日 AI 打分：一次调用逐笔+汇总 → 落库。当日无 buy/sell 交易 → 失效并返回 None。
+
+    收盘守卫：仅限制「今天」——盘中不允许对今日打分；历史日期随时可打。
+    system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    """
+    _guard_today(score_date)
     model = ai.get_active_model()
     if not model:
         raise ValueError(_NO_MODEL_MSG)
@@ -497,7 +704,10 @@ def score_daily(score_date: str) -> dict | None:
         "当日交易数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
         "请输出严格 JSON，结构如下：\n" + json.dumps(_DAILY_OUTPUT_SCHEMA, ensure_ascii=False)
     )
-    raw = ai.chat_json(model, _DAILY_SYSTEM, user)
+    system = _DAILY_SYSTEM
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    raw = ai.chat_json(model, system, user)
     report = _normalize_daily_report(raw, ctx["trades"])
     now = _now()
     with get_conn() as c:
@@ -516,12 +726,12 @@ def score_daily(score_date: str) -> dict | None:
 
 def get_daily_day(score_date: str) -> dict:
     """某日详情：交易行（不含估值因子，纯读）+ 笔数 + 净额。前端明细表直接用它渲染。"""
-    from app.data.base import auto_tag
+    from app.instruments import get_instrument
 
     trades = []
     net = 0.0
     for r in _trade_rows(score_date):
-        tag = (r.get("tag") or "").strip() or auto_tag(r["code"], r.get("name") or "")
+        tag = (r.get("tag") or "").strip() or get_instrument(r["code"]).tag
         amt = float(r["amount_cny"] or 0.0)
         net += amt if r["side"] == "buy" else -amt
         trades.append({
@@ -590,15 +800,54 @@ def _safe_score_daily(score_date: str) -> None:
         logger.warning("[AI打分] 后台自动打分 %s 失败", score_date, exc_info=True)
 
 
+def _is_market_closed_now() -> bool:
+    """当前是否已过收盘确认时间（交易日 + 15:05）。"""
+    from datetime import datetime
+
+    from app.market.calendar import is_market_closed
+
+    return is_market_closed(datetime.now())
+
+
+def _guard_today(score_date: str) -> None:
+    """收盘守卫：仅当打分目标是「今天」且未收盘时拒绝；历史日期数据已定格，不受限。"""
+    if score_date == _now()[:10] and not _is_market_closed_now():
+        raise ValueError("交易时段不允许对今日打分，请收盘后（15:05）再试")
+
+
+def catchup_pending_daily() -> None:
+    """启动/全量刷新：今天已收盘 + 有 buy/sell 交易 + 尚无 AI 报告 → 后台补打一次。
+
+    盘中/未收盘不触发；无模型或无交易不触发；已有报告不重复打。失败只记日志。
+    """
+    from datetime import datetime
+
+    if not _is_market_closed_now():
+        return
+    today = datetime.now().date().isoformat()
+    if not _trade_rows(today):
+        return
+    if get_daily_report(today) is not None:
+        return
+    try:
+        threading.Thread(target=_safe_score_daily, args=(today,), daemon=True).start()
+        logger.info("[AI打分] 收盘后补打今日（%s）AI 评分", today)
+    except Exception:  # noqa: BLE001
+        logger.warning("[AI打分] 启动补打线程失败", exc_info=True)
+
+
 def maybe_auto_score_daily(score_date: str) -> None:
     """交易变动后：先同步失效该日旧报告（保证后续失败时页面为"未评分"而非陈旧结果）；
-    有激活模型且当日有交易才起 daemon 线程重打分（无模型/无交易不起线程，保证测试确定、不触发网络）。"""
+    有激活模型且当日有交易才起 daemon 线程重打分（无模型/无交易不起线程，保证测试确定、不触发网络）。
+    收盘守卫：当日未收盘（盘中录入交易）只失效、不打分，保持「未评分」，收盘后由 catchup 补打。"""
     invalidate_daily(score_date)
     if ai.get_active_model() is None:
         return
     if not _trade_rows(score_date):
         return
     try:
+        if score_date == _now()[:10] and not _is_market_closed_now():
+            return  # 盘中：今日数据未定格，不打
         threading.Thread(target=_safe_score_daily, args=(score_date,), daemon=True).start()
     except Exception:  # noqa: BLE001
         logger.warning("[AI打分] 启动后台打分线程失败", exc_info=True)

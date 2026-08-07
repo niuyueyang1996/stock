@@ -254,3 +254,32 @@ def test_reasoning_api(client):
     assert r2.status_code == 400
     r3 = client.put("/api/ai/reasoning", json={"effort": "high"})
     assert r3.json()["data"]["effort"] == "high"
+
+
+def test_ai_prompts_api(client):
+    """GET /ai/prompts：返回 5 个入口的可编辑重点要求块（非完整 system，不含 JSON schema）。"""
+    r = client.get("/api/ai/prompts")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert set(d) == {"stock", "fundflow", "batch", "portfolio", "daily"}
+    for k, v in d.items():
+        assert isinstance(v, str) and v
+        assert "请输出严格 JSON" not in v      # 不含 schema 结构，用户只看可编辑要求
+    assert "共振" in d["batch"]                # 批量块保留共振/虹吸/分化措辞
+
+
+def test_ai_report_custom_prompt(client, monkeypatch):
+    """诊股 body.system_prompt 作为「用户附加要求」追加到默认指令后；无 body 用默认。"""
+    client.post("/api/ai/models", json={"name": "DS", "base_url": "https://x/v1", "api_key": "k", "model": "m"})
+    models = client.get("/api/ai/models").json()["data"]["models"]
+    client.post(f"/api/ai/models/{models[0]['id']}/activate")
+    captured = {}
+    monkeypatch.setattr(ai_svc, "chat_json", lambda cfg, system, user: captured.update(system=system) or _FAKE_AI_OUTPUT)
+    # 带自定义要求
+    r = client.post("/api/stocks/600000/ai-report", json={"system_prompt": "重点看股息"})
+    assert r.status_code == 200
+    assert captured["system"] == ai_svc._SYSTEM_PROMPT + "\n\n[用户附加要求]\n重点看股息"
+    # 不带 body → 默认指令
+    r2 = client.post("/api/stocks/600000/ai-report")
+    assert r2.status_code == 200
+    assert captured["system"] == ai_svc._SYSTEM_PROMPT

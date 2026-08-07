@@ -12,7 +12,7 @@
 from datetime import date, datetime
 
 from app.config import QUANTILE_MIN_SAMPLES
-from app.data.base import build_manager, is_hk_code
+from app.instruments import get_instrument
 from app.services.fx import get_fx_rate_cny
 from app.data.cache import (
     get_expected_growth,
@@ -36,13 +36,13 @@ INDICATORS = {"pe": "市盈率(TTM)", "pb": "市净率"}
 # ---------- 百度序列：拉取 + 缓存 ----------
 
 def sync_series(code: str) -> dict:
-    """拉取百度估值历史序列（1y/3y/5y 的 PE/PB）并缓存。返回拉取统计。"""
-    manager = build_manager()
+    """拉取估值历史序列（1y/3y/5y 的 PE/PB）并缓存。返回拉取统计。"""
+    inst = get_instrument(code)
     stat = {"pe": 0, "pb": 0}
     for key, cn in PERIODS.items():
         for ind_key in ("pe", "pb"):
             try:
-                pts = manager.valuation_history(code, INDICATORS[ind_key], cn)
+                pts = inst.valuation_history(INDICATORS[ind_key], cn)
             except Exception:  # noqa: BLE001 单源失败不中断
                 continue
             if pts:
@@ -75,14 +75,18 @@ def _percentile(hist: list[float], target: float | None) -> float | None:
     return round(sum(1 for v in hist if _segmented_key(v) <= tk) / len(hist) * 100, 1)
 
 
-def _series_values(code: str, indicator: str, period: str) -> list[float]:
-    """缓存序列的 value 列表（升序）。"""
-    return [v for _, v in get_valuation_series(code, indicator, period)]
+def _series_values(code: str, indicator: str, period: str, as_of: str | None = None) -> list[float]:
+    """缓存序列的 value 列表（升序）。as_of 非空时只取 ≤as_of 的历史点（避免用「未来」数据）。"""
+    pts = get_valuation_series(code, indicator, period)
+    if as_of is not None:
+        pts = [p for p in pts if p[0] <= as_of]
+    return [v for _, v in pts]
 
 
-def percentile_in_series(code: str, indicator: str, period: str, value: float | None) -> float | None:
-    """value 在缓存历史序列（剔除末条）中的百分位。"""
-    hist = _series_values(code, indicator, period)
+def percentile_in_series(code: str, indicator: str, period: str, value: float | None,
+                         as_of: str | None = None) -> float | None:
+    """value 在缓存历史序列（剔除末条）中的百分位。as_of 非空时只统计 ≤as_of 的历史点。"""
+    hist = _series_values(code, indicator, period, as_of)
     return _percentile(hist[:-1] if hist else [], value)
 
 
@@ -152,7 +156,7 @@ def _series_last_any(code: str, indicator: str) -> tuple[float | None, str | Non
     return None, None
 
 
-def _compute_live_series_fallback(code: str, price: float | None) -> dict:
+def _compute_live_series_fallback(code: str, price: float | None, as_of: str | None = None) -> dict:
     """无财务（或港股缺汇率）回退：序列末值给实时 PE/PB + 分位；财务在时补 ROE/股息率/市值。
 
     序列也没有 → {}（ETF 无序列自然保持排除）。total_mv 港股用港币（前端按 fx 折人民币）。
@@ -177,17 +181,18 @@ def _compute_live_series_fallback(code: str, price: float | None) -> dict:
         if fin["roe"] is not None:
             out["roe_ttm"] = fin["roe"]                         # 东财 ROE_AVG
         if fin["dv_per_share"] and price:
-            fx = get_fx_rate_cny("HKD" if is_hk_code(code) else "CNY", date.today().isoformat())
+            fx = get_fx_rate_cny("HKD" if get_instrument(code).currency == "HKD" else "CNY",
+                                 date.today().isoformat())
             price_cny = price * fx if fx else None
             if price_cny:
                 out["dv_ratio"] = round(fin["dv_per_share"] / price_cny * 100, 2)
                 out["dv_static"] = out["dv_ratio"]
-    out["pe_pct"] = percentile_in_series(code, "pe", pe_period or "1y", pe)
-    out["pb_pct"] = percentile_in_series(code, "pb", pb_period or "1y", pb)
+    out["pe_pct"] = percentile_in_series(code, "pe", pe_period or "1y", pe, as_of)
+    out["pb_pct"] = percentile_in_series(code, "pb", pb_period or "1y", pb, as_of)
     return out
 
 
-def compute_live(code: str, price: float | None = None) -> dict:
+def compute_live(code: str, price: float | None = None, as_of: str | None = None) -> dict:
     """实时估值全套（读缓存 + 本地计算，零网络）。
 
     price 为实时股价（当日日K末根）；缺省回退最近缓存收盘价。
@@ -198,7 +203,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
 
     fin = get_financials(code)
     if not fin:
-        return _compute_live_series_fallback(code, price)
+        return _compute_live_series_fallback(code, price, as_of)
     if price is None:
         from app.data.cache import get_latest_daily_price
 
@@ -215,7 +220,7 @@ def compute_live(code: str, price: float | None = None) -> dict:
     total_shares = fin["total_shares"] if fin["total_shares"] else None
 
     if not net_profit or not eps:
-        return _compute_live_series_fallback(code, price)
+        return _compute_live_series_fallback(code, price, as_of)
 
     if total_shares is None:
         total_shares = net_profit / eps      # 兜底：无总股本时用净利/EPS近似
@@ -227,10 +232,10 @@ def compute_live(code: str, price: float | None = None) -> dict:
     }
     # 货币统一：财务已由数据转换层折人民币；市值/股价按原生币种 → 比率计算须同货币。
     # 港股市值=港元 → mv_cny = total_mv×fx；缺汇率 → 序列回退（与 missing_fx 同口径，不按 1:1）。
-    if is_hk_code(code):
+    if get_instrument(code).currency == "HKD":
         fx = get_fx_rate_cny("HKD", date.today().isoformat())
         if fx is None:
-            return _compute_live_series_fallback(code, price)
+            return _compute_live_series_fallback(code, price, as_of)
         mv_cny = total_mv * fx
     else:
         mv_cny = total_mv
@@ -382,11 +387,11 @@ def compute_live(code: str, price: float | None = None) -> dict:
     else:
         out["ps_fwd"] = None
 
-    # 分位：实时值/前瞻值 在百度历史序列（剔除末条）中的百分位
-    out["pe_pct"] = percentile_in_series(code, "pe", "1y", out["pe"])
-    out["pb_pct"] = percentile_in_series(code, "pb", "1y", out["pb"])
-    out["fwd_pe_pct"] = percentile_in_series(code, "pe", "1y", out["fwd_pe"])
-    out["fwd_pb_pct"] = percentile_in_series(code, "pb", "1y", out["fwd_pb"])
+    # 分位：实时值/前瞻值 在百度历史序列（剔除末条）中的百分位；as_of 非空时只统计当日及以前
+    out["pe_pct"] = percentile_in_series(code, "pe", "1y", out["pe"], as_of)
+    out["pb_pct"] = percentile_in_series(code, "pb", "1y", out["pb"], as_of)
+    out["fwd_pe_pct"] = percentile_in_series(code, "pe", "1y", out["fwd_pe"], as_of)
+    out["fwd_pb_pct"] = percentile_in_series(code, "pb", "1y", out["fwd_pb"], as_of)
     return out
 
 

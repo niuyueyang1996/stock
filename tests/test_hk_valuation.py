@@ -159,16 +159,16 @@ def test_compute_quantiles_hk_persists_percentile():
 # ---------- 第二层：东财港股 F10 源（多期 TTM） ----------
 
 def test_em_provider_mapping(monkeypatch):
-    """EmProvider 三层链：raw_em（多期+主指标）→ normalizer → 人民币口径 Financials。
+    """HkInstrument（东财港股 F10）：raw_em（多期+主指标）→ normalizer → 人民币口径 Financials。
 
     青岛港报表=人民币（货币判定锚点 PE_TTM=7.714/PB_TTM=0.849 与 CNY 假设一致）→ 不折算。
-    A 股返回 None，交新浪源。
+    A 股类型由 type_of 路由到 ashare，不经过港股财务。
     """
     from types import SimpleNamespace
 
     from app.data.cache import upsert_fx_rate
-    from app.data.providers import EmProvider
     from app.data.raw import raw_em as raw_em_mod
+    from app.instruments.hk import HkInstrument
 
     upsert_fx_rate("HKD", date.today().isoformat(), 0.92, "test")
 
@@ -180,7 +180,7 @@ def test_em_provider_mapping(monkeypatch):
 
     monkeypatch.setattr("app.data.raw.raw_em.requests.get", fake_get)
 
-    fin = EmProvider().financials("06198")
+    fin = HkInstrument("06198").financials()
     assert fin is not None
     assert fin.report_date == "20260331"
     assert fin.total_shares == 6_491_100_000
@@ -195,22 +195,23 @@ def test_em_provider_mapping(monkeypatch):
     assert len(fin.profit_series) == 4
     assert fin.profit_series[0]["report_date"] == "20260331"
     assert len(fin.revenue_series) == 4
-    # A 股返回 None，交新浪源
-    assert EmProvider().financials("600000") is None
+    # A 股类型由 type_of 路由，不经过港股财务
+    from app.instruments import type_of
+
+    assert type_of("600000") == "ashare"
 
 
 def test_em_network_failure_source_fail(monkeypatch):
     """东财接口异常 → sync_financials 返回 source_fail，不中断整体刷新。"""
     import app.services.refresh as rmod
-    from app.data import base as base_mod
-    from app.data.providers import EmProvider
+    from app.instruments.hk import HkInstrument
 
     def boom(*a, **k):
         raise RuntimeError("network")
 
     monkeypatch.setattr("app.data.raw.raw_em.requests.get", boom)
-    monkeypatch.setattr(rmod, "build_manager",
-                        lambda: base_mod.SourceManager([EmProvider()]))
+    # 绕过 MockInstrument：让 sync_financials 用真实 HkInstrument（网络桩 boom → source_fail）
+    monkeypatch.setattr(rmod, "get_instrument", lambda code: HkInstrument(code))
     assert rmod.sync_financials("06198")["reason"] == "source_fail"
 
 
@@ -249,7 +250,8 @@ def test_baidu_source_uses_hk_variant_for_hk(monkeypatch):
     import akshare as ak
     import pandas as pd
 
-    from app.data.providers import BaiduProvider
+    from app.instruments.ashares import AshareInstrument
+    from app.instruments.hk import HkInstrument
 
     calls = []
 
@@ -263,11 +265,10 @@ def test_baidu_source_uses_hk_variant_for_hk(monkeypatch):
 
     monkeypatch.setattr(ak, "stock_hk_valuation_baidu", fake_hk)
     monkeypatch.setattr(ak, "stock_zh_valuation_baidu", fake_ab)
-    s = BaiduProvider()
-    pts = s.valuation_history("06198", "市净率", "近一年")
+    pts = HkInstrument("06198").valuation_history("市净率", "近一年")
     assert pts and pts[0].value == 7.63
     assert calls == [("hk", "06198", "市净率", "近一年")]
-    s.valuation_history("600000", "市净率", "近一年")
+    AshareInstrument("600000").valuation_history("市净率", "近一年")
     assert calls[-1] == ("ab", "600000", "市净率", "近一年")
 
 
@@ -353,3 +354,57 @@ def test_ashare_passthrough_unchanged():
     pt = _passthrough("600000", 100)
     ttm = 1_000_000_000
     assert pt["attr_profit"] == round(100 / 1_000_000_000 * ttm, 2)
+
+
+# ---------- ETF 估值：指数当个股（乐咕指数 PE/PB） ----------
+
+def test_normalize_index_valuation():
+    """乐咕全历史 df → 按 indicator 取列（滚动市盈率/市净率）+ 按 period 截取近 N 天，非正值剔除。"""
+    from datetime import date, timedelta
+
+    import pandas as pd
+
+    from app.data.normalizers import normalize_index_valuation
+
+    today = date.today()
+    rows = [{"日期": (today - timedelta(days=i)).isoformat(),
+             "滚动市盈率": 10.0 + i / 100, "市净率": 1.0 + i / 500} for i in range(400)]
+    df = pd.DataFrame(rows)
+    pe1y = normalize_index_valuation(df, "市盈率(TTM)", "近一年")
+    assert 0 < len(pe1y) <= 366 and all(p.value > 0 for p in pe1y)
+    assert pe1y[-1].value > pe1y[0].value               # 升序
+    pb3y = normalize_index_valuation(df, "市净率", "近三年")
+    assert 366 < len(pb3y) <= 1096                       # 近三年窗口更长
+    # 未知 indicator → 空；空 df → 空
+    assert normalize_index_valuation(df, "ROE", "近一年") == []
+    assert normalize_index_valuation(pd.DataFrame(), "市盈率(TTM)", "近一年") == []
+
+
+def test_baidu_provider_etf_uses_legu(monkeypatch):
+    """ETF 估值走乐咕跟踪指数（510300→沪深300，seed 映射）；未登记映射的 ETF 返回空；A 股/港股不受影响。"""
+    import pandas as pd
+
+    from app.data.raw import raw_legu
+    from app.instruments.etf import EtfInstrument
+
+    calls = []
+
+    def fake_pe(legu):
+        calls.append(("pe", legu))
+        return pd.DataFrame({"date": ["2026-08-06"], "ttmPe": [13.63], "addLyrPe": [0.0]})
+
+    def fake_pb(legu):
+        calls.append(("pb", legu))
+        return pd.DataFrame({"date": ["2026-08-06"], "pb": [1.43]})
+
+    monkeypatch.setattr(raw_legu, "index_pe_hist", fake_pe)
+    monkeypatch.setattr(raw_legu, "index_pb_hist", fake_pb)
+    inst = EtfInstrument("510300")
+    pts = inst.valuation_history("市盈率(TTM)", "近一年")
+    assert pts and pts[0].value == 13.63
+    assert calls == [("pe", "000300.SH")]                  # 映射到跟踪指数乐咕代码
+    inst.valuation_history("市净率", "近一年")
+    assert calls[-1] == ("pb", "000300.SH")
+    # 未登记映射的 ETF（515880 是 ETF 代码）→ 空，不联网
+    assert EtfInstrument("515880").valuation_history("市盈率(TTM)", "近一年") == []
+    assert calls == [("pe", "000300.SH"), ("pb", "000300.SH")]

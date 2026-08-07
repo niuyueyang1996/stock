@@ -20,8 +20,8 @@ from datetime import date
 
 from app.analysis.valuation import PERIODS, compute_live, compute_ttm, ttm_pair
 from app.analysis.volatility import compute_volatility
-from app.data.base import auto_tag, is_etf_code, is_hk_code
 from app.data.cache import get_financials, get_valuation_series
+from app.instruments import get_instrument
 from app.market.calendar import is_trade_day
 from app.models.db import get_conn
 from app.services.holdings import get_holdings
@@ -59,7 +59,7 @@ def _passthrough(code: str, quantity: float) -> dict | None:
     if not fin:
         return None
     # 港股 → 持仓市值折人民币需 HKD→CNY；缺汇率剔除（不按 1:1）
-    if is_hk_code(code) and _cny_rate("HKD") is None:
+    if get_instrument(code).currency == "HKD" and _cny_rate("HKD") is None:
         return None
     total_shares = fin["total_shares"]
     if not total_shares:
@@ -219,8 +219,8 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
         if fin:
             profit_yoy = fin["profit_yoy"]
 
-    tag = tag or auto_tag(code, name)
-    is_etf = is_etf or is_etf_code(code) or tag in ("ETF",)
+    tag = tag or get_instrument(code).tag
+    is_etf = is_etf or get_instrument(code).is_etf or tag in ("ETF",)
 
     # 前瞻净利/净资产：compute_live 的财务口径已由数据转换层统一人民币
     # （normalize_financials_hk 把港元报表 ×fx 折成人民币），港股持仓**不得再乘汇率**——
@@ -512,7 +512,7 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
     # 标签聚合
     tag_map: dict[str, dict] = {}
     for s in cny:
-        t = s["tag"] or auto_tag(s["code"], s["name"])
+        t = s["tag"] or get_instrument(s["code"]).tag
         d = tag_map.setdefault(t, {"value": 0.0, "is_etf": False})
         d["value"] += s["value_cny"]
         if s["is_etf"]:
@@ -525,12 +525,12 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
     ]
     tags = [_tag_section(t["tag"], [s for s in cny if s["tag"] == t["tag"]], total_value) for t in tag_weights]
     # 全部标签（与当前子集无关）：前端左侧多选列表常驻
-    all_tags = sorted({(h.get("tag") or auto_tag(h["code"], h["name"])) for h in all_holdings})
+    all_tags = sorted({(h.get("tag") or get_instrument(h["code"]).tag) for h in all_holdings})
     # 标签卡片（全持仓口径，与当前子集无关）：左侧卡片显示各标签总市值 + 今日盈亏
     all_cny = [s for s in all_stocks if not s.get("missing") and s["value_cny"] is not None]
     card_map: dict[str, dict] = {}
     for s in all_cny:
-        t = s["tag"] or auto_tag(s["code"], s["name"])
+        t = s["tag"] or get_instrument(s["code"]).tag
         d = card_map.setdefault(t, {"value": 0.0, "day_pnl": 0.0, "count": 0})
         d["value"] += s["value_cny"]
         if s.get("day_pnl") is not None:
@@ -871,73 +871,23 @@ def get_portfolio_series() -> dict:
 # ---------- 组合资金流穿透（按持仓求和） ----------
 
 def portfolio_fundflow(tags: list[str] | None = None) -> dict:
-    """组合资金流穿透：把选中 A 股个股持仓的资金流按字段求和（当作一个篮子）。
+    """组合资金流穿透：把选中持仓的资金流按字段求和（当作一个篮子）。
 
-    tags：标签子集（None=全选）。ETF/港股无资金流，**不参与**（同步口径同 refresh.sync_fundflow）。
-    全部读本地缓存，零网络。返回：
+    tags：标签子集（None=全选）。A股/ETF 有资金流（腾讯分笔五档）**参与**，港股无资金流排除。
+    聚合逻辑复用 combo_fundflow（participates_fundflow 过滤 + 等权求和），全部读本地缓存，零网络。返回：
       fundflow_15m：当日分时（按 ts 并集求和，升序）
       fundflow_latest：当日五档汇总 + netamount
       fundflow_history：近30日逐日净流入（按 trade_date 并集求和）
-      covered/total：有当日分时数据的持仓数 / 参与持仓数（A股非ETF）
+      covered/total：有当日分时数据的持仓数 / 参与持仓数（A股/ETF，港股排除）
     """
-    from datetime import timedelta
-
-    from app.data.base import is_hk_code
-    from app.data.cache import get_daily_fundflow, get_daily_fundflows, get_fundflow_min
-    from app.data.fundflow import FUNDFLOW_WINDOWS
+    from app.analysis.instrument_fundflow import combo_fundflow
     from app.services.holdings import get_holdings
 
     all_holdings = [h for h in get_holdings(active_only=True) if h["quantity"] > 0]
     if tags is not None:
         tag_set = set(tags)
         all_holdings = [h for h in all_holdings if (h.get("tag") or "") in tag_set]
-    # ETF/港股不参与资金流
-    holdings = [h for h in all_holdings if not is_hk_code(h["code"]) and not h.get("is_etf")]
-
-    today = date.today().isoformat()
-    flow_start = (date.today() - timedelta(days=45)).isoformat()
-
-    # 当日分时：按 ts 并集求和（某持仓缺失该分钟按 0 处理）
-    intraday: dict[str, dict[str, float]] = {}
-    covered = 0
-    for h in holdings:
-        rows = get_fundflow_min(h["code"], today)
-        if rows:
-            covered += 1
-        for r in rows:
-            b = intraday.setdefault(r["ts"], {
-                "super_large_net": 0.0, "large_net": 0.0, "medium_net": 0.0,
-                "small_net": 0.0, "xs_net": 0.0, "buy_amount": 0.0, "sell_amount": 0.0,
-            })
-            for k in b:
-                b[k] += r[k] or 0.0
-    fundflow_15m = [
-        {"ts": ts, **{k: round(v, 2) for k, v in b.items()}}
-        for ts, b in sorted(intraday.items())
-    ]
-
-    # 当日五档汇总 + 近30日净流入历史
-    latest_keys = ("super_large_net", "large_net", "medium_net", "small_net", "xs_net", "netamount")
-    latest = {k: 0.0 for k in latest_keys}
-    hist: dict[str, float] = {}
-    for h in holdings:
-        row = get_daily_fundflow(h["code"], today)
-        if row:
-            for k in latest_keys:
-                latest[k] += row[k] or 0.0
-        for r in get_daily_fundflows(h["code"], flow_start, today):
-            hist[r["trade_date"]] = hist.get(r["trade_date"], 0.0) + (r["netamount"] or 0.0)
-    fundflow_history = [
-        {"trade_date": d, "netamount": round(v, 2)} for d, v in sorted(hist.items())
-    ]
-
-    return {
-        "fundflow_15m": fundflow_15m,
-        "fundflow_latest": {k: round(v, 2) for k, v in latest.items()},
-        "fundflow_history": fundflow_history,
-        "fundflow_windows": FUNDFLOW_WINDOWS,
-        "covered": covered,
-        "total": len(holdings),
-        "trade_date": today,
-        "note": "A股个股持仓穿透求和（ETF/港股无资金流）",
-    }
+    return combo_fundflow(
+        [h["code"] for h in all_holdings],
+        note="持仓穿透求和（A股/ETF 腾讯分笔；港股无资金流排除）",
+    )

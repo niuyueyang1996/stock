@@ -104,6 +104,13 @@ def test_moving_average_cost():
 
 def test_buy_fee_included():
     """买入含费用计入成本：100@10 + 费5 → avg_cost=10.05。"""
+    # 000001 同时是上证指数代码：模拟真实用户已持有该股（stocks 表有记录）→ 按个股放行
+    from app.data.base import load_index_registry
+    from app.models.db import get_conn
+
+    with get_conn() as c:
+        c.execute("INSERT INTO stocks (code, name, market) VALUES ('000001', '平安银行', 'sz')")
+    load_index_registry()
     holdings.record_trade("000001", "buy", 10, 100, fee=5, name="平安银行")
     h = _qty("000001")
     assert h["avg_cost"] == pytest.approx(10.05)

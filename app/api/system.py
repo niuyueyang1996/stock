@@ -46,21 +46,18 @@ _RESET_TABLES = [
 
 
 def _probe_source() -> dict:
-    """探活数据源：取一个持仓代码（无则用默认）测实时行情。"""
-    from app.data.base import build_manager
+    """探活数据源：取一个持仓代码（无则用默认）测实时行情。返回探测结果。"""
+    from app.instruments import get_instrument
     from app.services.holdings import get_holdings
 
     try:
         holdings = get_holdings(active_only=True)
         code = holdings[0]["code"] if holdings else "600000"
-        manager = build_manager()
-        try:
-            manager.quote(code)
-        except Exception:
-            pass
-        return manager.status
+        inst = get_instrument(code)
+        q = inst.quote()
+        return {"ok": bool(q), "source": inst.source_name, "code": code}
     except Exception:
-        return {}
+        return {"ok": False}
 
 
 @router.get("/health")

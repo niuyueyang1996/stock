@@ -59,9 +59,9 @@ def test_migration_v1_to_v2(tmp_path, monkeypatch):
         # AI 评分三表就位
         for t in ("tag_prefs", "ai_portfolio_reports", "ai_daily_reports"):
             assert t in tables
-        # 版本号升级到当前版本（6：AI 评分表 + 组合报告按标签组合 tags_json）
+        # 版本号升级到当前版本（7：日级资金流补 buy/sell 列）
         ver = c.execute("SELECT value FROM config WHERE key='db_schema_version'").fetchone()[0]
-        assert ver == "6"
+        assert ver == "7"
         info = {r["name"]: r for r in c.execute("PRAGMA table_info(daily_fundflow_cache)").fetchall()}
         for col in ("p50", "p80", "p95", "xs_net", "p15", "p40", "p75"):
             assert info[col]["name"] == col

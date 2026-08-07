@@ -174,7 +174,7 @@ def test_static_pages_use_pinned_local_echarts():
     assert hashlib.sha256(vendor.read_bytes()).hexdigest() == (
         "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1"
     )
-    for name in ("index.html", "portfolio.html", "stock.html", "trade.html"):
+    for name in ("index.html", "portfolio.html", "stock.html", "trade.html", "indices.html"):
         html = (root / "static" / name).read_text(encoding="utf-8")
         assert 'src="/static/vendor/echarts.min.js"' in html
         assert "cdn.jsdelivr.net/npm/echarts" not in html

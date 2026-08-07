@@ -26,9 +26,9 @@ def _fake_chat(monkeypatch, payload):
     monkeypatch.setattr(ai_mod, "chat_json", lambda cfg, system, user: payload)
 
 
-def _seed_trade(code="600000", qty=100, price=10.0, side="buy", name="浦发银行"):
+def _seed_trade(code="600000", qty=100, price=10.0, side="buy", name="浦发银行", trade_time=None):
     """录一笔交易（无激活模型 → 不触发后台打分线程；微秒时间戳避免 UNIQUE 冲突）。返回 trade_id。"""
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    ts = trade_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
     return holdings.record_trade(code, side, price, qty, name=name, trade_time=ts)["trade_id"]
 
 
@@ -234,6 +234,8 @@ def test_normalize_daily_report_alignment():
 
 
 def test_score_daily_persist_and_read(monkeypatch):
+    # 用今天打分 → mock 已收盘（收盘守卫放行）
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     tid = _seed_trade("600000", qty=100)
     _activate_mock_model()
     _fake_chat(monkeypatch, {
@@ -277,6 +279,8 @@ def test_maybe_auto_score_daily_no_model_invalidates(monkeypatch):
 
 def test_maybe_auto_score_daily_with_model_spawns(monkeypatch):
     # 还原真实 maybe_auto_score_daily，验证「有激活模型且当日有交易 → 起线程打分」
+    # 今天是打分目标 → mock 已收盘，放行起线程（否则盘中守卫会只失效不打）
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     monkeypatch.setattr(svc, "maybe_auto_score_daily", _REAL_MAYBE_AUTO)
     _seed_trade("600000", qty=100)
     d = date.today().isoformat()
@@ -297,6 +301,113 @@ def test_maybe_auto_score_daily_with_model_spawns(monkeypatch):
 
     svc.maybe_auto_score_daily(d)
     assert calls == [d]
+
+
+# ============================================================ 收盘守卫 + catchup
+
+def test_score_daily_intraday_today_rejected(monkeypatch):
+    # 盘中（未收盘）打今天 → ValueError；历史日期不受限
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: False)
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    with pytest.raises(ValueError):
+        svc.score_daily(date.today().isoformat())
+
+
+def test_score_daily_historical_allowed_intraday(monkeypatch):
+    # 盘中也可打历史日期（数据已定格）
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: False)
+    _seed_trade("600000", qty=100, trade_time="2026-01-05 10:00:00.000000")
+    _activate_mock_model()
+    _fake_chat(monkeypatch, {"score": 70, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": []})
+    r = svc.score_daily("2026-01-05")
+    assert r is not None and r["report"]["score"] == 70.0
+
+
+def test_catchup_pending_daily_spawns_after_close(monkeypatch):
+    # 已收盘 + 当日有交易 + 无报告 → 起后台线程补打一次
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    calls = []
+
+    class _SyncThread:
+        def __init__(self, target, args=(), daemon=False):
+            self._target, self._args = target, args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(threading, "Thread", _SyncThread)
+    monkeypatch.setattr(svc, "score_daily", lambda d: calls.append(d) or {"score_date": d, "report": {}})
+    svc.catchup_pending_daily()
+    assert calls == [date.today().isoformat()]
+
+
+def test_catchup_pending_daily_skips_intraday(monkeypatch):
+    # 未收盘（盘中）→ 不触发补打
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: False)
+    _seed_trade("600000", qty=100)
+    _activate_mock_model()
+    calls = []
+    monkeypatch.setattr(svc, "score_daily", lambda d: calls.append(d))
+    svc.catchup_pending_daily()
+    assert calls == []
+
+
+def test_catchup_pending_daily_skips_when_report_exists(monkeypatch):
+    # 已收盘 + 当日已有 AI 报告 → 不重复打
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
+    _seed_trade("600000", qty=100)
+    d = date.today().isoformat()
+    with get_conn() as c:
+        c.execute("INSERT INTO ai_daily_reports(score_date, report_json, model_name) VALUES(?,?,?)",
+                  (d, '{"score":10}', "old"))
+    calls = []
+    monkeypatch.setattr(svc, "score_daily", lambda dd: calls.append(dd))
+    svc.catchup_pending_daily()
+    assert calls == []
+
+
+def test_catchup_pending_daily_skips_no_trades(monkeypatch):
+    # 已收盘 + 当日无交易 → 不触发
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
+    _activate_mock_model()
+    calls = []
+    monkeypatch.setattr(svc, "score_daily", lambda d: calls.append(d))
+    svc.catchup_pending_daily()
+    assert calls == []
+
+
+# ============================================================ asof 因子快照
+
+def test_stock_factors_asof_snapshot(monkeypatch):
+    # as_of 非空：用当日 close 口径估值 + 资金流五档 + 30日摘要；asof 标记正确
+    _seed_trade("600000", qty=100)
+    d = "2026-08-06"
+    monkeypatch.setattr("app.data.cache.get_daily_price",
+                        lambda code, td: {"code": code, "trade_date": td, "close": 12.5, "pct_change": 1.5})
+    flow_row = {"code": "600000", "trade_date": d, "netamount": 1000000.0, "main_net": 800000.0,
+                "main_net_pct": 8.0, "super_large_net": 500000.0, "large_net": 300000.0,
+                "medium_net": -100000.0, "small_net": 50000.0, "xs_net": 20000.0,
+                "p15": 100.0, "p40": 500.0, "p75": 2000.0, "p95": 10000.0}
+    monkeypatch.setattr("app.data.cache.get_fundflow_asof", lambda code, as_of: flow_row)
+    monkeypatch.setattr("app.data.cache.get_daily_fundflows", lambda code, start, end: [])
+    f = svc._stock_factors("600000", as_of=d)
+    assert f["asof"] == d and f["asof_fallback"] is False
+    assert f["pct_chg"] == 1.5
+    assert f["fundflow_main_net"] == 800000.0
+    assert f["fundflow_super_large_net"] == 500000.0
+    assert f["fundflow_date"] == d
+
+
+def test_stock_factors_asof_fallback(monkeypatch):
+    # 当日无行情缓存 → 回退当前值并标 asof_fallback=true
+    _seed_trade("600000", qty=100)
+    d = "2026-08-06"
+    monkeypatch.setattr("app.data.cache.get_daily_price", lambda code, td: None)
+    f = svc._stock_factors("600000", as_of=d)
+    assert f["asof"] == d and f["asof_fallback"] is True
 
 
 # ============================================================ API 层
@@ -321,7 +432,9 @@ def test_api_portfolio_no_model(client):
     assert "AI 模型" in r.json()["detail"]
 
 
-def test_api_daily_no_model(client):
+def test_api_daily_no_model(client, monkeypatch):
+    # 用今天 → mock 已收盘，让守卫放行、走到「未配置模型」分支（否则盘中先报交易时段）
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     _seed_trade("600000", qty=100)
     r = client.post("/api/ai-scoring/daily", json={"date": date.today().isoformat()})
     assert r.status_code == 400
@@ -343,6 +456,8 @@ def test_api_portfolio_post_success(client, monkeypatch):
 
 
 def test_api_daily_post_success(client, monkeypatch):
+    # 用今天打分 → mock 已收盘，放行收盘守卫
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     tid = _seed_trade("600000", qty=100)
     _activate_mock_model()
     _fake_chat(monkeypatch, {
@@ -361,6 +476,8 @@ def test_api_daily_post_success(client, monkeypatch):
 
 
 def test_api_daily_get_after_score(client, monkeypatch):
+    # 用今天打分 → mock 已收盘，放行收盘守卫
+    monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     tid = _seed_trade("600000", qty=100)
     _activate_mock_model()
     _fake_chat(monkeypatch, {

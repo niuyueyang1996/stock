@@ -48,6 +48,15 @@
       </div>
     </div>
 
+    <div class="panel" id="etfIndexPanel" style="display:none">
+      <div class="row">
+        <h2 style="margin:0">跟踪指数</h2>
+        <span class="muted" id="etfIndexMeta"></span>
+        <span class="grow"></span>
+        <span id="etfIndexActions"></span>
+      </div>
+    </div>
+
     <div class="panel" id="aiReportPanel" style="display:none">
       <div class="row">
         <h2 style="margin:0">🤖 AI 诊股报告</h2>
@@ -90,23 +99,21 @@
       <div class="chart lg" id="pbLine" style="height:340px"></div>
     </div>
 
-    <div class="row" style="align-items:stretch">
-      <div class="panel grow">
-        <h2>全天五档资金流（最新交易日）</h2>
-        <div class="chart sm" id="flowBars"></div>
-        <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
-      </div>
-      <div class="panel grow">
-        <h2>近30日净流入</h2>
-        <div class="chart sm" id="flowLine"></div>
-        <div class="empty" id="flowLineEmpty" style="display:none;padding:20px">暂无历史资金流数据 — 当日刷新后从接入日起累积。</div>
-      </div>
+    <div class="panel grow">
+      <h2>全天五档资金流（最新交易日）</h2>
+      <div class="chart sm" id="flowBars"></div>
+      <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
     </div>
 
     <div class="panel">
-      <h2>分时资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 正=净流入 负=净流出</span></h2>
+      <h2>资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
+      <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div id="flowTabs"></div>
+        <div style="flex:1"></div>
+        <div id="flowAiBtn"></div>
+      </div>
+      <div id="flowAiPanel" style="display:none;margin:0 0 10px"></div>
       <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
-      <div id="flowTabs"></div>
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
       <div class="chart lg" id="flowBuySell" style="height:300px"></div>
       <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。</div>
@@ -120,10 +127,29 @@
   <script>
     initNav('stock');
     let currentCode = new URLSearchParams(location.search).get('code') || '';
+    const isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）
     let lastQuote = null;
     let lastName = '';
     let lastLive = {};
     let lastFx = null;          // 港股当前汇率（人民币折算显示用）
+    // 资金流统一时间窗：'1m'/'5m'/'15m'/'30m'（当日分时）+ '1d'/'7d'/'30d'（多日聚合桶）
+    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', '1d', '7d', '30d'];
+    const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+                                '1d': '1天', '7d': '7天', '30d': '30天' };
+    let flowWindow = '15m';     // 当前选中窗口（绘图与 AI 分析共用）
+
+    // AI 资金流分析按钮（个股模式）：按当前窗口发分时资金流 + 对应股价点
+    (function () {
+      const btnEl = document.getElementById('flowAiBtn');
+      const panel = document.getElementById('flowAiPanel');
+      if (!btnEl || !panel) return;
+      btnEl.innerHTML = fundflowAiButtonHtml();
+      btnEl.querySelector('[data-fundflow-ai]').onclick = () => {
+        if (!currentCode) return toast('请先选择股票');
+        // 统一时间窗：分钟窗口分析当日分时，天窗口分析多日逐日五档（后端按窗口取数）
+        runFundflowAi({ code: currentCode, window: flowWindow, btn: btnEl.querySelector('[data-fundflow-ai]'), panel });
+      };
+    })();
 
     // 搜索框：选择股票 → 先试打开；缓存缺失则弹窗询问下载
     const sb = stockSearchInput();
@@ -179,24 +205,36 @@
       document.getElementById('peLine').innerHTML = '';
       document.getElementById('pbLine').innerHTML = '';
       document.getElementById('flowBars').innerHTML = '';
-      document.getElementById('flowLine').innerHTML = '';
       document.getElementById('flowEmpty').style.display = 'block';
-      document.getElementById('flowLineEmpty').style.display = 'block';
       document.getElementById('flowTabs').innerHTML = '';
       document.getElementById('flowIntraday').innerHTML = '';
       document.getElementById('flowBuySell').innerHTML = '';
       document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
+      const flowAi = document.getElementById('flowAiPanel');
+      if (flowAi) { flowAi.style.display = 'none'; flowAi.innerHTML = ''; }
+    }
+
+    // 指数详情：无 409 缓存缺失弹窗，数据不全对应区域显示「暂无」
+    async function openIndex() {
+      try {
+        const d = await api('/indices/' + currentCode + '?window=1', { blocking: true });
+        render(d);
+      } catch (e) {
+        document.getElementById('title').textContent = `查询失败：${e.message}`;
+        clearStockView();
+      }
     }
 
     async function openStock() {
       if (!currentCode) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
       clearStockView();
+      if (isIndexMode) return openIndex();
       // 直接调 api 以便捕获 409（loadPage 内部会吞掉错误，不适合这里）
       // window=1：分时资金流返回 1 分钟基础，前端切换刻度本地重采样
       try {
         const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
-        render(d);
+        render(d);   // render → renderFlow → draw 会按当前 window 加载落库资金流 AI 结果
       } catch (e) {
         if (e.status === 409) {
           // 缓存缺失 → 弹窗询问下载
@@ -238,11 +276,27 @@
     // 单股刷新：弹窗多选内容 → 调 /stocks/{code}/refresh[/full] → 重载
     async function refreshStock(full) {
       if (!currentCode) return toast('请先选择股票');
+      if (isIndexMode) {
+        // 指数：一键刷新（日K增量 + 点位 + 估值 + 资金流），无财务项弹窗
+        const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
+        btn.disabled = true;
+        try {
+          await api('/indices/' + currentCode + '/refresh', { blocking: true, method: 'POST' });
+          toast('指数刷新完成');
+          await loadPage();
+        } catch (e) {
+          toast('指数刷新失败：' + e.message, 4000);
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
       const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
       await doRefresh(btn, full, 'stock', currentCode);
     }
 
     async function saveExpectedGrowth() {
+      if (isIndexMode) return toast('指数不可交易');
       const v = parseFloat(document.getElementById('growthInput').value);
       const rv = parseFloat(document.getElementById('revenueGrowthInput').value);
       const pv = document.getElementById('payoutInput').value;
@@ -309,21 +363,26 @@
 
     async function aiAnalyze() {
       if (!currentCode) return toast('请先选择股票');
-      const btn = document.getElementById('aiBtn');
-      btn.disabled = true;
-      try {
-        document.getElementById('aiReportBody').innerHTML = '<div class="empty" style="padding:30px">AI 分析中，请稍候…（涉及网络调用，可能较慢）</div>';
-        document.getElementById('aiReportPanel').style.display = 'block';
-        const d = await api('/stocks/' + currentCode + '/ai-report', { method: 'POST', blocking: true });
-        renderAiReport(d);
-        toast('AI 诊股完成');
-      } catch (e) {
-        document.getElementById('aiReportBody').innerHTML =
-          `<div class="empty" style="padding:30px">诊股失败：${e.message}</div>`;
-        toast('诊股失败：' + e.message, 4000);
-      } finally {
-        btn.disabled = false;
-      }
+      // 先弹窗确认/编辑指令，确定后再发送
+      openPromptEditor('stock', async (systemPrompt) => {
+        const btn = document.getElementById('aiBtn');
+        btn.disabled = true;
+        try {
+          document.getElementById('aiReportBody').innerHTML = '<div class="empty" style="padding:30px">AI 分析中，请稍候…（涉及网络调用，可能较慢）</div>';
+          document.getElementById('aiReportPanel').style.display = 'block';
+          const body = {};
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const d = await api('/stocks/' + currentCode + '/ai-report', { method: 'POST', body, blocking: true });
+          renderAiReport(d);
+          toast('AI 诊股完成');
+        } catch (e) {
+          document.getElementById('aiReportBody').innerHTML =
+            `<div class="empty" style="padding:30px">诊股失败：${e.message}</div>`;
+          toast('诊股失败：' + e.message, 4000);
+        } finally {
+          btn.disabled = false;
+        }
+      });
     }
 
     const AI_TRAP_CN = { cycle_trap: '周期陷阱', value_trap: '价值陷阱', dividend_trap: '股息陷阱' };
@@ -419,7 +478,84 @@
       wireAiHtmlButton(body, r);
     }
 
+    // ---------- ETF 跟踪指数面板 ----------
+
+    // 渲染 #etfIndexPanel：已映射 → 链接到指数页 + 来源徽章；未映射 → 自动匹配 / 手动设置
+    async function renderEtfIndexPanel(d) {
+      const meta = document.getElementById('etfIndexMeta');
+      const actions = document.getElementById('etfIndexActions');
+      const ti = d.tracked_index;
+      if (ti) {
+        meta.innerHTML = `<a href="/static/stock.html?code=${ti.code}&index=1">${esc(ti.name)}（${ti.code}）</a>`;
+        actions.innerHTML = ti.source === 'auto'
+          ? '<span class="badge" style="background:#2563eb;color:#fff">自动匹配</span>'
+          : '<span class="badge" style="background:#e8590c;color:#fff">手动设置</span>';
+        return;
+      }
+      meta.textContent = '未设置（估值将从对应指数获取）';
+      actions.innerHTML = `
+        <button class="btn" onclick="autoMatchEtfIndex()" style="font-size:12px">自动匹配</button>
+        <button class="btn" onclick="manualEtfIndex()" style="font-size:12px">手动设置</button>`;
+    }
+
+    // 按 ETF 名称自动匹配指数并落库（source=auto）
+    async function autoMatchEtfIndex() {
+      try {
+        const d = await api('/indices/etf-map/auto?etf_code=' + encodeURIComponent(currentCode)
+          + '&etf_name=' + encodeURIComponent(lastName || ''));
+        if (!d.suggest_index_code) { toast('未能自动匹配，请手动设置'); return; }
+        await api('/indices/etf-map/' + encodeURIComponent(currentCode), {
+          method: 'PUT', body: { index_code: d.suggest_index_code, source: 'auto' },
+        });
+        toast('已自动匹配：' + d.suggest_index_name);
+        await loadPage();
+      } catch (e) {
+        toast('自动匹配失败：' + e.message, 4000);
+      }
+    }
+
+    // 手动设置弹窗：指数下拉（GET /indices），选「— 清除映射 —」表示清空
+    async function manualEtfIndex() {
+      let indices = [];
+      try { indices = await api('/indices'); } catch (e) { return toast('加载指数列表失败'); }
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.innerHTML = `
+        <div class="modal">
+          <h3>设置跟踪指数 · ${esc(lastName || currentCode)}</h3>
+          <div class="row" style="align-items:center;gap:8px">
+            <span class="muted">指数</span>
+            <select id="idxSel" style="flex:1">
+              <option value="">— 清除映射 —</option>
+              ${indices.map((d) => `<option value="${d.code}">${esc(d.name)}（${d.code}）</option>`).join('')}
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="idxCancel">取消</button>
+            <button class="btn primary" id="idxOk">保存</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#idxCancel').onclick = close;
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      mask.querySelector('#idxOk').onclick = async () => {
+        const code = mask.querySelector('#idxSel').value;
+        try {
+          await api('/indices/etf-map/' + encodeURIComponent(currentCode), {
+            method: 'PUT', body: { index_code: code || null, source: 'manual' },
+          });
+          toast(code ? '已设置跟踪指数' : '已清除映射');
+          close();
+          await loadPage();
+        } catch (e) {
+          toast('保存失败：' + e.message, 4000);
+        }
+      };
+    }
+
     function quickTrade(side) {
+      if (isIndexMode) return toast('指数不可交易');
       if (!currentCode) return toast('请先选择股票');
       const sideText = side === 'buy' ? '买入' : '卖出';
       const mask = document.createElement('div');
@@ -490,6 +626,7 @@
         return;
       }
       try {
+        if (isIndexMode) return openIndex();
         // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
         const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
         render(d);
@@ -500,10 +637,22 @@
 
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
+      // 指数模式：只隐藏买卖按钮（指数不可交易）；AI 诊股 / 资金流 AI 照常可用
+      const idxMode = !!d.is_index;
+      document.getElementById('buyBtn').style.display = idxMode ? 'none' : '';
+      document.getElementById('sellBtn').style.display = idxMode ? 'none' : '';
       const q = d.quote;
       lastQuote = q;
       lastName = d.name;
       lastFx = d.fx_rate || null;   // 港股汇率（人民币折算显示）
+      // ETF：显示跟踪指数面板（已映射链接 / 未映射可自动匹配或手动设置）；指数无此面板
+      const etfPanel = document.getElementById('etfIndexPanel');
+      if (d.is_etf) {
+        etfPanel.style.display = '';
+        renderEtfIndexPanel(d);
+      } else {
+        etfPanel.style.display = 'none';
+      }
       const missingBanner = document.getElementById('missingBanner');
       const partialMissing = d.partial_missing || [];
       if (partialMissing.length) {
@@ -525,7 +674,7 @@
         renderFinancials(d.financials);
         renderGrowth(d.live || {});
         document.getElementById('growthPanel').style.display = 'none';
-        document.getElementById('tagPanel').style.display = '';
+        document.getElementById('tagPanel').style.display = idxMode ? 'none' : '';
         document.getElementById('tagInput').value = d.tag || '';
         return;
       }
@@ -549,11 +698,15 @@
         growthPanel.style.display = 'none';
       }
       const tagPanel = document.getElementById('tagPanel');
-      tagPanel.style.display = '';
-      document.getElementById('tagInput').value = d.tag || '';
-      document.getElementById('tagMeta').textContent = d.is_etf
-        ? 'ETF：只计入持仓，不参与个股统计'
-        : '';
+      if (idxMode) {
+        tagPanel.style.display = 'none';   // 指数无标签（组合页/持仓页按标签筛选的是持仓）
+      } else {
+        tagPanel.style.display = '';
+        document.getElementById('tagInput').value = d.tag || '';
+        document.getElementById('tagMeta').textContent = d.is_etf
+          ? 'ETF：只计入持仓，不参与个股统计'
+          : '';
+      }
       const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
       const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
       const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
@@ -670,6 +823,26 @@
       mk(document.getElementById('pbQ'), 'pb_pct');
     }
 
+    // 按当前选中窗口加载该股最近落库资金流 AI 结果（batch/single，标注来源+日期）；无该窗结果隐藏。
+    // seq 守卫：快速切窗/切股只认最新响应（参照 renderPfFlow 的 pfFlowSeq 模式）。
+    let flowPersistSeq = 0;
+    async function loadFlowPersisted() {
+      const seq = ++flowPersistSeq;
+      const panel = document.getElementById('flowAiPanel');
+      if (!currentCode || !panel) return;
+      try {
+        const rpt = await api('/ai/fundflow-report/' + currentCode + '?window=' + encodeURIComponent(flowWindow), { silent: true });
+        if (seq !== flowPersistSeq) return;   // 过期响应丢弃
+        if (rpt) {
+          panel.style.display = 'block';
+          renderFundflowPersistedPanel(panel, rpt);
+        } else {
+          panel.style.display = 'none';
+          panel.innerHTML = '';
+        }
+      } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
+    }
+
     function renderFlow(d) {
       // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
       const bandsEl = document.getElementById('flowBands');
@@ -689,41 +862,46 @@
         document.getElementById('flowEmpty').style.display = 'block';
         document.getElementById('flowBars').innerHTML = '';
       }
-      const hist = d.fundflow_history || [];
-      if (hist.length) {
-        document.getElementById('flowLineEmpty').style.display = 'none';
-        fundflowLine(document.getElementById('flowLine'), hist);
-      } else {
-        document.getElementById('flowLineEmpty').style.display = 'block';
-        document.getElementById('flowLine').innerHTML = '';
-      }
-      // 分时资金流：1 分钟基础（后端始终返回），前端按 1/5/15/30 本地重采样
+      // 统一时间窗：分钟窗口读当日分时，天窗口读多日逐日五档（本地聚合桶）
       const base = d.fundflow_15m || [];
+      const hist = d.fundflow_history || [];
       const intraEl = document.getElementById('flowIntraday');
       const bsEl = document.getElementById('flowBuySell');
       const intraEmpty = document.getElementById('flowIntradayEmpty');
       const tabsEl = document.getElementById('flowTabs');
-      if (base.length) {
-        intraEmpty.style.display = 'none';
-        const windows = d.fundflow_windows || [1, 5, 15, 30];
-        const draw = (w) => {
-          const pts = resampleFlow(base, w);
-          fundflowIntraday(intraEl, pts, w);
-          fundflowBuySell(bsEl, pts, w);
-        };
-        tabsEl.innerHTML = '';
-        tabsEl.appendChild(periodTabs({
-          periods: windows.map((x) => x + '分钟'),
-          active: '15分钟',
-          onChange: (label) => { draw(parseInt(label, 10)); },
-        }));
-        draw(15);
-      } else {
-        intraEmpty.style.display = 'block';
-        intraEl.innerHTML = '';
-        bsEl.innerHTML = '';
-        tabsEl.innerHTML = '';
-      }
+      const isMin = (w) => /m$/.test(w);
+      const draw = (w) => {
+        flowWindow = w;
+        loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
+        if (isMin(w)) {
+          if (!base.length) {
+            intraEmpty.style.display = 'block';
+            intraEl.innerHTML = ''; bsEl.innerHTML = '';
+            return;
+          }
+          intraEmpty.style.display = 'none';
+          const pts = resampleFlow(base, parseInt(w, 10));
+          fundflowIntraday(intraEl, pts, parseInt(w, 10));
+          fundflowBuySell(bsEl, pts, parseInt(w, 10));
+        } else {
+          const days = bucketFlowDays(hist, parseInt(w, 10));
+          if (!days.length) {
+            intraEmpty.style.display = 'block';
+            intraEl.innerHTML = ''; bsEl.innerHTML = '';
+            return;
+          }
+          intraEmpty.style.display = 'none';
+          fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
+          fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
+        }
+      };
+      tabsEl.innerHTML = '';
+      tabsEl.appendChild(periodTabs({
+        periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+        active: FLOW_WINDOW_LABEL[flowWindow],
+        onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+      }));
+      draw(flowWindow);
     }
 
     function renderFinancials(fin) {

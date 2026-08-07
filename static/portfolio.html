@@ -67,16 +67,18 @@
           </div>
         </div>
         <div class="panel" id="fundflowPanel">
-          <h2>组合资金流 <span class="sub" id="pfFlowNote">穿透持仓：A股个股五档/买盘卖盘按持仓求和</span></h2>
-          <div id="pfFlowTabs"></div>
+          <h2>组合资金流 <span class="sub" id="pfFlowNote">穿透持仓：A股个股五档/买盘卖盘按持仓求和 · 分钟窗口=当日分时，天窗口=多日聚合</span></h2>
+          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+            <div id="pfFlowTabs"></div>
+            <div style="flex:1"></div>
+            <div id="pfFlowBatchBtn"></div>
+          </div>
+          <div id="pfFlowBatchPanel" style="display:none;margin:0 0 10px"></div>
           <div class="row" style="align-items:stretch">
             <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:340px"></div>
             <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:340px"></div>
           </div>
-          <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:260px"></div>
-            <div class="chart sm" id="pfFlowLine" style="flex:1;min-width:280px;height:260px"></div>
-          </div>
+          <div class="chart sm" id="pfFlowBars" style="height:240px"></div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流（请先「全量刷新」，或今日非交易日）。</div>
         </div>
         <div class="panel" id="chartRow">
@@ -104,7 +106,7 @@
             <table>
               <thead>
                 <tr><th>代码/名称</th><th>权重</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>今日盈亏</th><th>PE</th><th>PB</th>
-                    <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th></tr>
+                    <th>PE分位</th><th>PB分位</th><th>股息率</th><th>ROE</th><th>资金面</th></tr>
               </thead>
               <tbody id="stockBody"></tbody>
             </table>
@@ -125,6 +127,28 @@
     let lastPortfolio = null;
     let pfSortMode = 'weight_desc';
     let seriesPeriod = '3y';
+    // 资金流统一时间窗（与个股页同口径）：'1m'/'5m'/'15m'/'30m'（当日分时）+ '1d'/'7d'/'30d'（多日聚合桶）
+    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', '1d', '7d', '30d'];
+    const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+                                '1d': '1天', '7d': '7天', '30d': '30天' };
+    let pfFlowWindow = '15m';   // 当前选中窗口（绘图与 AI 分析共用）
+
+    // 批量分析持仓按钮：1m/5m 窗口过小拒绝（前端守卫 + 后端 400）；成功后刷新资金面列
+    (function () {
+      const wrap = document.getElementById('pfFlowBatchBtn');
+      const panel = document.getElementById('pfFlowBatchPanel');
+      if (!wrap || !panel) return;
+      wrap.innerHTML = '<button class="btn" data-fundflow-batch style="margin-bottom:8px">⚡ 批量分析持仓</button>';
+      wrap.querySelector('[data-fundflow-batch]').onclick = () => {
+        if (/^(1|5)m$/.test(pfFlowWindow)) {
+          toast('批量分析窗口过小，请选择 15 分钟及以上');
+          return;
+        }
+        const t = tagsQS();
+        const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+        runFundflowBatch({ tags, window: pfFlowWindow, btn: wrap.querySelector('[data-fundflow-batch]'), panel, onDone: loadAndRender });
+      };
+    })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
     let allTags = [];
     let tagCards = [];              // 全持仓按标签聚合（{tag,value_cny,day_pnl,count}，市值降序）
@@ -132,6 +156,7 @@
     let tagsLoaded = false;
     let aiPortfolioReport = null;   // 最新组合 AI 报告（GET /ai-scoring/portfolio）
     let aiConfigured = false;
+    let flowReports = {};           // 持仓资金面 map：{code:{correlation,summary,trade_date,window,source}}
 
     function tagsQS() {
       if (!allTags.length) return '';
@@ -216,6 +241,7 @@
         lastPortfolio = p;
         aiConfigured = aiData.configured;
         aiPortfolioReport = aiData.report || null;
+        flowReports = await loadFlowReports((p.stocks || []).map((s) => s.code));
         if (!tagsLoaded) {                               // 首次加载后默认全选
           tagsLoaded = true;
           allTags = p.all_tags || [];
@@ -229,6 +255,7 @@
         renderGauges(p);
         renderCharts(p);
         renderTable(p);
+        await renderPersistedBatchPanel();
         renderSeries(p);
         renderPfFlow();
         renderTagPrefList();
@@ -312,20 +339,24 @@
       wireAiHtmlButton(body, r);
     }
 
-    // 手动触发组合 AI 打分（跟随当前标签筛选）
-    async function runPortfolioAi() {
-      try {
-        const d = await api('/ai-scoring/portfolio' + tagsQS(), { method: 'POST', blocking: true });
-        aiPortfolioReport = { report: d.report, profile_hash: d.profile_hash, model_name: d.model_name,
-                              created_at: d.created_at, updated_at: d.created_at, stale: false };
-        aiConfigured = true;
-        renderSummary(lastPortfolio);
-        renderAiScore();
-        renderTagPrefList();
-        toast(`AI 组合打分完成：${d.report.score} 分（${d.report.rating}）`);
-      } catch (e) {
-        toast('AI 打分失败：' + e.message, 5000);
-      }
+    // 手动触发组合 AI 打分（跟随当前标签筛选；先弹窗确认/编辑指令）
+    function runPortfolioAi() {
+      openPromptEditor('portfolio', async (systemPrompt) => {
+        try {
+          const body = {};
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const d = await api('/ai-scoring/portfolio' + tagsQS(), { method: 'POST', body, blocking: true });
+          aiPortfolioReport = { report: d.report, profile_hash: d.profile_hash, model_name: d.model_name,
+                                created_at: d.created_at, updated_at: d.created_at, stale: false };
+          aiConfigured = true;
+          renderSummary(lastPortfolio);
+          renderAiScore();
+          renderTagPrefList();
+          toast(`AI 组合打分完成：${d.report.score} 分（${d.report.rating}）`);
+        } catch (e) {
+          toast('AI 打分失败：' + e.message, 5000);
+        }
+      });
     }
 
     // 标签偏好列表（各标签偏好状态 + 编辑入口）
@@ -424,6 +455,7 @@
         <td class="muted">—</td>
         <td class="${cls(day)}">${signed(day)}</td>
         <td colspan="6"></td>
+        <td></td>
       </tr>`;
     }
 
@@ -445,6 +477,7 @@
           <td>${fmtNum(s.pb_pct)}%</td>
           <td>${fmtNum(s.dv)}%</td>
           <td>${fmtNum(s.roe)}%</td>
+          <td>${fundflowCorrBadge(flowReports[s.code])}</td>
         </tr>`).join('');
       const oldFoot = table.querySelector('tfoot');
       if (oldFoot) oldFoot.remove();
@@ -517,32 +550,36 @@
         const intraEl = document.getElementById('pfFlowIntraday');
         const bsEl = document.getElementById('pfFlowBuySell');
         const barsEl = document.getElementById('pfFlowBars');
-        const lineEl = document.getElementById('pfFlowLine');
         if (!base.length && !hist.length && !hasBars) {
           empty.style.display = 'block';
-          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = ''; barsEl.innerHTML = ''; lineEl.innerHTML = '';
+          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = ''; barsEl.innerHTML = '';
           return;
         }
         empty.style.display = 'none';
-        if (base.length) {
-          const windows = d.fundflow_windows || [1, 5, 15, 30];
-          const draw = (w) => {
-            const pts = resampleFlow(base, w);
-            fundflowIntraday(intraEl, pts, w);
-            fundflowBuySell(bsEl, pts, w);
-          };
-          tabsEl.innerHTML = '';
-          tabsEl.appendChild(periodTabs({
-            periods: windows.map((x) => x + '分钟'),
-            active: '15分钟',
-            onChange: (label) => { draw(parseInt(label, 10)); },
-          }));
-          draw(15);
-        } else {
-          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = '';
-        }
+        // 统一时间窗：分钟读当日分时，天窗口读多日逐日五档（本地聚合桶）
+        const isMin = (w) => /m$/.test(w);
+        const draw = (w) => {
+          pfFlowWindow = w;
+          if (isMin(w)) {
+            if (!base.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; return; }
+            const pts = resampleFlow(base, parseInt(w, 10));
+            fundflowIntraday(intraEl, pts, parseInt(w, 10));
+            fundflowBuySell(bsEl, pts, parseInt(w, 10));
+          } else {
+            const days = bucketFlowDays(hist, parseInt(w, 10));
+            if (!days.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; return; }
+            fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
+            fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
+          }
+        };
+        tabsEl.innerHTML = '';
+        tabsEl.appendChild(periodTabs({
+          periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+          active: FLOW_WINDOW_LABEL[pfFlowWindow],
+          onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+        }));
+        draw(pfFlowWindow);
         if (hasBars) fundflowBars(barsEl, latest); else barsEl.innerHTML = '';
-        if (hist.length) fundflowLine(lineEl, hist); else lineEl.innerHTML = '';
       } catch (e) {
         if (seq !== pfFlowSeq) return;                     // 过期失败也不隐藏面板
         // 资金流请求失败：隐藏面板，不影响其余汇总
@@ -555,6 +592,43 @@
       pfSortMode = e.target.value;
       if (lastPortfolio) renderTable(lastPortfolio);
     });
+
+    // 重拉资金面报告 map + 重绘列表（批量分析完成/标签筛选切换后复用）
+    async function loadAndRender() {
+      if (!lastPortfolio) return;
+      flowReports = await loadFlowReports((lastPortfolio.stocks || []).map((s) => s.code));
+      renderTable(lastPortfolio);
+      await renderPersistedBatchPanel();
+    }
+
+    // 刷新后从落库报告重建「批量分析持仓」面板（只取 source=batch），F5 不丢
+    async function renderPersistedBatchPanel() {
+      const panel = document.getElementById('pfFlowBatchPanel');
+      if (!panel) return;
+      const nameMap = {};
+      ((lastPortfolio && lastPortfolio.stocks) || []).forEach((s) => { nameMap[s.code] = s.name; });
+      const reports = Object.entries(flowReports)
+        .filter(([, r]) => r && r.source === 'batch')
+        .map(([code, r]) => ({
+          code, name: nameMap[code] || '', correlation: r.correlation, summary: r.summary,
+          trade_date: r.trade_date, window: r.window, source: r.source,
+        }));
+      if (!reports.length) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+      }
+      panel.style.display = 'block';
+      // 组合相关性块：精确匹配当前标签组合（空/全选='全部'），取不到则按 scope 取最近一条
+      const t = tagsQS();
+      const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      let coh = await loadCoherence('portfolio', tags || '全部', reports[0].window);
+      if (!coh) coh = await loadCoherence('portfolio', null, reports[0].window);
+      renderFundflowBatchPanel(panel, {
+        window: reports[0].window, stocks_count: reports.length,
+        date: reports[0].trade_date, reports, coherence: coh,
+      });
+    }
 
     loadPage();
   </script>

@@ -11,7 +11,8 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
-from app.data.base import Bar, build_manager
+from app.data.base import Bar
+from app.instruments import get_instrument
 from app.data.cache import (
     get_daily_price,
     get_financials,
@@ -24,6 +25,7 @@ from app.data.cache import (
     upsert_daily_prices,
     upsert_financials,
     upsert_fundflow_min,
+    upsert_index_intraday,
     upsert_quantile,
 )
 from app.market.calendar import is_market_closed, is_trade_day
@@ -48,10 +50,39 @@ def get_holdings_codes() -> list[str]:
         return [r["code"] for r in rows]
 
 
+def get_index_codes() -> list[str]:
+    """index_defs 全量指数代码（按 sort_order）。"""
+    with get_conn() as c:
+        rows = c.execute("SELECT code FROM index_defs ORDER BY sort_order").fetchall()
+        return [r["code"] for r in rows]
+
+
+def refresh_index(code: str, now: datetime | None = None) -> dict:
+    """单指数一站式同步：日K(增量) + 实时点位 + 资金流(东财五档)。
+
+    指数不做估值（用户确认指数 PE/PB 不关注），故不调 sync_valuation。
+    复用 sync_daily_bars/sync_fundflow 的增量与「当日已算跳过」逻辑：
+    二次启动日K只拉缺失、资金流当日覆盖。不碰财务/持仓。
+    单指数任一步异常整体捕获返回 error，不中断并发预热。
+    """
+    now = now or datetime.now()
+    out = {"code": code}
+    try:
+        out["daily"] = sync_daily_bars(code, now)
+        q = _sync_realtime_quote(code, now)
+        out["quote"] = bool(q)
+        # 恒指等无东财资金流源的指数：sync_fundflow 内部按 has_fundflow/空源返回空
+        out["fundflow"] = sync_fundflow(code, now)
+        return out
+    except Exception as e:  # noqa: BLE001 单指数失败不中断预热
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
+
 def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     """增量同步日K。force=True（全量刷新）时强制重拉全量窗口并覆盖已定格行。"""
     today = now.date().isoformat()
-    manager = build_manager()
+    inst = get_instrument(code)
     latest = get_latest_daily_price(code)
     last_date = latest["trade_date"] if latest else None
 
@@ -74,7 +105,7 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
         return {"code": code, "fetched": 0, "reason": "cached"}
 
     try:
-        bars = manager.daily_bars(code, start, today)
+        bars = inst.daily_bars(start, today)
     except Exception:
         return {"code": code, "fetched": 0, "reason": "source_fail"}
     if bars:
@@ -84,7 +115,7 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
         for b in bars:
             pct_changes.append(round((b.close / prev - 1) * 100, 2) if prev else None)
             prev = b.close
-        upsert_daily_prices(code, bars, manager.sources[0].name(), pct_changes, force_closed=force)
+        upsert_daily_prices(code, bars, inst.source_name, pct_changes, force_closed=force)
         fetched = len(bars)
     else:
         fetched = 0
@@ -95,10 +126,14 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
 
 
 def _sync_realtime_quote(code: str, now: datetime):
-    """拉分钟级实时行情并覆盖当日未收盘日K行；失败返回 None。"""
+    """拉分钟级实时行情并覆盖当日日K行；失败返回 None。
+
+    指数实时行情即当日权威快照（含真实成交额，腾讯三元组），即便已收盘也强制覆盖当日行，
+    供指数资金面 scale 派生成交额；其余类型维持原行为：已收盘定格不被实时行情覆盖。
+    """
     try:
-        manager = build_manager()
-        q = manager.quote(code)
+        inst = get_instrument(code)
+        q = inst.quote()
     except Exception:  # noqa: BLE001 实时行情失败由日K兜底
         return None
     if not q or not q.price:
@@ -112,8 +147,9 @@ def _sync_realtime_quote(code: str, now: datetime):
         [Bar(date=today, open=q.open or q.price, high=q.high or q.price,
              low=q.low or q.price, close=q.price, volume=q.volume or 0.0,
              amount=q.amount or 0.0)],
-        manager.sources[0].name(),
+        inst.source_name,
         [pct_chg],
+        force_closed=bool(inst.is_index),  # 指数收盘后也写实时成交额
     )
     return q
 
@@ -140,7 +176,9 @@ def sync_valuation(code: str, now: datetime, price: float | None = None, force: 
 
 
 def sync_financials(code: str, force: bool = False) -> dict:
-    manager = build_manager()
+    inst = get_instrument(code)
+    if not inst.has_financials:
+        return {"code": code, "fetched": 0, "reason": "skipped"}
     cached = get_financials(code)
     # 增量：缓存命中须关键字段齐全（net_profit/net_assets/eps/total_shares 任一缺失视为未同步，重拉自愈）。
     # 全量（force=True）：无视缓存强制重拉覆盖。
@@ -148,7 +186,7 @@ def sync_financials(code: str, force: bool = False) -> dict:
         if all(cached[k] is not None for k in ("net_profit", "net_assets", "eps", "total_shares")):
             return {"code": code, "fetched": 0, "reason": "cached"}
     try:
-        fin = manager.financials(code)
+        fin = inst.financials()
         if fin is None:
             return {"code": code, "fetched": 0, "reason": "source_fail"}
         upsert_financials(code, fin)
@@ -181,18 +219,17 @@ def sync_current_valuation(code: str, now: datetime, price: float | None = None)
 
 
 def sync_fundflow(code: str, now: datetime) -> dict:
-    """当日分时五档资金流：腾讯分笔派生，落 daily_fundflow_cache + fundflow_15m_cache。
+    """当日资金流：个股/ETF 腾讯分笔派生五档，指数腾讯分时量价（东财已弃用）。
 
-    港股与非交易日跳过；单股失败不中断整体刷新。
+    落库 daily_fundflow_cache + fundflow_15m_cache（个股/ETF 五档）或
+    index_intraday_cache（指数分时量价）。无资金流类型（港股）与非交易日跳过。
     """
-    from app.data.base import is_hk_code
-
-    if is_hk_code(code) or not is_trade_day(now.date()):
+    inst = get_instrument(code)
+    if not (inst.has_fundflow or inst.has_intraday_quote) or not is_trade_day(now.date()):
         return {"code": code, "fetched": 0, "reason": "skipped"}
     try:
-        manager = build_manager()
-        day_flow = manager.daily_fundflow(code)
-        intraday = manager.fundflow_intraday(code)
+        day_flow = inst.daily_fundflow() if inst.has_fundflow else []
+        intraday = inst.intraday_quote() if inst.has_intraday_quote else inst.fundflow_intraday()
     except Exception as e:  # noqa: BLE001 资金流失败不中断整体刷新
         logger.warning("[资金流] %s 获取失败：%s", code, e)
         return {"code": code, "fetched": 0, "reason": "source_fail"}
@@ -200,12 +237,14 @@ def sync_fundflow(code: str, now: datetime) -> dict:
     # 当日自适应分档阈值（P50/P80/P95），前端展示各档组成条件；拿不到不影响落库
     bands = None
     try:
-        bands = manager.fundflow_bands(code)
+        bands = inst.fundflow_bands()
     except Exception:  # noqa: BLE001
         pass
     if day_flow:
         upsert_daily_fundflow(code, today, day_flow[0], bands)
-    if intraday:
+    if inst.has_intraday_quote:
+        upsert_index_intraday(code, today, intraday)
+    elif intraday:
         upsert_fundflow_min(code, today, intraday)
     fetched = len(intraday)
     logger.info("[资金流] %s %s：当日分时 %d 个分钟点，总净流入=%s",
@@ -361,8 +400,25 @@ def refresh_full(items: list[str] | None = None) -> dict:
     result["fx"] = _refresh_fx(now) if "fx" in items else None
     # 分红除权：今天有除权的持仓自动摊薄成本（幂等）
     result["dividend"] = _apply_dividends(now)
+    # 日级资金流 buy/sell 回填：历史天从分时分钟点按日聚合补全（幂等，只补空值）
+    try:
+        from app.data.cache import backfill_daily_buysell
+
+        result["buysell_backfill"] = backfill_daily_buysell()
+    except Exception as e:  # noqa: BLE001 回填失败不影响刷新结果
+        logger.warning("[资金流] 历史 buy/sell 回填失败：%s", e)
+        result["buysell_backfill"] = f"error: {e}"
     # 百度序列可能更新 → 按最新全部持仓权重重算组合综合 PE/PB 序列
     result["portfolio_rebuilt"] = _rebuild_portfolio_series() if "portfolio" in items else 0
+    # 收盘后补打：全量刷新数据定格后，今天已收盘 + 有交易 + 无 AI 报告 → 后台补打一次
+    try:
+        from app.services.ai_scoring import catchup_pending_daily
+
+        catchup_pending_daily()
+        result["daily_catchup"] = "ok"
+    except Exception as e:  # noqa: BLE001 补打失败不影响刷新结果
+        logger.warning("[AI打分] 全量刷新后补打失败：%s", e)
+        result["daily_catchup"] = f"error: {e}"
     logger.info("[刷新完成] 全量刷新：%d 只股票，本次拉取 %d 条数据，组合序列重算 %d 点",
                 len(codes), result["total_fetched"], result["portfolio_rebuilt"])
     return result

@@ -81,6 +81,8 @@ CREATE TABLE IF NOT EXISTS daily_fundflow_cache (
     p15            REAL,                -- 当日自适应分档阈值 P15（特小单上界）
     p40            REAL,                -- 当日自适应分档阈值 P40（小单上界）
     p75            REAL,                -- 当日自适应分档阈值 P75（中单上界）
+    buy_amount     REAL,                -- 全天买盘成交金额
+    sell_amount    REAL,                -- 全天卖盘成交金额
     PRIMARY KEY (code, trade_date)
 );
 
@@ -93,6 +95,16 @@ CREATE TABLE IF NOT EXISTS fundflow_15m_cache (
     xs_net     REAL,                -- 特小单净流入
     buy_amount REAL,                -- 买盘成交金额
     sell_amount REAL,               -- 卖盘成交金额
+    PRIMARY KEY (code, trade_date, ts)
+);
+
+CREATE TABLE IF NOT EXISTS index_intraday_cache (
+    code       TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    ts         TEXT NOT NULL,           -- 'HH:MM' 1分钟刻度
+    price      REAL,                    -- 该分钟收盘价
+    volume     REAL,                    -- 该分钟成交量(手)
+    amount     REAL,                    -- 该分钟成交额(元)
     PRIMARY KEY (code, trade_date, ts)
 );
 
@@ -229,6 +241,52 @@ CREATE TABLE IF NOT EXISTS ai_daily_reports (
     created_at   TEXT,
     updated_at   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS ai_fundflow_reports (
+    code         TEXT NOT NULL,           -- 股票代码
+    trade_date   TEXT NOT NULL,           -- 分析日（资金流 trade_date）
+    source       TEXT NOT NULL DEFAULT 'batch',  -- batch=组合批量 / single=个股单独分析（同一份存储）
+    window       TEXT NOT NULL DEFAULT '15m',    -- 实际分析窗口
+    correlation  TEXT,                    -- positive|negative|divergence|neutral
+    summary      TEXT, main_force TEXT, rhythm TEXT,
+    divergence   TEXT,                    -- JSON 数组
+    alerts       TEXT,                    -- JSON 数组
+    conclusion   TEXT,
+    model_name   TEXT, created_at TEXT, updated_at TEXT,
+    PRIMARY KEY (code, trade_date, source, window)
+);
+
+CREATE TABLE IF NOT EXISTS ai_fundflow_coherence_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL,           -- portfolio=持仓组合 / indices=指数组合
+    scope_key   TEXT NOT NULL,           -- 组合标识：'全部' / 逗号 tags / 逗号指数 codes
+    trade_date  TEXT NOT NULL,           -- 资金流日期
+    window      TEXT NOT NULL,           -- 分析窗口（15m/30m/1d...）
+    correlation TEXT,                    -- positive|negative|top_divergence|bottom_divergence|neutral
+    summary     TEXT,                    -- 组合整体一句话
+    points      TEXT,                    -- JSON 数组：相关性证据点
+    conclusion  TEXT,                    -- 组合层面结论
+    model_name  TEXT, created_at TEXT, updated_at TEXT,
+    UNIQUE (scope, scope_key, trade_date, window)
+);
+
+CREATE TABLE IF NOT EXISTS index_defs (
+    code       TEXT PRIMARY KEY,          -- 指数代码（如 000300/399006/HSI）
+    name       TEXT NOT NULL,             -- 指数名（如 沪深300）
+    symbol     TEXT,                      -- 腾讯行情代码（sh000300/sz399001/hkHSI），指数一律绕过 to_symbol
+    legu_code  TEXT,                      -- 乐咕指数代码（000300.SH/000922.CSI/HSI），估值用
+    pe_source  TEXT NOT NULL DEFAULT 'none',  -- legu/none
+    pb_source  TEXT NOT NULL DEFAULT 'none',  -- legu/none
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS etf_index_map (
+    etf_code   TEXT PRIMARY KEY,          -- 场内 ETF 代码
+    index_code TEXT NOT NULL REFERENCES index_defs(code),
+    source     TEXT NOT NULL DEFAULT 'manual',  -- manual=手动 / auto=名称匹配自动
+    created_at TEXT,
+    updated_at TEXT
+);
 """
 
 
@@ -244,7 +302,7 @@ def get_conn() -> sqlite3.Connection:
 
 # 数据库 schema 版本：config 表记录当前版本，迁移按版本递增执行
 SCHEMA_VERSION_KEY = "db_schema_version"
-_CURRENT_VERSION = 6
+_CURRENT_VERSION = 7
 
 # 各版本迁移的列补充（幂等：已存在则跳过）。顺序执行，新版本追加在后。
 # 格式：{目标版本: [(列名, "ALTER TABLE ... ADD COLUMN ..."), ...]}
@@ -282,6 +340,10 @@ _MIGRATE_COLUMNS: dict[int, list[tuple[str, str]]] = {
     ],
     6: [
         ("tags_json", "ALTER TABLE ai_portfolio_reports ADD COLUMN tags_json TEXT"),
+    ],
+    7: [
+        ("buy_amount", "ALTER TABLE daily_fundflow_cache ADD COLUMN buy_amount REAL"),
+        ("sell_amount", "ALTER TABLE daily_fundflow_cache ADD COLUMN sell_amount REAL"),
     ],
 }
 
@@ -404,12 +466,95 @@ def migrate_db() -> bool:
     return True
 
 
+def _ensure_fundflow_report_pk_window(conn: sqlite3.Connection) -> None:
+    """兼容旧库：ai_fundflow_reports 主键缺 window → 重建为 (code, trade_date, source, window)。
+
+    旧库该表主键为 (code, trade_date, source)，同一股票换时间窗分析会互相覆盖；
+    SQLite 无法 ALTER 主键，只能整表重建（同事务内幂等，仅检测到旧 PK 才重建）。
+    """
+    try:
+        info = conn.execute("PRAGMA table_info(ai_fundflow_reports)").fetchall()
+    except sqlite3.OperationalError:
+        return  # 表不存在（新库由 _SCHEMA 直接建新 PK）
+    if not info:
+        return
+    pk_cols = {r["name"] for r in info if r["pk"] > 0}
+    if pk_cols == {"code", "trade_date", "source", "window"}:
+        return
+    conn.execute("ALTER TABLE ai_fundflow_reports RENAME TO ai_fundflow_reports_old")
+    conn.execute(
+        """CREATE TABLE ai_fundflow_reports (
+            code         TEXT NOT NULL,
+            trade_date   TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT 'batch',
+            window       TEXT NOT NULL DEFAULT '15m',
+            correlation  TEXT, summary TEXT, main_force TEXT, rhythm TEXT,
+            divergence   TEXT, alerts TEXT, conclusion TEXT,
+            model_name   TEXT, created_at TEXT, updated_at TEXT,
+            PRIMARY KEY (code, trade_date, source, window)
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO ai_fundflow_reports
+             (code, trade_date, source, window, correlation, summary, main_force, rhythm,
+              divergence, alerts, conclusion, model_name, created_at, updated_at)
+           SELECT code, trade_date, source, window, correlation, summary, main_force, rhythm,
+                  divergence, alerts, conclusion, model_name, created_at, updated_at
+             FROM ai_fundflow_reports_old"""
+    )
+    conn.execute("DROP TABLE ai_fundflow_reports_old")
+
+
+# 指数注册表种子（ON CONFLICT DO NOTHING 只插缺，不覆盖用户手改）。
+# (code, name, symbol, legu_code, pe_source, pb_source, sort_order)
+# 估值源仅标已验证可用的乐咕指数代码；其余 none（估值显示「暂无」，用户可手动改）。
+_INDEX_SEED = [
+    ("000001", "上证指数", "sh000001", None, "none", "none", 1),
+    ("000016", "上证50", "sh000016", "000016.SH", "legu", "legu", 2),
+    ("000300", "沪深300", "sh000300", "000300.SH", "legu", "legu", 3),
+    ("000905", "中证500", "sh000905", None, "none", "none", 4),
+    ("000010", "上证180", "sh000010", None, "none", "none", 5),
+    ("000688", "科创50", "sh000688", "000688.SH", "legu", "legu", 6),
+    ("000852", "中证1000", "sh000852", None, "none", "none", 7),
+    ("000922", "中证红利", "sh000922", "000922.CSI", "legu", "legu", 8),
+    ("000906", "中证800", "sh000906", None, "none", "none", 9),
+    ("399001", "深证成指", "sz399001", None, "none", "none", 10),
+    ("399330", "深证100", "sz399330", None, "none", "none", 11),
+    ("399006", "创业板指", "sz399006", "399006.SZ", "none", "none", 12),
+    ("399673", "创业板50", "sz399673", None, "none", "none", 13),
+    ("399303", "国证2000", "sz399303", None, "none", "none", 14),
+    ("HSI", "恒生指数", "hkHSI", "HSI", "legu", "none", 15),
+    ("HSTECH", "恒生科技", "hkHSTECH", None, "none", "none", 16),
+]
+
+# ETF→指数映射种子（仅已确认的，其余由自动匹配/手动填）
+_ETF_INDEX_SEED = [
+    ("510300", "000300", "manual"),
+]
+
+
+def _seed_index_defs(conn: sqlite3.Connection) -> None:
+    """幂等插入指数注册表与 ETF 映射种子（只补缺，不覆盖已有）。"""
+    conn.executemany(
+        """INSERT OR IGNORE INTO index_defs
+             (code, name, symbol, legu_code, pe_source, pb_source, sort_order)
+           VALUES (?,?,?,?,?,?,?)""",
+        _INDEX_SEED,
+    )
+    conn.executemany(
+        """INSERT OR IGNORE INTO etf_index_map (etf_code, index_code, source)
+           VALUES (?,?,?)""",
+        _ETF_INDEX_SEED,
+    )
+
+
 def init_db() -> None:
     """建表并写入默认评分权重（幂等）。"""
     with get_conn() as conn:
         # WAL 模式：读写并发不互相阻塞（全局刷新并行写各股缓存时避免偶发 database is locked）
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        _seed_index_defs(conn)
         # 兼容旧库：补加缺失列
         for _col, _ddl in (
             ("dv_per_share", "ALTER TABLE financial_cache ADD COLUMN dv_per_share REAL"),
@@ -430,5 +575,14 @@ def init_db() -> None:
                 conn.execute(_ddl)
             except sqlite3.OperationalError:
                 pass
+        # 兼容旧库：ai_fundflow_reports 主键缺 window → 重建（按 window 分存，跨窗不覆盖）
+        _ensure_fundflow_report_pk_window(conn)
     # 版本化迁移（建表之后，新列/数据迁移）
     migrate_db()
+    # 指数注册表载入内存（is_index_code/index_symbol 判定用；测试库随之刷新）
+    try:
+        from app.data.base import load_index_registry
+
+        load_index_registry()
+    except Exception:  # noqa: BLE001 注册表加载失败不影响建表
+        pass

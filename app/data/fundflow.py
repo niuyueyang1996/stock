@@ -139,6 +139,89 @@ def resample_points(points: list[FundflowPoint], window_min: int) -> list[Fundfl
     return out
 
 
+def intraday_window_series(rows: list[dict], window_min: int = 15) -> list[dict]:
+    """分时资金流 dict 行（1 分钟基础，含 ts 'HH:MM'、五档净流入与买卖盘）→ 指定窗口序列。
+
+    返回 [{ts, super(超大单), large(大单), medium(中单), small(小单), xs(特小单),
+           main(主力=超大+大), cum(截至该窗口累计主力净流入), buy(买盘成交额), sell(卖盘成交额)}]，
+    按 ts 升序。
+    读取侧/AI 打分用：把分钟点重聚合到 5/15/30 窗口，供 AI 看全天各档资金节奏；
+    buy/sell 与天窗口 buy_amount/sell_amount 同义（同窗口求和，识别拆单/对倒）。
+    window_min<=1 时退化为 1 分钟原样（每个 ts 独立）。
+    """
+    w = max(1, int(window_min or 15))
+    agg: dict[str, list[float]] = {}
+    for r in rows:
+        hm = str(r["ts"])
+        minute = int(hm[:2]) * 60 + int(hm[3:5])
+        bstart = (minute // w) * w
+        ts = f"{bstart // 60:02d}:{bstart % 60:02d}"
+        b = agg.setdefault(ts, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        b[0] += float(r.get("super_large_net") or 0.0)
+        b[1] += float(r.get("large_net") or 0.0)
+        b[2] += float(r.get("medium_net") or 0.0)
+        b[3] += float(r.get("small_net") or 0.0)
+        b[4] += float(r.get("xs_net") or 0.0)
+        b[5] += float(r.get("buy_amount") or 0.0)
+        b[6] += float(r.get("sell_amount") or 0.0)
+    out = []
+    cum = 0.0
+    for ts in sorted(agg):
+        sp, lg, md, sm, xs, buy, sell = agg[ts]
+        main = sp + lg
+        cum += main
+        out.append({
+            "ts": ts,
+            "super": round(sp, 0), "large": round(lg, 0), "medium": round(md, 0),
+            "small": round(sm, 0), "xs": round(xs, 0),
+            "main": round(main, 0), "cum": round(cum, 0),
+            "buy": round(buy, 0), "sell": round(sell, 0),
+        })
+    return out
+
+
+def index_intraday_window_series(rows: list[dict], window_min: int = 15) -> list[dict]:
+    """指数分时量价 dict 行（1 分钟基础，含 ts/price/volume/amount）→ 指定窗口序列。
+
+    返回 [{ts, price(窗口末分钟收盘), volume(窗口累计成交量), amount(窗口累计成交额),
+           cum(截至该窗口累计量), cum_amount(截至该窗口累计成交额),
+           day_pct(本窗口量占全天%), cum_pct(累计量占全天%)}]，按 ts 升序。
+    AI 量价分析用：据此判断放量/缩量/量价背离（指数无五档资金流，量价是分时基础）。
+    成交额从 amount 字段逐点求和派生（无 amount 时恒 0）。
+    """
+    w = max(1, int(window_min or 15))
+    total = sum(float(r.get("volume") or 0.0) for r in rows)
+    agg: dict[str, dict] = {}
+    for r in rows:
+        hm = str(r["ts"])
+        minute = int(hm[:2]) * 60 + int(hm[3:5])
+        bstart = (minute // w) * w
+        ts = f"{bstart // 60:02d}:{bstart % 60:02d}"
+        b = agg.setdefault(ts, {"price": 0.0, "volume": 0.0, "amount": 0.0})
+        b["price"] = float(r.get("price") or 0.0)  # 窗口末分钟收盘
+        b["volume"] += float(r.get("volume") or 0.0)
+        b["amount"] += float(r.get("amount") or 0.0)
+    out = []
+    cum = 0.0
+    cum_amount = 0.0
+    for ts in sorted(agg):
+        b = agg[ts]
+        cum += b["volume"]
+        cum_amount += b["amount"]
+        day_pct = (b["volume"] / total * 100) if total else 0.0
+        out.append({
+            "ts": ts,
+            "price": round(b["price"], 3),
+            "volume": round(b["volume"], 0),
+            "amount": round(b["amount"], 0),
+            "cum": round(cum, 0),
+            "cum_amount": round(cum_amount, 0),
+            "day_pct": round(day_pct, 2),
+            "cum_pct": round(cum / total * 100, 2) if total else 0.0,
+        })
+    return out
+
+
 def tick_bands(ticks: list[tuple[str, float, int]]) -> dict | None:
     """当日自适应分档阈值 {p15,p40,p75,p95}，供前端展示各档组成条件。无分笔返回 None。"""
     if not ticks:
@@ -154,8 +237,14 @@ def ticks_to_day(ticks: list[tuple[str, float, int]], trade_date: str) -> Fundfl
     p15, p40, p75, p95 = compute_quantiles([a for _, a, _ in ticks])
     tot = {"super": 0.0, "large": 0.0, "medium": 0.0, "small": 0.0, "xs": 0.0}
     total_amount = 0.0
+    buy = 0.0
+    sell = 0.0
     for _, amount, sign in ticks:
         total_amount += amount
+        if sign > 0:
+            buy += amount
+        elif sign < 0:
+            sell += amount
         tot[classify_tick(amount, p15, p40, p75, p95)] += amount * sign
     sp, lg, md, sm, xs = tot["super"], tot["large"], tot["medium"], tot["small"], tot["xs"]
     main = sp + lg
@@ -171,4 +260,6 @@ def ticks_to_day(ticks: list[tuple[str, float, int]], trade_date: str) -> Fundfl
         small_net=round(sm, 2),
         xs_net=round(xs, 2),
         main_net_pct=round(main_pct, 2),
+        buy_amount=round(buy, 2),
+        sell_amount=round(sell, 2),
     )

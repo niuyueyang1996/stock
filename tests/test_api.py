@@ -397,6 +397,29 @@ def test_stock_detail_cache_status_endpoint(client):
     assert r2.json()["data"]["code"] == "CACHE_OK"
 
 
+def test_cache_status_missing_only_bars(client):
+    """弹窗只缺股价才弹：有行情无财务/估值（如 ETF）不报 missing，只缺行情才 CACHE_MISS。"""
+    from datetime import date
+
+    from app.data.base import Bar
+    from app.data.cache import upsert_daily_prices
+
+    # 只有日K，无财务、无估值序列 → 不弹窗（missing 为空）
+    upsert_daily_prices("510300", [Bar(date.today().isoformat(), 4.7, 4.7, 4.7, 4.7, 100, 1000)], "mock")
+    r = client.get("/api/stocks/510300/cache-status")
+    data = r.json()["data"]
+    assert data["code"] == "CACHE_OK"
+    assert data["missing_items"] == []
+    assert "bars" in data["available_items"]
+    assert "financials" not in data["missing_items"]
+
+    # 无行情 → 仍只报 bars（财务/估值缺失不再触发 409）
+    r2 = client.get("/api/stocks/600000/cache-status")
+    data2 = r2.json()["data"]
+    assert data2["code"] == "CACHE_MISS"
+    assert data2["missing_items"] == ["bars"]
+
+
 def test_stock_detail_download_then_open(client):
     """前端下载流：409 → POST refresh/full → GET 自动重试成功。"""
     r = client.get("/api/stocks/600000")
@@ -444,8 +467,13 @@ def test_refresh_dynamic_items_filter(client):
 
 def test_refresh_full_concurrent_order_preserved(client):
     """全局全量刷新并发执行：多持仓结果保序、无单股失败、并发写不报 database is locked。"""
+    from app.data.base import load_index_registry
     from app.models.db import get_conn
 
+    # 000001 同时是上证指数代码：模拟真实用户已持有该股（stocks 表有记录）→ 按个股放行
+    with get_conn() as c:
+        c.execute("INSERT INTO stocks (code, name, market) VALUES ('000001', '平安银行', 'sz')")
+    load_index_registry()
     items = [
         {"code": "600000", "name": "浦发银行", "price": 10, "quantity": 100},
         {"code": "600519", "name": "贵州茅台", "price": 1500, "quantity": 10},

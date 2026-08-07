@@ -10,6 +10,7 @@ data/*.db-shm
 data/*.db-wal
 data/.*
 data/*.json
+data/data/
 .server.log
 build/
 dist/

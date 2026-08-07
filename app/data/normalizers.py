@@ -258,6 +258,166 @@ def normalize_valuation_history(df) -> list[ValuationPoint]:
     return points
 
 
+def _clip_positive(df, value_col: str, period: str, date_col: str = "日期") -> list[ValuationPoint]:
+    """从估值 DataFrame 取 value_col 列，按 period 截取近 N 天 + 剔非正/空，返回升序 ValuationPoint。
+
+    ETF 估值 = 跟踪指数估值。乐咕给 2005 年至今全历史，按 period 截取近 N 天；
+    非正值（≤0）剔除——估值无意义的段（如负 PE）不参与分位。
+    """
+    from datetime import date, timedelta
+
+    if df is None or df.empty or value_col not in df.columns:
+        return []
+    days = {"近一年": 365, "近三年": 1095, "近五年": 1825}.get(period, 365)
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    points = []
+    for _, r in df.iterrows():
+        try:
+            d = str(r[date_col])[:10]
+        except (TypeError, ValueError, KeyError):
+            continue
+        if d < cutoff:
+            continue
+        try:
+            v = float(r[value_col])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if v > 0:
+            points.append(ValuationPoint(date=d, value=v))
+    return points
+
+
+def normalize_index_valuation(df, indicator: str, period: str) -> list[ValuationPoint]:
+    """乐咕指数估值历史 DataFrame（akshare 中文列）→ 指定周期 list[ValuationPoint]。
+
+    ETF 估值 = 跟踪指数估值。PE 取「滚动市盈率」(TTM 口径，与百度 PE(TTM) 一致)、
+    PB 取「市净率」，按 period 截取近 N 天 + 剔非正。
+    """
+    col = {"市盈率(TTM)": "滚动市盈率", "市净率": "市净率"}.get(indicator)
+    if not col:
+        return []
+    return _clip_positive(df, col, period)
+
+
+def normalize_index_valuation_http(df, indicator: str, period: str) -> list[ValuationPoint]:
+    """乐咕 HTTP 指数估值 DataFrame（英文列 date/close/ttmPe/addLyrPe/pb）→ 指定周期序列。
+
+    indicator='pe' 主取 ttmPe 列、全 0/缺才回退 addLyrPe（恒指场景：ttmPe 全 0 仅 addLyrPe 有效）；
+    'pb' 取 pb 列。按 period 截取近 N 天 + 剔非正。无列/全空返回 []。
+    """
+    if indicator == "pb":
+        return _clip_positive(df, "pb", period, date_col="date")
+    pts = _clip_positive(df, "ttmPe", period, date_col="date")
+    if pts:
+        return pts
+    return _clip_positive(df, "addLyrPe", period, date_col="date")
+
+
+def normalize_index_quote(parts: list[str], code: str) -> Quote | None:
+    """腾讯指数实时行情原始字段（~ 分隔）→ Quote。
+
+    指数行情与港股同字段布局（[1]名 [3]价 [4]昨收 [5]开 [6]量 [32]涨跌幅 [33]高 [34]低），
+    但成交额不同：A股指数 [35] 为「价格/量/成交额」三元组（元），港股 [37] 是单一数值。
+    成交额取三元组第 3 段；无三元组（如 hkHSI）沿用港股口径。
+    """
+    q = normalize_hk_quote(parts, code)
+    if q is None:
+        return None
+    try:
+        t = parts[35].split("/")
+        if len(t) >= 3:
+            q.amount = float(t[2])
+    except (IndexError, TypeError, ValueError):
+        pass
+    return q
+
+
+def normalize_index_fundflow_day(rows: list[str]) -> list:
+    """东财指数日级五档资金流原始行 → list[FundflowDay]。
+
+    行格式：日期,主力,小单,中单,大单,超大单,主力占比,小单占比,中单占比,大单占比,超大单占比,收盘,涨跌幅。
+    东财无特小单/买卖盘：xs_net/buy_amount/sell_amount=0；netamount=主力+中单+小单（东财口径）。
+    """
+    from app.data.base import FundflowDay
+
+    out = []
+    for line in rows or []:
+        f = [v.strip() for v in line.split(",")]
+        if len(f) < 7:
+            continue
+        try:
+            main = float(f[1]); small = float(f[2]); medium = float(f[3])
+            large = float(f[4]); super_large = float(f[5]); pct = float(f[6])
+        except (TypeError, ValueError):
+            continue
+        out.append(FundflowDay(
+            date=f[0],
+            netamount=round(main + medium + small, 2),
+            main_net=round(main, 2),
+            super_large_net=round(super_large, 2),
+            large_net=round(large, 2),
+            medium_net=round(medium, 2),
+            small_net=round(small, 2),
+            main_net_pct=round(pct, 2),
+            xs_net=0.0, buy_amount=0.0, sell_amount=0.0,
+        ))
+    return out
+
+
+def normalize_index_fundflow_min(rows: list[str]) -> list:
+    """东财指数分时五档资金流原始行 → list[FundflowPoint]（1 分钟基础粒度）。
+
+    行格式：日期时间,主力,小单,中单,大单,超大单。ts 取时间部分 'HH:MM'。
+    东财无特小单/买卖盘：xs_net/buy_amount/sell_amount=0。
+    """
+    from app.data.fundflow import FundflowPoint
+
+    out = []
+    for line in rows or []:
+        f = [v.strip() for v in line.split(",")]
+        if len(f) < 6:
+            continue
+        try:
+            main = float(f[1]); small = float(f[2]); medium = float(f[3])
+            large = float(f[4]); super_large = float(f[5])
+        except (TypeError, ValueError):
+            continue
+        ts = f[0][-5:] if len(f[0]) >= 5 else f[0]  # '2026-08-07 15:00' → '15:00'
+        out.append(FundflowPoint(
+            ts=ts,
+            main_net=round(main, 2),
+            super_large_net=round(super_large, 2),
+            large_net=round(large, 2),
+            medium_net=round(medium, 2),
+            small_net=round(small, 2),
+            xs_net=0.0, buy_amount=0.0, sell_amount=0.0,
+        ))
+    return out
+
+
+def normalize_index_trends(rows) -> list[dict]:
+    """腾讯指数分钟K线原始行 → list[dict]（ts/price/volume/amount，1 分钟基础粒度）。
+
+    行格式：[时间戳'YYYYMMDDHHMM', 开, 收, 高, 低, 量(手), {}, 涨跌幅]（可含前一日尾盘，调用方按日过滤）。
+    ts 取 'HH:MM'；腾讯 m1 无成交额 → amount=None。指数分时没有五档资金流（无逐笔成交），
+    量价是分时分析的数据基础。
+    """
+    out = []
+    for row in rows or []:
+        f = row.split(",") if isinstance(row, str) else list(row)
+        if len(f) < 6:
+            continue
+        try:
+            price = float(f[2])     # 收盘价
+            volume = float(f[5])    # 成交量(手)
+        except (TypeError, ValueError):
+            continue
+        stamp = str(f[0])
+        ts = f"{stamp[8:10]}:{stamp[10:12]}" if len(stamp) >= 12 else stamp
+        out.append({"ts": ts, "price": round(price, 3), "volume": volume, "amount": None})
+    return out
+
+
 # ---------- A 股财务 / 分红 / 总股本（人民币口径，无需折算） ----------
 
 def normalize_dividend_info(df) -> tuple[float | None, str | None]:

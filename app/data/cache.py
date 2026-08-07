@@ -133,20 +133,22 @@ def upsert_daily_fundflow(code: str, trade_date: str, flow, bands: dict | None =
         c.execute(
             """INSERT INTO daily_fundflow_cache(code, trade_date, netamount, main_net,
                  super_large_net, large_net, medium_net, small_net, xs_net, main_net_pct,
-                 p50, p80, p95, p15, p40, p75)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 p50, p80, p95, p15, p40, p75, buy_amount, sell_amount)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(code, trade_date) DO UPDATE SET
                  netamount=excluded.netamount, main_net=excluded.main_net,
                  super_large_net=excluded.super_large_net, large_net=excluded.large_net,
                  medium_net=excluded.medium_net, small_net=excluded.small_net,
                  xs_net=excluded.xs_net,
                  main_net_pct=excluded.main_net_pct,
-                 p15=excluded.p15, p40=excluded.p40, p75=excluded.p75, p95=excluded.p95""",
+                 p15=excluded.p15, p40=excluded.p40, p75=excluded.p75, p95=excluded.p95,
+                 buy_amount=excluded.buy_amount, sell_amount=excluded.sell_amount""",
             (code, trade_date, flow.netamount, flow.main_net,
              flow.super_large_net, flow.large_net, flow.medium_net, flow.small_net,
              getattr(flow, "xs_net", 0.0), flow.main_net_pct,
              bands.get("p50"), bands.get("p80"), bands.get("p95"),
-             bands.get("p15"), bands.get("p40"), bands.get("p75")),
+             bands.get("p15"), bands.get("p40"), bands.get("p75"),
+             getattr(flow, "buy_amount", 0.0), getattr(flow, "sell_amount", 0.0)),
         )
 
 
@@ -175,6 +177,31 @@ def get_fundflow_min(code: str, trade_date: str) -> list:
     with get_conn() as c:
         rows = c.execute(
             "SELECT * FROM fundflow_15m_cache WHERE code=? AND trade_date=? ORDER BY ts",
+            (code, trade_date),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_index_intraday(code: str, trade_date: str, points: list[dict]) -> None:
+    """批量写指数当日分时量价（1 分钟基础粒度，UPSERT 覆盖同 ts 行）。points: [{ts,price,volume,amount}]。"""
+    if not points:
+        return
+    with get_conn() as c:
+        c.executemany(
+            """INSERT INTO index_intraday_cache(code, trade_date, ts, price, volume, amount)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(code, trade_date, ts) DO UPDATE SET
+                 price=excluded.price, volume=excluded.volume, amount=excluded.amount""",
+            [(code, trade_date, p["ts"], p.get("price"), p.get("volume"), p.get("amount"))
+             for p in points],
+        )
+
+
+def get_index_intraday(code: str, trade_date: str) -> list:
+    """读指数当日分时量价（1 分钟基础，按 ts 升序），返回 dict 列表。"""
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT * FROM index_intraday_cache WHERE code=? AND trade_date=? ORDER BY ts",
             (code, trade_date),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -210,6 +237,36 @@ def get_daily_fundflows(code: str, start: str, end: str) -> list:
             "SELECT * FROM daily_fundflow_cache WHERE code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date",
             (code, start, end),
         ).fetchall()
+
+
+def backfill_daily_buysell() -> int:
+    """把分时分钟点的 buy/sell 按日聚合回填到日级缓存（buy_amount/sell_amount 为空的历史天）。
+
+    净流入/五档从接入日起已在存，但 buy/sell 是新列，历史天无值；
+    分时分钟点（fundflow_15m_cache）同样按日累积且带 buy/sell，可据此补全。返回回填天数。
+    """
+    with get_conn() as c:
+        pairs = c.execute(
+            """SELECT DISTINCT f.code, f.trade_date
+               FROM fundflow_15m_cache f
+               LEFT JOIN daily_fundflow_cache d
+                 ON d.code = f.code AND d.trade_date = f.trade_date
+               WHERE d.buy_amount IS NULL OR d.sell_amount IS NULL"""
+        ).fetchall()
+    n = 0
+    for r in pairs:
+        code, trade_date = r["code"], r["trade_date"]
+        points = get_fundflow_min(code, trade_date)
+        buy = sum(float(p.get("buy_amount") or 0.0) for p in points)
+        sell = sum(float(p.get("sell_amount") or 0.0) for p in points)
+        with get_conn() as c:
+            c.execute(
+                """UPDATE daily_fundflow_cache SET buy_amount=?, sell_amount=?
+                   WHERE code=? AND trade_date=?""",
+                (round(buy, 2), round(sell, 2), code, trade_date),
+            )
+        n += 1
+    return n
 
 
 # ---------- 财务指标缓存 ----------

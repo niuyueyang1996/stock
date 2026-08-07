@@ -29,6 +29,11 @@ class ExpandBody(BaseModel):
 
 class DateBody(BaseModel):
     date: str
+    system_prompt: str | None = None   # 覆盖默认每日打分指令（前端弹窗可编辑后透传）
+
+
+class ScoreBody(BaseModel):
+    system_prompt: str | None = None   # 覆盖默认组合打分指令（前端弹窗可编辑后透传）
 
 
 def _parse_tags(tags: str | None) -> list[str] | None:
@@ -124,10 +129,12 @@ def portfolio_report(tags: str | None = None):
 
 
 @router.post("/ai-scoring/portfolio")
-def score_portfolio(tags: str | None = None):
-    """手动触发组合 AI 打分（跟随标签筛选：?tags=红利,科技）。"""
+def score_portfolio(tags: str | None = None, body: ScoreBody | None = None):
+    """手动触发组合 AI 打分（跟随标签筛选：?tags=红利,科技）。
+    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
     try:
-        result = svc.score_portfolio(_parse_tags(tags))
+        result = svc.score_portfolio(_parse_tags(tags),
+                                     body.system_prompt if body else None)
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI打分] 组合%s 完成 %s（%s）", f"筛选{tags}" if tags else "全部", result["report"]["score"], result["report"]["rating"])
@@ -154,9 +161,10 @@ def daily_report(date: str):
 
 @router.post("/ai-scoring/daily")
 def score_daily(body: DateBody):
-    """某日 AI 打分（一次调用逐笔+汇总）。无交易或无激活模型返回 400。"""
+    """某日 AI 打分（一次调用逐笔+汇总）。无交易或无激活模型返回 400。
+    body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
     try:
-        result = svc.score_daily(body.date)
+        result = svc.score_daily(body.date, body.system_prompt)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if result is None:
