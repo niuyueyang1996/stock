@@ -1,0 +1,65 @@
+static/stock.html
+  s_5923dcd79b34ed::t_d8a282307c7c4a 367,373
+static/trade.html
+  s_5923dcd79b34ed::t_a310ec2ac84bf4 102,106
+app/services/ai.py
+  s_5923dcd79b34ed::t_d5897e18c08b28 1245-1247
+  s_5923dcd79b34ed::t_b03281bf6c2f38 226,230,246-247
+  s_5923dcd79b34ed::t_8e3772fb6b94e4 219-220,224-225
+  s_5923dcd79b34ed::t_55977cd9bfa239 1160-1161,1168
+  s_5923dcd79b34ed::t_548751e05cf870 948-950
+  s_5923dcd79b34ed::t_ca57a0fe42f42e 550
+  s_5923dcd79b34ed::t_5dd3b7da004ae7 487-488,492
+  s_5923dcd79b34ed::t_a83c468a788d05 214-218,221-223
+  s_5923dcd79b34ed::t_86b63a550ee2c8 505-507
+  s_5923dcd79b34ed::t_87e4d403cbc08b 603
+  s_5923dcd79b34ed::t_1bf48bb46adecf 926-927,933
+  s_5923dcd79b34ed::t_997a91282add11 1186-1188
+  s_5923dcd79b34ed::t_d4d6de7f65ab98 1213,1216
+app/services/ai_scoring.py
+  s_5923dcd79b34ed::t_30f6d6e63f0ce9 325-326,331
+  s_5923dcd79b34ed::t_1da6f3f13ad01f 344-346
+  s_5923dcd79b34ed::t_704fe701ea90bd 717-719
+  s_5923dcd79b34ed::t_437dce9ab4f8af 693-694,699
+static/portfolio.html
+  s_5923dcd79b34ed::t_c87e1132009584 622-623,626-627
+  s_5923dcd79b34ed::t_494bb6dfee937a 344,346
+app/api/ai_scoring.py
+  s_5923dcd79b34ed::t_b375f3b859f439 170
+  s_5923dcd79b34ed::t_75f79afdb88718 33,38
+  s_5923dcd79b34ed::t_612ff1f1a3f55d 139-140
+tests/test_instruments.py
+  s_5923dcd79b34ed::t_53920800223ab0 365-416
+static/js/common.js
+  s_5923dcd79b34ed::t_3d9ec9e50b9855 693
+  s_5923dcd79b34ed::t_137b86eadc6cd8 599
+  s_5923dcd79b34ed::t_99a125e66dae23 646,653
+  s_5923dcd79b34ed::t_6826cb37403a8e 604-606,617-622,638,640
+  s_5923dcd79b34ed::t_ef3134b0e0a688 739,744
+static/indices.html
+  s_5923dcd79b34ed::t_f6d9a49719cbe4 248-250
+app/api/ai.py
+  s_5923dcd79b34ed::t_fdb241d1765510 138-140
+  s_5923dcd79b34ed::t_7b043e4eb2a4d8 32,42
+  s_5923dcd79b34ed::t_c3598accc73312 152
+  s_5923dcd79b34ed::t_8d6b4b063cc2a2 184-185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8cca2b48cff77bfccb83600075c2e652cd8e4efc",
+  "prompts": {},
+  "logical_commit_id": "8cca2b48cff77bfccb83600075c2e652cd8e4efc",
+  "sessions": {
+    "s_5923dcd79b34ed": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "eb9cb5f8-9760-48b1-ae8a-8e4346553155",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 7892,
+      "total_deletions": 1823
+    }
+  }
+}
