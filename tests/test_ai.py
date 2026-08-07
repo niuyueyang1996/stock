@@ -70,6 +70,80 @@ def _add_active_model():
     return m
 
 
+# ---------- URL / chat_json 降级 ----------
+
+def test_openai_compat_url_with_and_without_v1():
+    """DeepSeek 一键模板无 /v1，也应拼成 .../v1/chat/completions；已带 /v1 不重复。"""
+    assert ai_svc._openai_compat_url("https://api.deepseek.com", "chat/completions") == (
+        "https://api.deepseek.com/v1/chat/completions"
+    )
+    assert ai_svc._openai_compat_url("https://api.deepseek.com/v1", "chat/completions") == (
+        "https://api.deepseek.com/v1/chat/completions"
+    )
+    assert ai_svc._openai_compat_url("https://api.deepseek.com/v1/", "models") == (
+        "https://api.deepseek.com/v1/models"
+    )
+
+
+def test_chat_json_retries_on_empty_content(monkeypatch):
+    """DeepSeek JSON 模式偶发空 content：首次空 → 去掉 json_object 重试成功。"""
+    calls = []
+
+    class _Resp:
+        def __init__(self, payload, status=200):
+            self.status_code = status
+            self._payload = payload
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(dict(json or {}))
+        if len(calls) == 1:
+            assert calls[0].get("response_format") == {"type": "json_object"}
+            return _Resp({
+                "choices": [{"message": {"content": ""}, "finish_reason": "stop"}],
+            })
+        assert "response_format" not in calls[1]
+        assert "reasoning_effort" not in calls[1]
+        return _Resp({
+            "choices": [{"message": {"content": '{"ok": true}'}, "finish_reason": "stop"}],
+        })
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr(ai_svc, "get_reasoning_effort", lambda: "high")
+    out = ai_svc.chat_json(
+        {"base_url": "https://api.deepseek.com", "api_key": "sk", "model": "deepseek-v4-flash"},
+        "sys", "user",
+    )
+    assert out == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_chat_json_http_error_includes_body(monkeypatch):
+    """鉴权/余额失败应带 HTTP 状态与 body，不应误报缓存过少。"""
+
+    class _Resp:
+        status_code = 401
+        text = '{"error":{"message":"Invalid API key"}}'
+
+        def json(self):
+            raise AssertionError("4xx 不应再解析 JSON")
+
+    monkeypatch.setattr("requests.post", lambda *a, **k: _Resp())
+    monkeypatch.setattr(ai_svc, "get_reasoning_effort", lambda: "")
+    with pytest.raises(ValueError) as ei:
+        ai_svc.chat_json(
+            {"base_url": "https://api.deepseek.com", "api_key": "bad", "model": "m"},
+            "s", "u",
+        )
+    msg = str(ei.value)
+    assert "401" in msg
+    assert "Invalid API key" in msg
+    assert "缓存" not in msg
+
+
 # ---------- 模型 CRUD / 切换 ----------
 
 def test_save_and_activate_model():

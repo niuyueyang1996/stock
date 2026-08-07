@@ -2,7 +2,7 @@
 
 - 模型配置存 ai_models 表，切换时 is_active 唯一。
 - chat_json 调 OpenAI 兼容 /v1/chat/completions，优先 response_format json_object，
-  失败降级为普通文本后自行解析 JSON。
+  HTTP 失败或 content 空时降级（去掉 json_object / reasoning_effort）再试。
 - build_stock_context 复用缓存汇总个股数据（读缓存零网络）作为结构化输入。
 - analyze_stock 组装 prompt → 调 AI → 规整输出 → 存 ai_reports。
 """
@@ -14,6 +14,9 @@ from app.config import HTTP_HEADERS, REQUEST_TIMEOUT
 from app.models.db import get_conn
 
 logger = logging.getLogger("ai")
+
+# DeepSeek JSON Output 偶发空 content；输出预算过小也会截断。给足上限。
+_AI_MAX_TOKENS = 8192
 
 # 诊股 8 维度（固定，用于 prompt 与输出校验）
 DIMENSIONS = ["cyclicality", "moat", "fundamentals", "growth", "dividend", "valuation", "competition", "fundflow"]
@@ -244,15 +247,76 @@ def _intensity_instruction(intensity: str | None) -> str:
     return _INTENSITY_INSTRUCTIONS.get(str(intensity or "").lower().strip(), "")
 
 
+def _http_error_detail(resp) -> str:
+    """从失败响应提取简短可读原因（状态码 + 截断 body）。"""
+    status = getattr(resp, "status_code", "?")
+    body = ""
+    try:
+        body = (resp.text or "").strip().replace("\n", " ")
+    except Exception:  # noqa: BLE001
+        body = ""
+    if len(body) > 400:
+        body = body[:400] + "…"
+    return f"HTTP {status}" + (f"：{body}" if body else "")
+
+
+def _extract_message_content(data: dict) -> tuple[str, str]:
+    """从 chat/completions JSON 取 assistant content 与 finish_reason。
+
+    content 可能为 null（DeepSeek JSON 模式偶发空返回；思考模式也可能先填 reasoning_content）。
+    """
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices:
+        raise ValueError("AI 响应无 choices（模型名/额度/接口异常，请核对配置与余额）")
+    choice0 = choices[0] if isinstance(choices[0], dict) else {}
+    msg = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
+    content = msg.get("content")
+    finish = str(choice0.get("finish_reason") or "")
+    return ("" if content is None else str(content)), finish
+
+
+def _post_chat_completion(url: str, headers: dict, payload: dict):
+    """POST 一次 chat/completions，返回 (content, finish_reason)。失败抛 ValueError。"""
+    import requests
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 网络/超时
+        raise ValueError(f"AI 接口网络失败: {e}") from e
+    if resp.status_code >= 400:
+        raise ValueError(f"AI 接口调用失败（{_http_error_detail(resp)}）")
+    try:
+        data = resp.json()
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"AI 响应非 JSON: {e}") from e
+    return _extract_message_content(data)
+
+
+def _parse_json_content(content: str) -> dict:
+    """把模型返回文本解析为 dict（支持 ```json 围栏）。"""
+    txt = str(content or "").strip()
+    if not txt:
+        raise ValueError(
+            "AI 返回空内容（接口 HTTP 成功但 message.content 为空；"
+            "DeepSeek JSON 模式偶发此问题，或思考级别/模型不兼容。请重试，或换模型/降低思考级别）"
+        )
+    if txt.startswith("```"):
+        txt = txt.strip("`").strip()
+        if txt.lower().startswith("json"):
+            txt = txt[4:].strip()
+    try:
+        return json.loads(txt)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"AI 输出解析失败: {e}") from e
+
+
 def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None) -> dict:
     """调 OpenAI 兼容接口并解析 JSON 输出。失败抛 ValueError。输入输出均打印日志。
 
     - 附带 reasoning_effort（思考级别，默认 high 最高）；provider 不支持会被忽略。
     - effort 非 None 时覆盖全局思考级别（「分析强度」快速/深入用）；None 用全局配置。
-    - 降级路径（json_object / reasoning_effort 失败）会移除两者重试。
+    - 首次失败（HTTP 错 / content 空）会去掉 response_format 与 reasoning_effort 再试一次。
     """
-    import requests
-
     url = _openai_compat_url(model_cfg["base_url"], "chat/completions")
     payload = {
         "model": model_cfg["model"],
@@ -261,6 +325,7 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
             {"role": "user", "content": user},
         ],
         "temperature": 0.4,
+        "max_tokens": _AI_MAX_TOKENS,
         "response_format": {"type": "json_object"},
     }
     if effort is None:
@@ -271,34 +336,29 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
     logger.info("[AI] 请求 %s model=%s | reasoning=%s | system=%s | user=%s",
                 url, model_cfg["model"], effort or "-", system[:300], user[:2000])
     headers = {**HTTP_HEADERS, "Authorization": f"Bearer {model_cfg['api_key']}"}
+
+    content, finish = "", ""
+    first_err: Exception | None = None
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:  # noqa: BLE001 优先 json_object，失败降级普通文本
-        logger.warning("[AI] json_object 调用失败，降级普通文本：%s", e)
+        content, finish = _post_chat_completion(url, headers, payload)
+        if not str(content or "").strip():
+            raise ValueError(
+                f"AI 返回空内容（finish_reason={finish or '-'}；"
+                "常见于 DeepSeek JSON 模式偶发空返回）"
+            )
+    except Exception as e:  # noqa: BLE001 优先 json_object，失败/空内容降级普通文本
+        first_err = e
+        logger.warning("[AI] json_object 调用失败或空内容，降级普通文本：%s", e)
+        payload.pop("response_format", None)
+        payload.pop("reasoning_effort", None)  # provider 不支持时一并移除
         try:
-            payload.pop("response_format", None)
-            payload.pop("reasoning_effort", None)   # provider 不支持时一并移除
-            resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
+            content, finish = _post_chat_completion(url, headers, payload)
         except Exception as e2:  # noqa: BLE001
-            raise ValueError(f"AI 接口调用失败: {e2}")
-    # 打印输出日志（截断）
-    logger.info("[AI] 响应 %s | content=%s", url, str(content or "")[:2000])
-    # 提取 JSON（可能带 ```json 围栏）
-    txt = str(content or "").strip()
-    if not txt:
-        raise ValueError("AI 返回空内容（请求可能被拒绝或该股缓存数据过少）")
-    if txt.startswith("```"):
-        txt = txt.strip("`").strip()
-        if txt.lower().startswith("json"):
-            txt = txt[4:].strip()
-    try:
-        return json.loads(txt)
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"AI 输出解析失败: {e}")
+            raise ValueError(f"AI 接口调用失败: {e2}（首次：{first_err}）") from e2
+
+    logger.info("[AI] 响应 %s | finish=%s | content=%s",
+                url, finish or "-", str(content or "")[:2000])
+    return _parse_json_content(content)
 
 
 # ---------- 个股数据汇总（结构化输入） ----------

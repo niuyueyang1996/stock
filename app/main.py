@@ -21,6 +21,14 @@ logger = logging.getLogger("api")
 
 
 def create_app() -> FastAPI:
+    # 打包无控制台态可能 stdout/stderr=None；必须在预热线程拉 akshare 前补齐，否则 tqdm 崩。
+    from app.config import IS_PACKAGED, SKIP_STARTUP_TASKS
+
+    if IS_PACKAGED:
+        from app.windows_launcher import ensure_stdio
+
+        ensure_stdio()
+
     app = FastAPI(title=APP_NAME, version=APP_VERSION)
 
     # 启动时建表（幂等）
@@ -68,10 +76,21 @@ def create_app() -> FastAPI:
                 from app.api.stocks import preload_market_lists
 
                 mark("缓存全市场列表")
-                preload_market_lists()
-                logger.info("[预热] 全市场列表缓存就绪，搜索与名称回填可用")
+                counts = preload_market_lists()
+                total = sum(counts.values())
+                if total:
+                    logger.info(
+                        "[预热] 全市场列表缓存就绪：A股 %d / ETF %d / 港股 %d，搜索与名称回填可用",
+                        counts.get("a", 0), counts.get("etf", 0), counts.get("hk", 0),
+                    )
+                else:
+                    logger.warning(
+                        "[预热] 市场列表全部为空，名称搜索不可用。"
+                        "常见原因：安装包无控制台模式下进度条库崩溃（请升级安装包），"
+                        "或网络失败。可退出后重新打开应用重试。"
+                    )
             except Exception:  # noqa: BLE001 市场列表预热失败不影响服务
-                logger.warning("[预热] 市场列表预热失败（不影响服务，可稍后全量刷新重试）")
+                logger.exception("[预热] 市场列表预热失败（不影响服务，可重启重试）")
             complete("全市场列表")
 
             try:
@@ -96,8 +115,6 @@ def create_app() -> FastAPI:
             complete("今日 AI 评分")
 
             finish()
-
-        from app.config import SKIP_STARTUP_TASKS
 
         if not SKIP_STARTUP_TASKS:
             threading.Thread(target=_startup_tasks, daemon=True).start()

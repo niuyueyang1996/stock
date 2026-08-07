@@ -332,26 +332,76 @@ def test_search_without_cache_returns_empty(client):
     """缓存缺失（预热尚未完成）时搜索快速返回空，不阻塞、不报错。"""
     r = client.get("/api/stocks/search?q=600000")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "data": []}
+    assert r.json() == {"ok": True, "data": [], "lists_ready": False}
 
 
 def test_preload_market_lists_warms_both(monkeypatch):
-    """启动预热依次拉取 A 股与港股；单个源失败不影响另一个。"""
+    """启动预热依次拉取 A 股 / ETF / 港股；单个源失败不影响另一个。"""
     import app.api.stocks as smod
 
     calls = []
-    monkeypatch.setattr(smod, "_load_stock_list", lambda: calls.append("a"))
-    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: calls.append("hk"))
-    smod.preload_market_lists()
-    assert calls == ["a", "hk"]
+    monkeypatch.setattr(smod, "_load_stock_list", lambda: calls.append("a") or [{"code": "1"}])
+    monkeypatch.setattr(smod, "_load_etf_list", lambda: calls.append("etf") or [{"code": "2"}])
+    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: calls.append("hk") or [{"code": "3"}])
+    counts = smod.preload_market_lists()
+    assert calls == ["a", "etf", "hk"]
+    assert counts == {"a": 1, "etf": 1, "hk": 1}
 
     def _boom():
         raise RuntimeError("download failed")
 
     monkeypatch.setattr(smod, "_load_stock_list", _boom)
     calls.clear()
-    smod.preload_market_lists()
-    assert calls == ["hk"]
+    counts = smod.preload_market_lists()
+    assert calls == ["etf", "hk"]
+    assert counts["a"] == 0
+    assert counts["etf"] == 1
+    assert counts["hk"] == 1
+
+
+def test_preload_survives_none_stdio(monkeypatch, tmp_path):
+    """模拟安装包 console=False：stdout/stderr 为 None 时，补齐 stdio 后预热可写缓存。"""
+    import sys
+
+    import app.api.stocks as smod
+    from app.windows_launcher import ensure_stdio
+
+    monkeypatch.setattr(smod, "_stock_list_path", lambda: tmp_path / "stock_list.json")
+    monkeypatch.setattr(smod, "_etf_stock_list_path", lambda: tmp_path / "etf_list.json")
+    monkeypatch.setattr(smod, "_hk_stock_list_path", lambda: tmp_path / "hk_stock_list.json")
+
+    def _fake_a():
+        path = smod._stock_list_path()
+        rows = [{"code": "600519", "name": "贵州茅台"}]
+        path.write_text(__import__("json").dumps(rows), encoding="utf-8")
+        return rows
+
+    monkeypatch.setattr(smod, "_load_stock_list", _fake_a)
+    monkeypatch.setattr(smod, "_load_etf_list", lambda: [])
+    monkeypatch.setattr(smod, "_load_hk_stock_list", lambda: [])
+
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout = None
+        sys.stderr = None
+        ensure_stdio()
+        assert sys.stdout is not None and sys.stderr is not None
+        counts = smod.preload_market_lists()
+        assert counts["a"] == 1
+        assert (tmp_path / "stock_list.json").exists()
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+
+
+def test_ensure_stdio_noop_when_present():
+    import sys
+
+    from app.windows_launcher import ensure_stdio
+
+    out, err = sys.stdout, sys.stderr
+    ensure_stdio()
+    assert sys.stdout is out
+    assert sys.stderr is err
 
 
 def test_expected_growth_crud(client):

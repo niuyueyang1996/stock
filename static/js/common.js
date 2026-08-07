@@ -625,8 +625,25 @@ function stockSearchInput() {
     if (!q) { sug.style.display = 'none'; return; }
     timer = setTimeout(async () => {
       try {
-        const rows = await api('/stocks/search?q=' + encodeURIComponent(q) + '&limit=10', { silent: true });
+        // 读完整 JSON（含 lists_ready）；api() 只返回 data，看不到预热失败提示
+        const res = await fetch('/api/stocks/search?q=' + encodeURIComponent(q) + '&limit=10');
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.detail || json.msg || `HTTP ${res.status}`);
+        const rows = json.data || [];
         sug.innerHTML = '';
+        if (!rows.length) {
+          if (json.lists_ready === false) {
+            const tip = document.createElement('div');
+            tip.className = 'stock-sug-item';
+            tip.style.cssText = 'color:#888;cursor:default';
+            tip.textContent = '市场列表未就绪：请退出后重新打开应用完成预热';
+            sug.appendChild(tip);
+            sug.style.display = 'block';
+          } else {
+            sug.style.display = 'none';
+          }
+          return;
+        }
         rows.forEach((r) => {
           const o = document.createElement('div');
           o.className = 'stock-sug-item';
@@ -638,7 +655,7 @@ function stockSearchInput() {
           };
           sug.appendChild(o);
         });
-        sug.style.display = rows.length ? 'block' : 'none';
+        sug.style.display = 'block';
       } catch (e) { /* 忽略搜索失败 */ }
     }, 250);
   });

@@ -1,5 +1,6 @@
 """个股分析路由：分位/估值/财务/资金流详情 + 股票搜索 + 个股刷新 + 缓存状态。"""
 import json
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from app.services.quote import get_quote
 from app.services.holdings import set_tag
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _cache_status(code: str) -> dict:
@@ -166,7 +168,8 @@ def _load_hk_stock_list() -> list[dict]:
                 "market": "hk",
             } for code in codes]
     except Exception:  # noqa: BLE001 港股列表失败不影响 A 股搜索
-        return []
+        logger.exception("[市场列表] 港股列表下载失败")
+        return _read_hk_stock_list_cache()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False)
@@ -239,24 +242,49 @@ def _load_etf_list() -> list[dict]:
         rows = [{"code": str(r["代码"]).zfill(6), "name": str(r["名称"]), "market": "etf"}
                 for _, r in df.iterrows() if str(r["代码"]).strip()]
     except Exception:  # noqa: BLE001 ETF 列表失败不影响 A 股/港股搜索
-        return []
+        logger.exception("[市场列表] ETF 列表下载失败")
+        return _read_etf_stock_list_cache()
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False)
     return rows
 
 
-def preload_market_lists() -> None:
+def market_lists_ready() -> bool:
+    """本地是否已有任一市场列表缓存（供搜索提示；不联网）。"""
+    return bool(
+        _read_stock_list_cache()
+        or _read_etf_stock_list_cache()
+        or _read_hk_stock_list_cache()
+    )
+
+
+def preload_market_lists() -> dict[str, int]:
     """启动后台预热：确保 A 股 + ETF + 港股全市场列表已缓存。
 
     幂等：缓存新鲜时直接读文件不发网络；单个数据源失败不影响另一个，也不影响服务启动。
     搜索 / 名称回填只读本地缓存，因此列表只能由这里（或旧版自动下载）填充。
+
+    Returns:
+        各市场写入/读到的条数（失败为 0）。
     """
-    for loader in (_load_stock_list, _load_etf_list, _load_hk_stock_list):
+    counts: dict[str, int] = {}
+    for name, loader in (
+        ("a", _load_stock_list),
+        ("etf", _load_etf_list),
+        ("hk", _load_hk_stock_list),
+    ):
         try:
-            loader()
+            rows = loader() or []
+            counts[name] = len(rows)
+            if rows:
+                logger.info("[市场列表] %s 就绪：%d 条", name, len(rows))
+            else:
+                logger.warning("[市场列表] %s 为空（下载失败或源无数据）", name)
         except Exception:  # noqa: BLE001 预热失败仅本次缺列表，不影响服务
-            pass
+            logger.exception("[市场列表] %s 预热异常", name)
+            counts[name] = 0
+    return counts
 
 
 @router.get("/stocks/search")
@@ -264,14 +292,20 @@ def search_stocks(q: str, limit: int = 10):
     """按代码前缀或名称模糊搜索 A 股/ETF/港股。
 
     只读本地缓存（列表由启动预热维护），绝不联网、不阻塞；缓存缺失时返回空。
+    ``lists_ready=false`` 表示启动预热尚未写入列表，前端可提示用户重启。
     """
     q = q.strip()
+    ready = market_lists_ready()
     if not q:
-        return {"ok": True, "data": []}
+        return {"ok": True, "data": [], "lists_ready": ready}
     hits = [r for r in _read_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     etf_hits = [r for r in _read_etf_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     hk_hits = [r for r in _read_hk_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
-    return {"ok": True, "data": (hits + etf_hits + hk_hits)[:limit]}
+    return {
+        "ok": True,
+        "data": (hits + etf_hits + hk_hits)[:limit],
+        "lists_ready": ready,
+    }
 
 
 @router.get("/stocks/{code}/expected-growth")

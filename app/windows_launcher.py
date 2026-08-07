@@ -127,7 +127,23 @@ def wait_until_healthy(
     return False
 
 
+def ensure_stdio() -> None:
+    """PyInstaller ``console=False`` leaves ``sys.stdout``/``stderr`` as ``None``.
+
+    Libraries such as akshare→tqdm then crash with
+    ``AttributeError: 'NoneType' object has no attribute 'write'``, which used to
+    silently abort market-list prewarm and leave stock name autocomplete empty.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    # Extra guard: hide tqdm bars in windowed builds even if stdio was restored.
+    os.environ.setdefault("TQDM_DISABLE", "1")
+
+
 def setup_logging() -> Path:
+    ensure_stdio()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = LOG_DIR / "stock-analyzer.log"
     handler = RotatingFileHandler(
@@ -515,6 +531,9 @@ def _control_existing(command: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Must run before importing FastAPI/akshare paths that may touch tqdm.
+    ensure_stdio()
+
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--open", action="store_true")
     parser.add_argument("--restart", action="store_true")
