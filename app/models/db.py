@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS dividend_adjustments (
 CREATE TABLE IF NOT EXISTS ai_models (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,           -- 显示名（如 DeepSeek）
-    base_url   TEXT NOT NULL,           -- OpenAI 兼容地址（https://api.deepseek.com/v1）
+    base_url   TEXT NOT NULL,           -- OpenAI 兼容地址（https://api.deepseek.com，可带或不带 /v1）
     api_key    TEXT NOT NULL,
     model      TEXT NOT NULL,           -- 模型名（deepseek-chat 等）
     is_active  INTEGER DEFAULT 0,       -- 当前使用

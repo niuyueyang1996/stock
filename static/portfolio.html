@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>组合分析 · 自建ETF</title>
+  <title>组合分析 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
   <style>
@@ -62,7 +62,7 @@
           <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
           <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
           <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
-            暂无组合估值序列（请先「全量刷新」拉取历史序列）。
+            暂无组合估值序列。录入持仓后，点右上角「完整更新」拉取历史数据。
           </div>
         </div>
         <div class="panel" id="fundflowPanel">
@@ -81,7 +81,7 @@
             <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:280px"></div>
             <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:280px"></div>
           </div>
-          <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流（请先「全量刷新」，或今日非交易日）。</div>
+          <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
         </div>
         <div class="panel" id="chartRow">
           <h2>权重分布（按标签）</h2>
@@ -95,7 +95,7 @@
           </div>
         </div>
         <div class="empty" id="emptyTip" style="display:none">
-          暂无数据。请先在交易页录入持仓并点「全量刷新」。
+          暂无数据。请先在 <a href="/static/trade.html">交易评分</a> 录入或导入持仓，再点右上角「完整更新」。
         </div>
       </div>
     </div>
@@ -258,7 +258,7 @@
       const pf = p.portfolio;
       const main = [
         ['AI 组合打分',
-          aiPortfolioReport ? `${fmtNum(aiPortfolioReport.report.score)} ${aiPortfolioReport.report.rating}` : (aiConfigured ? '—' : '未配置 AI'),
+          aiPortfolioReport ? `${fmtNum(aiPortfolioReport.report.score)} ${aiPortfolioReport.report.rating}` : (aiConfigured ? '—' : '未配置'),
           null,
           aiPortfolioReport && aiPortfolioReport.stale ? '组合已变化，建议重新打分' : '', aiPortfolioReport && aiPortfolioReport.stale ? 'down' : ''],
         ['总市值', '¥' + fmtNum(pf.total_value), null,
@@ -313,7 +313,7 @@
       if (!aiConfigured) {
         sub.textContent = '';
         body.innerHTML = aiNotConfiguredHtml();
-        setPanelSummary('aiScorePanel', '未配置 AI');
+        setPanelSummary('aiScorePanel', '未配置');
         return;
       }
       if (!aiPortfolioReport) {

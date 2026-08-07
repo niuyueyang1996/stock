@@ -210,6 +210,7 @@ function initNav(active) {
     ['/static/portfolio.html', 'portfolio', '组合分析'],
     ['/static/stock.html', 'stock', '个股'],
     ['/static/trade.html', 'trade', '交易评分'],
+    ['/static/help.html', 'help', '帮助'],
   ];
   nav.innerHTML = '';
   links.forEach(([href, page, label]) => {
@@ -225,20 +226,20 @@ function initNav(active) {
 
   const aiBtn = document.createElement('button');
   aiBtn.textContent = '🤖 AI';
-  aiBtn.title = '配置 / 切换 AI 诊股大模型';
+  aiBtn.title = '配置 AI（推荐一键填入 DeepSeek）';
   aiBtn.onclick = openAiSettings;
   nav.appendChild(aiBtn);
 
   const dynamic = document.createElement('button');
-  dynamic.textContent = '⚡ 动态';
-  dynamic.title = '刷新动态数据：实时价格 / 当前PE/PB / 股息率（增量、快）';
+  dynamic.textContent = '⚡ 更新行情';
+  dynamic.title = '快速更新：现价、估值、今日资金流（大约几十秒）';
   dynamic.onclick = () => doRefresh(dynamic, false);
   nav.appendChild(dynamic);
 
   const full = document.createElement('button');
-  full.textContent = '🔄 全量';
+  full.textContent = '🔄 完整更新';
   full.className = 'primary';
-  full.title = '全量刷新：日K + 估值分位重算 + 财务/股息，触发全部重计算';
+  full.title = '完整更新：历史行情、财务、估值分位、汇率等（首次或隔很久建议点一次）';
   full.onclick = () => doRefresh(full, true);
   nav.appendChild(full);
 
@@ -524,28 +525,28 @@ function waitForJob(jobId, timeoutMs = 600000) {
 // AI 打分不在刷新项里：由组合页/交易页手动触发（POST /api/ai-scoring/*）
 const REFRESH_OPTIONS = {
   dynamic: [
-    ['price', '实时价格（分钟级）'],
-    ['valuation', '当前估值（PE/PB/股息率/市值）'],
-    ['flow', '当日资金流（分笔拉取）'],
+    ['price', '现价'],
+    ['valuation', '当前估值（市盈率 / 市净率 / 股息率等）'],
+    ['flow', '今日资金流'],
   ],
   full: [
-    ['bars', '日K历史（全量重拉覆盖）'],
-    ['financials', '财务数据（净利/净资产/EPS/支付率）'],
-    ['valuation', '估值分位（百度序列+1y/3y/5y分位+实时估值）'],
-    ['fx', '港股汇率（HKD/CNY）'],
-    ['flow', '当日资金流（分笔拉取）'],
-    ['portfolio', '组合综合序列重算'],
+    ['bars', '历史日K行情'],
+    ['financials', '财务数据（利润、净资产等）'],
+    ['valuation', '估值分位（近1/3/5年）'],
+    ['fx', '港股汇率'],
+    ['flow', '今日资金流'],
+    ['portfolio', '组合历史估值重算'],
   ],
   stock_dynamic: [
-    ['price', '实时价格（分钟级）'],
-    ['valuation', '当前估值（PE/PB/股息率/市值）'],
-    ['flow', '当日资金流（分笔拉取）'],
+    ['price', '现价'],
+    ['valuation', '当前估值（市盈率 / 市净率 / 股息率等）'],
+    ['flow', '今日资金流'],
   ],
   stock_full: [
-    ['bars', '日K历史（全量重拉覆盖）'],
-    ['financials', '财务数据（净利/净资产/EPS/支付率）'],
-    ['valuation', '估值分位（百度序列+1y/3y/5y分位+实时估值）'],
-    ['flow', '当日资金流（分笔拉取）'],
+    ['bars', '历史日K行情'],
+    ['financials', '财务数据（利润、净资产等）'],
+    ['valuation', '估值分位（近1/3/5年）'],
+    ['flow', '今日资金流'],
   ],
 };
 
@@ -556,12 +557,13 @@ function chooseRefreshItems(full, scope = 'global') {
     const key = scope === 'stock' ? (full ? 'stock_full' : 'stock_dynamic') : (full ? 'full' : 'dynamic');
     const opts = REFRESH_OPTIONS[key];
     const suffix = scope === 'stock' ? '（个股）' : '';
-    const title = (full ? '🔄 全量刷新' : '⚡ 刷新动态数据') + suffix;
+    const title = (full ? '🔄 完整更新' : '⚡ 更新行情') + suffix;
     const mask = document.createElement('div');
     mask.className = 'modal-mask';
     mask.innerHTML = `
       <div class="modal">
-        <h3>${title} — 选择本次刷新内容</h3>
+        <h3>${title}</h3>
+        <p class="muted" style="font-size:12px;margin:-6px 0 12px">勾选要更新的内容，一般保持全选即可。</p>
         <div class="modal-items">
           ${opts.map(([key, label]) => `
             <label class="mi"><input type="checkbox" value="${key}" checked> ${label}</label>`).join('')}
@@ -569,7 +571,7 @@ function chooseRefreshItems(full, scope = 'global') {
         <div class="modal-actions">
           <span class="link muted" id="toggleAll">全选 / 取消全选</span>
           <button class="btn" id="cancelBtn">取消</button>
-          <button class="btn primary" id="okBtn">开始刷新</button>
+          <button class="btn primary" id="okBtn">开始更新</button>
         </div>
       </div>`;
     document.body.appendChild(mask);
@@ -591,15 +593,15 @@ async function doRefresh(btn, full, scope = 'global', code) {
   btn.disabled = true;
   const st = document.getElementById('statusText');
   if (st) st.textContent = '已提交刷新…';
-  const label = scope === 'stock' ? '个股' : (full ? '全量' : '动态');
+  const label = scope === 'stock' ? '个股' : (full ? '完整' : '行情');
   try {
     const path = scope === 'stock'
       ? `/stocks/${code}/refresh` + (full ? '/full' : '')
       : full ? '/refresh/full' : '/refresh';
-    await startBackgroundJob(path, { items }, { toast: `${label}刷新已开始，进度见顶部` });
+    await startBackgroundJob(path, { items }, { toast: `${label}更新已开始，进度见顶部` });
   } catch (e) {
-    if (st) st.textContent = '刷新失败';
-    toast('刷新失败：' + e.message, 4000);
+    if (st) st.textContent = '更新失败';
+    toast('更新失败：' + e.message, 4000);
   } finally {
     btn.disabled = false;
   }
@@ -653,54 +655,91 @@ function parseStockChoice(text) {
 // ============ AI 模型配置弹窗 ============
 let _aiEditingId = null;
 
+// DeepSeek 一键模板：用户只需填 API Key，其余写死推荐值
+const DEEPSEEK_PRESET = {
+  name: 'DeepSeek',
+  base_url: 'https://api.deepseek.com',
+  model: 'deepseek-chat',
+  docs_keys: 'https://platform.deepseek.com/api_keys',
+  docs_guide: 'https://api-docs.deepseek.com/zh-cn/',
+};
+
 async function openAiSettings() {
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
   mask.innerHTML = `
     <div class="modal" style="width:620px;max-width:94vw">
-      <h3>🤖 AI 诊股模型</h3>
+      <h3>🤖 AI 设置</h3>
       <div id="aiActive" class="muted" style="margin-bottom:10px;font-size:12px"></div>
       <div class="row" style="align-items:center;gap:8px;margin-bottom:12px">
-        <span class="muted" style="font-size:12px">思考级别（打分/诊股用，越高越深入但更慢更贵）</span>
-        <select id="aiReasoning" style="width:140px" title="OpenAI 兼容 reasoning_effort（low/high/max），provider 不支持时自动忽略">
-          <option value="low">低</option>
+        <span class="muted" style="font-size:12px">分析深度（越高越细，也更慢、更费额度）</span>
+        <select id="aiReasoning" style="width:140px" title="一般选「高」即可；太慢可改成「中」">
+          <option value="low">低（更快）</option>
           <option value="medium">中</option>
-          <option value="high">高</option>
-          <option value="max">最高（max）</option>
+          <option value="high">高（推荐）</option>
+          <option value="max">最高</option>
         </select>
       </div>
-      <div id="aiModelList" style="max-height:220px;overflow-y:auto;margin-bottom:12px"></div>
-      <div style="border-top:1px solid var(--border);padding-top:12px">
-        <div style="font-size:13px;font-weight:700;margin-bottom:8px" id="aiFormTitle">新增模型</div>
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          <div style="flex:1;min-width:140px">
-            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">名称</label>
-            <input id="aiName" placeholder="如 DeepSeek" style="width:100%;box-sizing:border-box">
+      <div id="aiModelList" style="max-height:180px;overflow-y:auto;margin-bottom:12px"></div>
+
+      <div class="ai-preset">
+        <div class="ai-preset-title">推荐：一键启用 DeepSeek</div>
+        <ol class="ai-preset-steps">
+          <li>打开
+            <a href="${DEEPSEEK_PRESET.docs_keys}" target="_blank" rel="noopener">DeepSeek 控制台</a>
+            注册/登录，创建「API Key」
+          </li>
+          <li>把 Key 粘贴到下方，点「一键启用」（地址和模型已帮你填好）</li>
+        </ol>
+        <p class="muted" style="font-size:11px;margin:0 0 8px">
+          说明文档：<a href="${DEEPSEEK_PRESET.docs_guide}" target="_blank" rel="noopener">api-docs.deepseek.com/zh-cn</a>
+          · 按量计费，用多少花多少
+        </p>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:220px">
+            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">API Key（只需填这一项）</label>
+            <input id="aiDsKey" type="password" placeholder="粘贴 sk- 开头的密钥" style="width:100%;box-sizing:border-box">
           </div>
-          <div style="flex:2;min-width:220px">
-            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">Base URL（OpenAI 兼容）</label>
-            <input id="aiBaseUrl" placeholder="https://api.deepseek.com/v1" style="width:100%;box-sizing:border-box">
-          </div>
+          <button class="btn primary" id="aiDsEnable">一键启用 DeepSeek</button>
         </div>
-        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
-          <div style="flex:2;min-width:200px">
-            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">API Key</label>
-            <input id="aiApiKey" type="password" placeholder="sk-..." style="width:100%;box-sizing:border-box">
-          </div>
-          <div style="flex:1;min-width:200px">
-            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">模型（可自动获取）</label>
-            <div class="row" style="gap:6px">
-              <select id="aiModel" style="flex:1"><option value="">— 获取模型列表 —</option></select>
-              <button class="btn" id="aiFetch" title="用上方 Base URL + API Key 拉取可用模型">获取</button>
+      </div>
+
+      <details id="aiAdvanced" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px">
+        <summary class="muted" style="cursor:pointer;font-size:12px;user-select:none">高级：其他模型（OpenAI 兼容接口）</summary>
+        <div style="padding-top:10px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:8px" id="aiFormTitle">新增模型</div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <div style="flex:1;min-width:140px">
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">名称</label>
+              <input id="aiName" placeholder="自定义名称" style="width:100%;box-sizing:border-box">
+            </div>
+            <div style="flex:2;min-width:220px">
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">接口地址</label>
+              <input id="aiBaseUrl" placeholder="https://api.openai.com/v1" style="width:100%;box-sizing:border-box">
             </div>
           </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+            <div style="flex:2;min-width:200px">
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">API Key</label>
+              <input id="aiApiKey" type="password" placeholder="sk-..." style="width:100%;box-sizing:border-box">
+            </div>
+            <div style="flex:1;min-width:200px">
+              <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">模型</label>
+              <div class="row" style="gap:6px">
+                <select id="aiModel" style="flex:1"><option value="">— 点获取 —</option></select>
+                <button class="btn" id="aiFetch" title="用上方地址和密钥拉取可用模型">获取</button>
+              </div>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;justify-content:flex-end">
+            <button class="btn" id="aiNew">清空重填</button>
+            <button class="btn primary" id="aiSave">保存模型</button>
+          </div>
         </div>
-        <div class="modal-actions">
-          <span class="link muted" id="aiCancel">关闭</span>
-          <span class="grow" style="flex:1"></span>
-          <button class="btn" id="aiNew">新增</button>
-          <button class="btn primary" id="aiSave">保存模型</button>
-        </div>
+      </details>
+
+      <div class="modal-actions" style="margin-top:14px">
+        <span class="link muted" id="aiCancel">关闭</span>
       </div>
     </div>`;
   document.body.appendChild(mask);
@@ -708,7 +747,6 @@ async function openAiSettings() {
   mask.querySelector('#aiCancel').onclick = close;
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
 
-  // 思考级别：读当前值并保存（默认 high，用户可在弹窗自行选到 max）
   const reasoningSel = mask.querySelector('#aiReasoning');
   api('/ai/reasoning', { silent: true })
     .then((d) => { reasoningSel.value = d.effort || 'high'; })
@@ -716,23 +754,49 @@ async function openAiSettings() {
   reasoningSel.onchange = async () => {
     try {
       await api('/ai/reasoning', { method: 'PUT', body: { effort: reasoningSel.value } });
-      toast('思考级别已设为 ' + (reasoningSel.selectedOptions[0] ? reasoningSel.selectedOptions[0].textContent : reasoningSel.value));
+      toast('分析深度已设为「' + (reasoningSel.selectedOptions[0] ? reasoningSel.selectedOptions[0].textContent : reasoningSel.value) + '」');
     } catch (e) {
       toast('保存失败：' + e.message, 4000);
+    }
+  };
+
+  mask.querySelector('#aiDsEnable').onclick = async () => {
+    const apiKey = mask.querySelector('#aiDsKey').value.trim();
+    if (!apiKey) return toast('请先粘贴 DeepSeek 的 API Key');
+    const btn = mask.querySelector('#aiDsEnable');
+    btn.disabled = true;
+    try {
+      const row = await api('/ai/models', {
+        method: 'POST',
+        body: {
+          name: DEEPSEEK_PRESET.name,
+          base_url: DEEPSEEK_PRESET.base_url,
+          api_key: apiKey,
+          model: DEEPSEEK_PRESET.model,
+        },
+      });
+      await api('/ai/models/' + row.id + '/activate', { method: 'POST' });
+      mask.querySelector('#aiDsKey').value = '';
+      toast('DeepSeek 已启用，可以开始 AI 分析了');
+      await loadAiModels(mask);
+    } catch (e) {
+      toast('启用失败：' + e.message, 4000);
+    } finally {
+      btn.disabled = false;
     }
   };
 
   mask.querySelector('#aiNew').onclick = () => {
     _aiEditingId = null;
     ['aiName', 'aiBaseUrl', 'aiApiKey'].forEach((id) => (mask.querySelector('#' + id).value = ''));
-    mask.querySelector('#aiModel').innerHTML = '<option value="">— 获取模型列表 —</option>';
+    mask.querySelector('#aiModel').innerHTML = '<option value="">— 点获取 —</option>';
     mask.querySelector('#aiFormTitle').textContent = '新增模型';
   };
 
   mask.querySelector('#aiFetch').onclick = async () => {
     const baseUrl = mask.querySelector('#aiBaseUrl').value.trim();
     const apiKey = mask.querySelector('#aiApiKey').value.trim();
-    if (!baseUrl || !apiKey) return toast('请先填 Base URL 和 API Key');
+    if (!baseUrl || !apiKey) return toast('请先填接口地址和 API Key');
     const sel = mask.querySelector('#aiModel');
     sel.innerHTML = '<option value="">加载中…</option>';
     try {
@@ -742,7 +806,7 @@ async function openAiSettings() {
       sel.innerHTML = '<option value="">选择模型…</option>' + models.map((m) => `<option value="${m}">${m}</option>`).join('');
       toast(`获取到 ${models.length} 个模型`);
     } catch (e) {
-      sel.innerHTML = '<option value="">— 获取模型列表 —</option>';
+      sel.innerHTML = '<option value="">— 点获取 —</option>';
       toast('获取失败：' + e.message, 4000);
     }
   };
@@ -755,7 +819,7 @@ async function openAiSettings() {
       model: mask.querySelector('#aiModel').value.trim(),
     };
     if (_aiEditingId) body.id = _aiEditingId;
-    if (!body.name || !body.base_url || !body.api_key || !body.model) return toast('名称 / Base URL / API Key / 模型 均必填');
+    if (!body.name || !body.base_url || !body.api_key || !body.model) return toast('名称、接口地址、API Key、模型都要填');
     try {
       await api('/ai/models', { method: 'POST', body });
       toast('已保存模型');
@@ -773,9 +837,9 @@ async function loadAiModels(mask) {
     const active = data.active;
     activeEl.innerHTML = active
       ? `当前使用：<strong>${active.name}</strong>（${active.model}）`
-      : '<span style="color:#e03131">尚未启用任何模型，请新增并「启用」。</span>';
+      : '<span style="color:#e03131">还没启用 AI。推荐用上方 DeepSeek 一键启用，只需填密钥。</span>';
     if (!data.models.length) {
-      wrap.innerHTML = '<div class="muted" style="font-size:12px;padding:8px 4px">尚未配置模型，填下方表单并保存。</div>';
+      wrap.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0 8px">暂无已保存的模型。</div>';
       return;
     }
     wrap.innerHTML = '';
@@ -797,6 +861,8 @@ async function loadAiModels(mask) {
       };
       card.querySelector('[data-edit]').onclick = () => {
         _aiEditingId = m.id;
+        const adv = mask.querySelector('#aiAdvanced');
+        if (adv) adv.open = true;
         mask.querySelector('#aiFormTitle').textContent = '编辑模型：' + m.name;
         mask.querySelector('#aiName').value = m.name;
         mask.querySelector('#aiBaseUrl').value = m.base_url;
@@ -805,7 +871,7 @@ async function loadAiModels(mask) {
         sel.innerHTML = `<option value="${m.model}">${m.model}</option>`;
       };
       card.querySelector('[data-del]').onclick = async () => {
-        if (!confirm('删除模型 ' + m.name + '？')) return;
+        if (!confirm('删除模型「' + m.name + '」？')) return;
         try { await api('/ai/models/' + m.id, { method: 'DELETE' }); await loadAiModels(mask); }
         catch (e) { toast('删除失败：' + e.message, 4000); }
       };
@@ -827,7 +893,7 @@ function esc(s) {
 }
 
 function aiNotConfiguredHtml() {
-  return '<div class="empty" style="padding:16px;margin:0">未配置 AI（点右上角「🤖 AI」配置模型）</div>';
+  return '<div class="empty" style="padding:16px;margin:0">还没配置 AI。点右上角「🤖 AI」，用 DeepSeek 一键启用即可（只需填密钥）。</div>';
 }
 
 // AI 报告头部：大分 + 评级徽章 + 一句话结论

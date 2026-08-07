@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>交易评分 · 自建ETF</title>
+  <title>交易评分 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
@@ -26,14 +26,16 @@
       </div>
       <div class="form-row-secondary">
         <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
-        <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 导入Excel</button>
+        <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 导入 Excel</button>
         <input type="datetime-local" id="tradeTime" style="width:190px">
         <input type="text" id="note" placeholder="备注" style="width:140px">
         <button class="btn" id="adjustBtn" onclick="openCostAdjust()" title="直接调整持仓成本：补记漏记 / 分红除权摊薄">💰 调整成本</button>
         <button class="btn" id="aiScoreTodayBtn" onclick="aiScoreToday()" title="请求 AI 对今天录制的交易打分">🤖 AI 打分(今日)</button>
       </div>
-      <div class="muted" id="formTip" style="margin-top:8px">
-        买卖自动更新持仓；新交易可触发当日 AI 打分。空仓可用导入 Excel 恢复。
+      <div class="muted" id="formTip" style="margin-top:8px;line-height:1.55">
+        买卖会自动更新持仓。空仓时可用「导入 Excel」：从
+        <a href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">同花顺账户页</a>
+        导出「汇总持仓.xlsx」再上传。没有同花顺？直接上方搜索代码，录一笔买入即可。
       </div>
       <div id="importProgress" style="display:none;margin-top:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">

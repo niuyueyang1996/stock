@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>个股分析 · 自建ETF</title>
+  <title>个股分析 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
@@ -18,8 +18,8 @@
         <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
         <button class="btn danger" id="sellBtn" onclick="quickTrade('sell')">卖出</button>
         <button class="btn" id="aiBtn" onclick="aiAnalyze()" title="用已配置的 AI 模型分析该股">🤖 AI诊股</button>
-        <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 刷新此股</button>
-        <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 全量刷新此股</button>
+        <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 更新此股行情</button>
+        <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 完整更新此股</button>
       </div>
       <div id="staleTip" class="muted" style="display:none;margin-top:6px"></div>
       <div id="missingBanner" style="display:none;margin-top:6px;color:#e8590c"></div>
@@ -75,7 +75,7 @@
       <h2>盈利与成长 <span class="sub">静态 / TTM / 前瞻 对比</span></h2>
       <table>
         <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
-        <tbody id="growthBody"><tr><td colspan="4" class="muted">暂无数据（请先全量刷新）</td></tr></tbody>
+        <tbody id="growthBody"><tr><td colspan="4" class="muted">暂无数据（请先「完整更新此股」）</td></tr></tbody>
       </table>
     </div>
 
@@ -174,12 +174,12 @@
         mask.className = 'modal-mask';
         mask.innerHTML = `
           <div class="modal">
-            <h3>缺少缓存数据</h3>
+            <h3>还没有这只股票的本地数据</h3>
             <p>「${status.stock}」缺少：${missing}</p>
-            <p class="muted">打开前需联网下载（日K/财务/估值历史），是否下载？</p>
+            <p class="muted">需要联网下载一次（通常几十秒到一两分钟）。也可以先看已有部分。</p>
             <div class="modal-actions">
               <button class="btn" id="dlCancel">取消</button>
-              <button class="btn" id="dlPartial">仅打开已有数据</button>
+              <button class="btn" id="dlPartial">先看已有的</button>
               <button class="btn primary" id="dlOk">下载并打开</button>
             </div>
           </div>`;
@@ -723,7 +723,7 @@
       if (partialMissing.length) {
         missingBanner.style.display = 'block';
         missingBanner.textContent = '⚠ 部分数据缺失（' + partialMissing.map((k) => MISSING_LABEL[k] || k).join('、')
-          + '），点「🔄 全量刷新此股」补全';
+          + '），点「🔄 完整更新此股」补全';
       } else {
         missingBanner.style.display = 'none';
       }
@@ -732,7 +732,7 @@
         // 部分打开：无行情数据
         staleTip.style.display = 'none';
         document.getElementById('quoteCards').innerHTML =
-          '<div class="empty" style="padding:20px">无行情数据（缓存缺失，请先全量刷新）。</div>';
+          '<div class="empty" style="padding:20px">还没有行情数据，请先「完整更新此股」。</div>';
         if (idxMode) { renderFlow(d); return; }
         renderQuantiles(d.quantiles);
         renderValuationHistory(d);
@@ -846,7 +846,7 @@
       const peEl = document.getElementById('peLine');
       const pbEl = document.getElementById('pbLine');
       if (!hist || !hist.periods || !Object.keys(hist.periods).length) {
-        peEl.innerHTML = '<div class="empty" style="padding:20px">暂无历史估值序列（请先「全量刷新」）。</div>';
+        peEl.innerHTML = '<div class="empty" style="padding:20px">暂无历史估值，请先「完整更新此股」。</div>';
         pbEl.innerHTML = '';
         tabsWrap.innerHTML = '';
         setPanelSummary('valHistPanel', '暂无序列');
@@ -1072,7 +1072,7 @@
     function renderFinancials(fin) {
       if (!fin) {
         document.getElementById('finCards').innerHTML =
-          '<div class="empty" style="padding:20px">暂无财务数据（请先「全量刷新」）。</div>';
+          '<div class="empty" style="padding:20px">暂无财务数据，请先「完整更新此股」。</div>';
         return;
       }
       const cards = [

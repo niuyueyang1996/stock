@@ -180,13 +180,28 @@ def activate_model(model_id: int) -> dict:
     return dict(row)
 
 
+# ---------- OpenAI 兼容 URL ----------
+
+def _openai_compat_url(base_url: str, path: str) -> str:
+    """拼 OpenAI 兼容端点。base_url 可带或不带 /v1，避免 /v1/v1。
+
+    例：https://api.deepseek.com → .../v1/chat/completions
+        https://api.openai.com/v1 → .../v1/chat/completions
+    """
+    base = (base_url or "").strip().rstrip("/")
+    path = (path or "").lstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/{path}"
+    return f"{base}/v1/{path}"
+
+
 # ---------- 可用模型列表（从提供商获取） ----------
 
 def list_available_models(base_url: str, api_key: str) -> list[str]:
-    """调 {base_url}/models 列出该提供商可用模型名。失败抛 ValueError。"""
+    """调 OpenAI 兼容 /v1/models 列出该提供商可用模型名。失败抛 ValueError。"""
     import requests
 
-    url = base_url.rstrip("/") + "/models"
+    url = _openai_compat_url(base_url, "models")
     headers = {**HTTP_HEADERS, "Authorization": f"Bearer {api_key.strip()}"}
     try:
         resp = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
@@ -238,8 +253,7 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
     """
     import requests
 
-    base_url = model_cfg["base_url"].rstrip("/")
-    url = base_url + "/chat/completions"
+    url = _openai_compat_url(model_cfg["base_url"], "chat/completions")
     payload = {
         "model": model_cfg["model"],
         "messages": [

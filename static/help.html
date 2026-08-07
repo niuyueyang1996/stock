@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>使用帮助 · 股票持仓分析</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <nav></nav>
+  <div class="container help-page">
+    <div class="help-hero">
+      <h1>使用帮助</h1>
+      <p>把你的一篮子持仓（A 股、港股、场内 ETF）放进来，看盈亏、估值和 AI 点评。下面用图走一遍，照着做就行。</p>
+    </div>
+
+    <!-- 目录锚点 -->
+    <div class="help-toc">
+      <a href="#start">从空仓开始</a>
+      <a href="#refresh">更新数据</a>
+      <a href="#ai">配置 AI</a>
+      <a href="#pages">五个页面</a>
+      <a href="#faq">常见问题</a>
+    </div>
+
+    <!-- 1. 从空仓开始 -->
+    <section class="panel help-section" id="start">
+      <h2>① 从空仓开始</h2>
+      <p class="help-lead">没有持仓时，首页会提示导入。两条路任选一条：</p>
+
+      <div class="help-fork">
+        <div class="help-path">
+          <div class="help-path-badge">推荐</div>
+          <div class="help-path-title">有同花顺</div>
+          <div class="help-flow">
+            <div class="help-step">
+              <span class="help-n">1</span>
+              <div class="help-step-body">
+                <div class="help-step-t">打开同花顺账户页</div>
+                <div class="help-step-d">导出「汇总持仓.xlsx」</div>
+                <a class="help-link" href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">tzzb.10jqka.com.cn → 我的账户</a>
+              </div>
+            </div>
+            <div class="help-arrow" aria-hidden="true">↓</div>
+            <div class="help-step">
+              <span class="help-n">2</span>
+              <div class="help-step-body">
+                <div class="help-step-t">到「交易评分」页</div>
+                <div class="help-step-d">点「导入 Excel」，选刚导出的文件</div>
+                <div class="help-hint">仅空仓时可导入，避免重复叠仓</div>
+              </div>
+            </div>
+            <div class="help-arrow" aria-hidden="true">↓</div>
+            <div class="help-step help-step-ok">
+              <span class="help-n">✓</span>
+              <div class="help-step-body">
+                <div class="help-step-t">持仓出现在首页</div>
+                <div class="help-step-d">接着点一次「完整更新」拉历史数据</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="help-or">或</div>
+
+        <div class="help-path">
+          <div class="help-path-badge muted">手填</div>
+          <div class="help-path-title">没有同花顺</div>
+          <div class="help-flow">
+            <div class="help-step">
+              <span class="help-n">1</span>
+              <div class="help-step-body">
+                <div class="help-step-t">打开「交易评分」</div>
+                <div class="help-step-d">搜索股票 / ETF 代码</div>
+              </div>
+            </div>
+            <div class="help-arrow" aria-hidden="true">↓</div>
+            <div class="help-step">
+              <span class="help-n">2</span>
+              <div class="help-step-body">
+                <div class="help-step-t">填买入价、数量</div>
+                <div class="help-step-d">提交一笔买入即可建仓</div>
+              </div>
+            </div>
+            <div class="help-arrow" aria-hidden="true">↓</div>
+            <div class="help-step help-step-ok">
+              <span class="help-n">✓</span>
+              <div class="help-step-body">
+                <div class="help-step-t">持仓自动更新</div>
+                <div class="help-step-d">之后买卖继续在同一页录入</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 更新数据 -->
+    <section class="panel help-section" id="refresh">
+      <h2>② 更新数据：两个按钮怎么选</h2>
+      <p class="help-lead">右上角有两个刷新按钮。本软件<strong>不会自动联网刷价</strong>——想看最新，自己点一下。</p>
+
+      <div class="help-cards-2">
+        <div class="help-card">
+          <div class="help-card-icon help-icon-bolt">⚡</div>
+          <div class="help-card-title">更新行情</div>
+          <div class="help-card-sub">日常用这个</div>
+          <ul class="help-list">
+            <li>现价、涨跌</li>
+            <li>估值大概位置</li>
+            <li>今天的资金流</li>
+          </ul>
+          <div class="help-card-foot">大约几十秒，盘中多点几次也行</div>
+        </div>
+        <div class="help-card help-card-primary">
+          <div class="help-card-icon help-icon-full">🔄</div>
+          <div class="help-card-title">完整更新</div>
+          <div class="help-card-sub">首次 / 隔很久用一次</div>
+          <ul class="help-list">
+            <li>历史行情、财务报表</li>
+            <li>估值历史、汇率</li>
+            <li>分红除权等较全的数据</li>
+          </ul>
+          <div class="help-card-foot">导入持仓后建议先点一次；平时不必天天点</div>
+        </div>
+      </div>
+
+      <div class="help-mini-flow" aria-label="推荐流程">
+        <span class="help-pill">导入 / 录入</span>
+        <span class="help-arr">→</span>
+        <span class="help-pill primary">完整更新</span>
+        <span class="help-arr">→</span>
+        <span class="help-pill">日常：更新行情</span>
+      </div>
+    </section>
+
+    <!-- 3. AI -->
+    <section class="panel help-section" id="ai">
+      <h2>③ 配置 AI（可选）</h2>
+      <p class="help-lead">配好后，可以对组合、每日交易、个股资金面等让 AI 打分点评。推荐 DeepSeek，一键填模板，你只贴 API Key。</p>
+
+      <div class="help-flow help-flow-h">
+        <div class="help-step">
+          <span class="help-n">1</span>
+          <div class="help-step-body">
+            <div class="help-step-t">点右上角「🤖 AI」</div>
+          </div>
+        </div>
+        <div class="help-arrow-h" aria-hidden="true">→</div>
+        <div class="help-step">
+          <span class="help-n">2</span>
+          <div class="help-step-body">
+            <div class="help-step-t">选「DeepSeek 一键」</div>
+            <div class="help-step-d">地址和模型自动填好</div>
+          </div>
+        </div>
+        <div class="help-arrow-h" aria-hidden="true">→</div>
+        <div class="help-step">
+          <span class="help-n">3</span>
+          <div class="help-step-body">
+            <div class="help-step-t">粘贴 API Key</div>
+            <div class="help-step-d">保存即可</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="help-links-row">
+        <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">申请 / 查看 API Key</a>
+        <a href="https://api-docs.deepseek.com/zh-cn/" target="_blank" rel="noopener">DeepSeek 接口文档</a>
+      </div>
+      <p class="muted" style="margin-top:10px;font-size:12px">不配 AI 也能正常看持仓和图表；评分区会显示「未配置 AI」。</p>
+    </section>
+
+    <!-- 4. 五个页面 -->
+    <section class="panel help-section" id="pages">
+      <h2>④ 五个主页面各干什么</h2>
+      <div class="help-pages">
+        <a class="help-page-card" href="/static/index.html">
+          <div class="help-page-name">持仓</div>
+          <div class="help-page-desc">总市值、盈亏、持仓明细。日常首页。</div>
+        </a>
+        <a class="help-page-card" href="/static/indices.html">
+          <div class="help-page-name">指数</div>
+          <div class="help-page-desc">沪深 300、上证 50 等大盘估值与走势参考。</div>
+        </a>
+        <a class="help-page-card" href="/static/portfolio.html">
+          <div class="help-page-name">组合分析</div>
+          <div class="help-page-desc">整篮子弹的估值、风险、资金面；可按标签筛子组合。</div>
+        </a>
+        <a class="help-page-card" href="/static/stock.html">
+          <div class="help-page-name">个股</div>
+          <div class="help-page-desc">单只股票 / ETF 详情：价格、财务、资金流、AI 诊股。</div>
+        </a>
+        <a class="help-page-card" href="/static/trade.html">
+          <div class="help-page-name">交易评分</div>
+          <div class="help-page-desc">录入买卖、导入同花顺 Excel、看每日 AI 打分。</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- 5. FAQ -->
+    <section class="panel help-section" id="faq">
+      <h2>⑤ 常见问题</h2>
+      <div class="help-faq">
+        <div class="help-faq-item">
+          <div class="help-faq-q">打开后很多数字是空的 / 提示没数据？</div>
+          <div class="help-faq-a">先确认有持仓，再点右上角「完整更新」等它跑完。之后日常用「更新行情」即可。个股页若提示缺少数据，按弹窗确认下载即可。</div>
+        </div>
+        <div class="help-faq-item">
+          <div class="help-faq-q">港股怎么显示的？</div>
+          <div class="help-faq-a">和券商类似：单价（现价、成本）看港币，金额（市值、盈亏）看人民币。</div>
+        </div>
+        <div class="help-faq-item">
+          <div class="help-faq-q">「清空全部数据」会怎样？</div>
+          <div class="help-faq-a">会删掉交易、持仓和已下载的行情等，<strong>不可恢复</strong>。除非你真的想重来，否则别点。</div>
+        </div>
+        <div class="help-faq-item">
+          <div class="help-faq-q">导入 Excel 失败？</div>
+          <div class="help-faq-a">确认是同花顺「汇总持仓.xlsx」，且当前是空仓（已有持仓时不能再整表导入，避免重复）。也可改为在交易页逐笔录入。</div>
+        </div>
+        <div class="help-faq-item">
+          <div class="help-faq-q">数据存在哪？会上网偷看我的仓位吗？</div>
+          <div class="help-faq-a">数据在你本机。联网只是向公开行情源拉价格/财务；不会把你的持仓上传到别人的服务器（AI 点评时会把你选中的持仓摘要发给你配置的 AI 服务商，请自行确认是否接受）。</div>
+        </div>
+      </div>
+    </section>
+
+    <p class="help-footer muted">股票持仓分析 · 本地工具 · 有问题先看本页流程图</p>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script>initNav('help');</script>
+</body>
+</html>

@@ -14,7 +14,7 @@
   #define LanguageFile "languages\ChineseSimplified.isl"
 #endif
 
-#define MyAppName "个人自建 ETF 持仓分析"
+#define MyAppName "股票持仓分析"
 #define MyAppExeName "StockAnalyzer.exe"
 
 [Setup]

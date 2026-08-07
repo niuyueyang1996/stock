@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>持仓总览 · 自建ETF</title>
+  <title>持仓总览 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
@@ -14,7 +14,7 @@
     <div class="panel">
       <div class="row">
         <h2 style="margin:0">持仓明细</h2>
-        <span class="sub">数据为缓存值，点右上角刷新按钮更新</span>
+        <span class="sub">数据来自本地缓存；要最新价可点右上角「更新行情」</span>
         <span class="grow"></span>
         <select id="sortSel" title="排序">
           <option value="weight_desc">权重降序</option>
@@ -31,11 +31,26 @@
         <div id="holdingsGroups"></div>
       </div>
       <div id="cardView" class="cards" style="display:none;margin-bottom:0"></div>
-      <div class="empty" id="emptyTip" style="display:none">
-        暂无持仓。<a href="/static/trade.html">去交易页录入首笔买入</a>，或点右上角「全量刷新」拉取数据。
+      <div class="empty empty-guide" id="emptyTip" style="display:none">
+        <div class="eg-title">还没有持仓</div>
+        <div class="eg-block">
+          <div class="eg-h">有同花顺（推荐）</div>
+          <ol>
+            <li>打开
+              <a href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">同花顺账户页</a>
+              ，导出「汇总持仓.xlsx」
+            </li>
+            <li>到 <a href="/static/trade.html">交易评分</a> 页，点「导入 Excel」上传（仅空仓时可导入）</li>
+          </ol>
+        </div>
+        <div class="eg-block">
+          <div class="eg-h">没有同花顺也没关系</div>
+          <p>直接去 <a href="/static/trade.html">交易评分</a> 页，搜索股票代码，录入一笔买入即可。</p>
+        </div>
+        <p class="muted" style="margin-top:12px;font-size:12px">导入或录入后，建议点右上角「完整更新」拉一次历史数据。详见 <a href="/static/help.html">使用帮助</a>。</p>
       </div>
       <div class="row" style="margin-top:14px;justify-content:flex-end">
-        <button class="btn danger" id="resetBtn" onclick="resetAll()" title="删除全部交易/持仓/股票/评分及所有缓存（评分权重配置保留）">清空全部数据</button>
+        <button class="btn danger" id="resetBtn" onclick="resetAll()" title="清空交易、持仓和缓存（不可恢复）">清空全部数据</button>
       </div>
     </div>
   </div>
@@ -64,8 +79,8 @@
 
     // 一键清空全部数据（双重确认，防误触；评分权重配置保留）
     async function resetAll() {
-      if (!confirm('确定清空全部数据？\n\n将删除：\n· 全部交易流水\n· 持仓与股票信息\n· 全部综合评分\n· 所有缓存（日K/估值/分位/财务/序列/资金流）\n\n此操作不可恢复！\n（评分权重配置与交易日历保留）')) return;
-      if (!confirm('再次确认：真的要清空全部数据吗？')) return;
+      if (!confirm('确定清空全部数据？\n\n将删除：\n· 全部买卖记录\n· 持仓与股票信息\n· AI 评分报告\n· 本地缓存的行情/估值等\n\n此操作不可恢复。\n（AI 模型配置会保留）')) return;
+      if (!confirm('再确认一次：真的要全部清空吗？')) return;
       const btn = document.getElementById('resetBtn');
       btn.disabled = true;
       try {
