@@ -341,9 +341,9 @@
 
     // 手动触发组合 AI 打分（跟随当前标签筛选；先弹窗确认/编辑指令）
     function runPortfolioAi() {
-      openPromptEditor('portfolio', async (systemPrompt) => {
+      openPromptEditor('portfolio', async (systemPrompt, intensity) => {
         try {
-          const body = {};
+          const body = { intensity };
           if (systemPrompt) body.system_prompt = systemPrompt;
           const d = await api('/ai-scoring/portfolio' + tagsQS(), { method: 'POST', body, blocking: true });
           aiPortfolioReport = { report: d.report, profile_hash: d.profile_hash, model_name: d.model_name,
@@ -619,11 +619,12 @@
         return;
       }
       panel.style.display = 'block';
-      // 组合相关性块：精确匹配当前标签组合（空/全选='全部'），取不到则按 scope 取最近一条
+      // 组合相关性块：只精确匹配当前标签组合（空/全选='全部'；tags 排序归一同 key），
+      // 必须再次选中该组合才能看到其相关性；没匹配到不显示（不取别的组合）
       const t = tagsQS();
       const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
-      let coh = await loadCoherence('portfolio', tags || '全部', reports[0].window);
-      if (!coh) coh = await loadCoherence('portfolio', null, reports[0].window);
+      const key = tags ? tags.split(',').filter(Boolean).sort().join(',') : '全部';
+      const coh = await loadCoherence('portfolio', key, reports[0].window);
       renderFundflowBatchPanel(panel, {
         window: reports[0].window, stocks_count: reports.length,
         date: reports[0].trade_date, reports, coherence: coh,

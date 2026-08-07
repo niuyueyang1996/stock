@@ -322,11 +322,13 @@ def _tags_key(tags: list[str] | None = None) -> list[str]:
     return sorted(tags) if tags else []
 
 
-def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = None) -> dict:
+def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = None,
+                    intensity: str = "normal") -> dict:
     """手动触发组合 AI 打分：AI 一次调用 → 规整 → 按画像哈希落库。
 
     **每个标签组合各自存一份**（tags_json 区分）：打个股不覆盖 个股+港股，也不覆盖 全部。
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
     """
     model = ai.get_active_model()
     if not model:
@@ -339,6 +341,9 @@ def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = N
     system = _PORTFOLIO_SYSTEM
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = ai._intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
     raw = ai.chat_json(model, system, user)
     report = _normalize_portfolio_report(raw)
     phash = portfolio_profile_hash(tags)
@@ -685,11 +690,13 @@ def _normalize_daily_report(data: dict, trades: list[dict]) -> dict:
     }
 
 
-def score_daily(score_date: str, system_prompt: str | None = None) -> dict | None:
+def score_daily(score_date: str, system_prompt: str | None = None,
+                intensity: str = "normal") -> dict | None:
     """当日 AI 打分：一次调用逐笔+汇总 → 落库。当日无 buy/sell 交易 → 失效并返回 None。
 
     收盘守卫：仅限制「今天」——盘中不允许对今日打分；历史日期随时可打。
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
     """
     _guard_today(score_date)
     model = ai.get_active_model()
@@ -707,6 +714,9 @@ def score_daily(score_date: str, system_prompt: str | None = None) -> dict | Non
     system = _DAILY_SYSTEM
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = ai._intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
     raw = ai.chat_json(model, system, user)
     report = _normalize_daily_report(raw, ctx["trades"])
     now = _now()

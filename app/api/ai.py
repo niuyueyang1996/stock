@@ -29,6 +29,7 @@ class ReasoningBody(BaseModel):
 
 class ReportBody(BaseModel):
     system_prompt: str | None = None   # 覆盖默认诊股指令（前端弹窗可编辑后透传）
+    intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
 
 
 class FundflowAnalysisBody(BaseModel):
@@ -38,6 +39,7 @@ class FundflowAnalysisBody(BaseModel):
     codes: str | None = None    # 指数组合：逗号分隔标的代码（指数页批量分析用）
     weights: str | None = None  # codes 模式对应权重（逗号分隔，缺省=等权）
     system_prompt: str | None = None   # 覆盖默认指令（前端弹窗可编辑后透传）
+    intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
 
 
 @router.get("/ai/models")
@@ -133,7 +135,9 @@ def analyze_ai(code: str, body: ReportBody | None = None):
     """触发诊股：用激活模型分析该股并落库。无激活模型或 AI 调用失败返回 400。
     body.system_prompt 覆盖默认诊股指令（前端弹窗可编辑）。"""
     try:
-        result = ai_svc.analyze_stock(code, body.system_prompt if body else None)
+        result = ai_svc.analyze_stock(code,
+                                      body.system_prompt if body else None,
+                                      body.intensity if body else "normal")
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI诊股] %s 完成", code)
@@ -145,7 +149,7 @@ def fundflow_analysis(body: FundflowAnalysisBody):
     """个股 AI 资金流实时分析（按选定窗口；无 HTML，简明结论）。
     无激活模型/选定窗口无资金流数据 → 400。"""
     try:
-        result = ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt)
+        result = ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt, body.intensity)
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI资金流] %s %s分析完成", body.code, body.window)
@@ -177,7 +181,8 @@ def fundflow_batch(body: FundflowAnalysisBody):
         raise HTTPException(400, "codes（指数组合）与 tags（持仓组合）只能二选一")
     try:
         result = ai_svc.analyze_batch_fundflow(tags, body.window, codes=codes, weights=weights,
-                                               system_prompt=body.system_prompt)
+                                               system_prompt=body.system_prompt,
+                                               intensity=body.intensity)
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI资金流] 批量分析完成 %s 只", result.get("stocks_count"))

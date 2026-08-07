@@ -30,10 +30,12 @@ class ExpandBody(BaseModel):
 class DateBody(BaseModel):
     date: str
     system_prompt: str | None = None   # 覆盖默认每日打分指令（前端弹窗可编辑后透传）
+    intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
 
 
 class ScoreBody(BaseModel):
     system_prompt: str | None = None   # 覆盖默认组合打分指令（前端弹窗可编辑后透传）
+    intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
 
 
 def _parse_tags(tags: str | None) -> list[str] | None:
@@ -134,7 +136,8 @@ def score_portfolio(tags: str | None = None, body: ScoreBody | None = None):
     body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
     try:
         result = svc.score_portfolio(_parse_tags(tags),
-                                     body.system_prompt if body else None)
+                                     body.system_prompt if body else None,
+                                     body.intensity if body else "normal")
     except ValueError as e:
         raise HTTPException(400, str(e))
     logger.info("[AI打分] 组合%s 完成 %s（%s）", f"筛选{tags}" if tags else "全部", result["report"]["score"], result["report"]["rating"])
@@ -164,7 +167,7 @@ def score_daily(body: DateBody):
     """某日 AI 打分（一次调用逐笔+汇总）。无交易或无激活模型返回 400。
     body.system_prompt 覆盖默认指令（前端弹窗可编辑）。"""
     try:
-        result = svc.score_daily(body.date, body.system_prompt)
+        result = svc.score_daily(body.date, body.system_prompt, body.intensity)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if result is None:

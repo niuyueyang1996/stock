@@ -99,11 +99,11 @@
 
     // 对某日执行 AI 打分（一次调用逐笔+汇总；先弹窗确认/编辑指令）
     function scoreDay(date) {
-      openPromptEditor('daily', async (systemPrompt) => {
+      openPromptEditor('daily', async (systemPrompt, intensity) => {
         const btn = document.getElementById('aiScoreTodayBtn');
         if (btn) btn.disabled = true;
         try {
-          const body = { date };
+          const body = { date, intensity };
           if (systemPrompt) body.system_prompt = systemPrompt;
           const d = await api('/ai-scoring/daily', { method: 'POST', body, blocking: true });
           _day = d.day;

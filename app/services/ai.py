@@ -211,10 +211,23 @@ def get_reasoning_effort() -> str:
         return ""
 
 
-def chat_json(model_cfg: dict, system: str, user: str) -> dict:
+# 「分析强度」→ 追加进 system 的指令：快速=简要、深入=详尽；普通不加
+_INTENSITY_INSTRUCTIONS = {
+    "fast": "请快速简要分析，突出核心结论即可，不必逐项展开细节。",
+    "deep": "请深入详尽分析，逐维度展开推演，给出充分依据、量化佐证与风险提示。",
+}
+
+
+def _intensity_instruction(intensity: str | None) -> str:
+    """分析强度指令；非法/缺省（普通）→ 空串（不改动默认指令）。"""
+    return _INTENSITY_INSTRUCTIONS.get(str(intensity or "").lower().strip(), "")
+
+
+def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None) -> dict:
     """调 OpenAI 兼容接口并解析 JSON 输出。失败抛 ValueError。输入输出均打印日志。
 
     - 附带 reasoning_effort（思考级别，默认 high 最高）；provider 不支持会被忽略。
+    - effort 非 None 时覆盖全局思考级别（「分析强度」快速/深入用）；None 用全局配置。
     - 降级路径（json_object / reasoning_effort 失败）会移除两者重试。
     """
     import requests
@@ -230,7 +243,8 @@ def chat_json(model_cfg: dict, system: str, user: str) -> dict:
         "temperature": 0.4,
         "response_format": {"type": "json_object"},
     }
-    effort = get_reasoning_effort()
+    if effort is None:
+        effort = get_reasoning_effort()
     if effort:
         payload["reasoning_effort"] = effort
     # 打印输入日志（截断超长）
@@ -470,10 +484,12 @@ def _normalize_report(data: dict) -> dict:
     }
 
 
-def analyze_stock(code: str, system_prompt: str | None = None) -> dict:
+def analyze_stock(code: str, system_prompt: str | None = None,
+                  intensity: str = "normal") -> dict:
     """触发诊股：用激活模型分析并落库，返回规整报告 + 元信息。
 
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
     """
     model_cfg = get_active_model()
     if not model_cfg:
@@ -486,6 +502,9 @@ def analyze_stock(code: str, system_prompt: str | None = None) -> dict:
     system = _SYSTEM_PROMPT
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
@@ -528,7 +547,7 @@ def get_report(code: str) -> dict | None:
 
 _FUNDFLOW_ANALYSIS_SYSTEM = (
     "你是资深盘口资金分析师。系统提供某标的（个股或组合）在选定时间窗内的资金流与股价数据，"
-    "你要快速判断：各档资金动向、资金与股价的相关性/背离、主力资金在做什么、发生了什么、要注意什么。\n"
+    "你要判断：各档资金动向、资金与股价的相关性/背离、主力资金在做什么、发生了什么、要注意什么。\n"
     "[数据说明]\n"
     "1. 窗口分两类：\n"
     "   - 分钟窗口（window 如 '15m'）：points 为当日分时序列。个股/组合为五档净流入（元，正=流入负=流出）："
@@ -581,7 +600,7 @@ _FUNDFLOW_ANALYSIS_SCHEMA = {
 
 _BATCH_FUNDFLOW_SYSTEM = (
     "你是资深盘口资金分析师。系统给出组合内多只标的（个股或指数）的资金流与股价数据（列表 stocks），"
-    "你要对每只标的快速判断：资金与股价的相关性/背离、主力资金在做什么、要注意什么；"
+    "你要对每只标的判断：资金与股价的相关性/背离、主力资金在做什么、要注意什么；"
     "并额外给出组合整体的资金面相关性判断（coherence）。\n"
     "[数据说明]\n"
     "1. stocks 为列表，每只含：code/name/tag/weight_pct（组合权重）、price/pct_chg（当前价与涨跌幅）、"
@@ -904,12 +923,14 @@ def _normalize_fundflow_analysis(data: dict) -> dict:
     }
 
 
-def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | None = None) -> dict:
+def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | None = None,
+                     intensity: str = "normal") -> dict:
     """个股 AI 资金流实时分析（带资金×股价相关性/背离），统一时间窗。
 
     无激活模型 → ValueError；选定窗口无资金流数据 → ValueError。
     返回 {mode, code, name, window, date, points_count, analysis}，无 HTML。
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
     """
     model_cfg = get_active_model()
     if not model_cfg:
@@ -924,6 +945,9 @@ def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | 
     system = _FUNDFLOW_ANALYSIS_SYSTEM
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
@@ -1133,13 +1157,15 @@ def get_coherence_report(scope: str, scope_key: str | None = None,
 def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "15m",
                            codes: list[str] | None = None,
                            weights: list[float] | None = None,
-                           system_prompt: str | None = None) -> dict:
+                           system_prompt: str | None = None,
+                           intensity: str = "normal") -> dict:
     """组合批量资金 AI 分析：所有有资金流数据的持仓/指数一次发给 AI（省 token），逐只精简输出并落库。
 
     窗口仅支持 15m 及以上（1m/5m 拒绝）；无激活模型/无有效标的 → ValueError。
     codes 提供时按指数组合相关性（scope='indices'），否则按持仓组合（scope='portfolio'）。
     返回 {mode, window, date, covered, total, stocks_count, reports, coherence}。
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
     """
     model_cfg = get_active_model()
     if not model_cfg:
@@ -1157,6 +1183,9 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
     system = _BATCH_FUNDFLOW_SYSTEM
     if system_prompt:
         system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
@@ -1181,9 +1210,10 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
             "source": "batch",
         })
     # 组合级相关性：落库 ai_fundflow_coherence_reports，批量面板顶部展示
+    # scope_key 排序归一：同一组合无论选择顺序都唯一（选中 A,B 与 B,A 同 key，F5 才能精确匹配）
     coherence = _normalize_coherence(raw.get("coherence"))
     scope = "indices" if ctx["mode"] == "indices" else "portfolio"
-    scope_key = ",".join(codes) if codes else (",".join(tags) if tags else "全部")
+    scope_key = ",".join(sorted(codes)) if codes else (",".join(sorted(tags)) if tags else "全部")
     try:
         _upsert_coherence_report(scope, scope_key, ctx["date"], w, coherence,
                                  model_cfg.get("model") or model_cfg.get("name", ""))
@@ -1212,8 +1242,9 @@ _EDITABLE_PROMPTS = {
         "简明给出结论与注意点。"
     ),
     "batch": (
-        "请逐只快速判断资金×股价相关性；对组合整体逐窗口横向对比，判断资金面联动格局"
-        "（共振 / 跷跷板虹吸 / 分化），优先看成交金额，给出组合层面结论。"
+        "请逐只判断资金×股价相关性；对组合整体逐窗口横向对比，判断资金面联动格局"
+        "（共振 / 跷跷板虹吸 / 分化），优先看成交金额，并对比分时成交额与价格的关系，"
+        "给出组合层面结论。"
     ),
     "portfolio": (
         "请从组合整体评估质量、估值、风险与成长性，给出得分（0-100）与评级（A/B/C/D）"

@@ -245,9 +245,9 @@
         return;
       }
       panel.style.display = 'block';
-      // 组合相关性块：精确匹配当前选中指数组合，取不到则按 scope 取最近一条
-      let coh = await loadCoherence('indices', [...selected].join(','), reports[0].window);
-      if (!coh) coh = await loadCoherence('indices', null, reports[0].window);
+      // 组合相关性块：只精确匹配当前选中的指数组合（排序归一同 key），
+      // 必须再次选中该组合才能看到其相关性；没匹配到不显示（不取别的组合）
+      const coh = await loadCoherence('indices', [...selected].sort().join(','), reports[0].window);
       renderFundflowBatchPanel(panel, {
         mode: 'indices', window: reports[0].window, stocks_count: reports.length,
         date: reports[0].trade_date, reports, coherence: coh,

@@ -364,13 +364,13 @@
     async function aiAnalyze() {
       if (!currentCode) return toast('请先选择股票');
       // 先弹窗确认/编辑指令，确定后再发送
-      openPromptEditor('stock', async (systemPrompt) => {
+      openPromptEditor('stock', async (systemPrompt, intensity) => {
         const btn = document.getElementById('aiBtn');
         btn.disabled = true;
         try {
           document.getElementById('aiReportBody').innerHTML = '<div class="empty" style="padding:30px">AI 分析中，请稍候…（涉及网络调用，可能较慢）</div>';
           document.getElementById('aiReportPanel').style.display = 'block';
-          const body = {};
+          const body = { intensity };
           if (systemPrompt) body.system_prompt = systemPrompt;
           const d = await api('/stocks/' + currentCode + '/ai-report', { method: 'POST', body, blocking: true });
           renderAiReport(d);

@@ -596,13 +596,14 @@ let _promptsCache = null;
 // 各 AI 分析入口默认 system prompt（后端单一来源，前端只读缓存）
 async function getDefaultPrompts() {
   if (_promptsCache) return _promptsCache;
-  try { const d = await api('/ai/prompts', { silent: true }); _promptsCache = (d && d.data) || {}; }
+  try { const d = await api('/ai/prompts', { silent: true }); _promptsCache = d || {}; }
   catch (e) { _promptsCache = {}; }
   return _promptsCache;
 }
 
-// 弹窗展示某入口的默认指令，用户可编辑/恢复默认/取消；确定后 onConfirm(customPrompt|null)。
-// 内容与默认一致 → null（不传 system_prompt，后端用默认）；修改 → 自定义文本。数据点不展示。
+// 弹窗展示某入口的默认指令，用户可编辑/恢复默认/取消 + 选分析强度（快速/普通/深入）。
+// 确定后 onConfirm(customPrompt|null, intensity)：内容与默认一致 → null（后端用默认）；
+// 修改 → 自定义文本。数据点不展示。
 async function openPromptEditor(kind, onConfirm) {
   const prompts = await getDefaultPrompts();
   const def = prompts[kind] || '';
@@ -613,6 +614,12 @@ async function openPromptEditor(kind, onConfirm) {
       <h3>🤖 AI 要求</h3>
       <div class="muted" style="font-size:12px;margin-bottom:8px">以下是要发给 AI 的重点要求，可修改后确认；系统完整指令与分析数据会自动附加，不在弹窗展示。</div>
       <textarea rows="6" spellcheck="false" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;line-height:1.7;padding:8px">${esc(def)}</textarea>
+      <div style="display:flex;align-items:center;gap:4px;margin:8px 0 4px;font-size:13px">
+        <span class="muted" style="font-size:12px;margin-right:6px">分析强度</span>
+        <label><input type="radio" name="peIntensity" value="fast"> 快速</label>
+        <label style="margin-left:12px"><input type="radio" name="peIntensity" value="normal" checked> 普通</label>
+        <label style="margin-left:12px"><input type="radio" name="peIntensity" value="deep"> 深入</label>
+      </div>
       <div class="modal-actions">
         <span class="link muted" id="peCancel">取消</span>
         <span class="grow" style="flex:1"></span>
@@ -628,21 +635,22 @@ async function openPromptEditor(kind, onConfirm) {
   mask.querySelector('#peReset').onclick = () => { ta.value = def; };
   mask.querySelector('#peOk').onclick = () => {
     const v = ta.value.trim();
+    const inten = mask.querySelector('input[name="peIntensity"]:checked').value;
     close();
-    onConfirm(v && v !== def ? v : null);
+    onConfirm(v && v !== def ? v : null, inten);
   };
 }
 
 // 触发个股资金流 AI 分析并把结果渲染进 panel（先弹窗确认/编辑指令）
 async function runFundflowAi({ code, window, btn, panel }) {
-  openPromptEditor('fundflow', async (systemPrompt) => {
+  openPromptEditor('fundflow', async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🔄 刷新资金流数据…</div>';
     try {
       await refreshFlowBeforeAnalysis(code);
       panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 分析中…</div>';
-      const body = { code: code || '', window: window || '15m' };
+      const body = { code: code || '', window: window || '15m', intensity };
       if (systemPrompt) body.system_prompt = systemPrompt;
       const d = await api('/ai/fundflow-analysis', { method: 'POST', body });
       renderFundflowAiPanel(panel, d);
@@ -682,7 +690,7 @@ async function loadCoherence(scope, scopeKey, window) {
     if (scopeKey) params.set('scope_key', scopeKey);
     if (window) params.set('window', window);
     const r = await api('/ai/fundflow-coherence?' + params.toString(), { silent: true });
-    return (r && r.data) || null;
+    return r || null;
   } catch (e) {
     return null;
   }
@@ -728,12 +736,12 @@ function renderFundflowBatchPanel(el, d) {
 // 批量分析资金面：POST 批量端点 → 渲染面板 → onDone 刷新列表列（先弹窗确认/编辑指令）
 // 持仓模式（tags）：先刷新持仓资金流；指数模式（codes/weights）：直接分析（资金流由全量刷新拉取）
 async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weights }) {
-  openPromptEditor('batch', async (systemPrompt) => {
+  openPromptEditor('batch', async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🔄 准备资金流数据…</div>';
     try {
-      const body = { code: '', window: window || '15m' };
+      const body = { code: '', window: window || '15m', intensity };
       if (systemPrompt) body.system_prompt = systemPrompt;
       if (codes && codes.length) {
         body.codes = codes.join(',');

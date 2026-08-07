@@ -362,3 +362,55 @@ def test_analyze_batch_custom_system_prompt(monkeypatch):
     assert "1. 共振：" in ai_svc._BATCH_FUNDFLOW_SYSTEM
     assert "相关性" in ai_svc._BATCH_FUNDFLOW_SYSTEM
     assert "虹吸" in ai_svc._BATCH_FUNDFLOW_SYSTEM
+
+
+def test_intensity_instruction_map():
+    """分析强度→指令：快速=快速简要 / 深入=深入详尽 / 普通与非法=空（不改默认指令）。"""
+    assert "快速简要" in ai_svc._intensity_instruction("fast")
+    assert "深入详尽" in ai_svc._intensity_instruction("deep")
+    assert ai_svc._intensity_instruction("normal") == ""
+    assert ai_svc._intensity_instruction("") == ""
+    assert ai_svc._intensity_instruction("bogus") == ""
+    assert "快速简要" in ai_svc._intensity_instruction("FAST")   # 大小写不敏感
+
+
+def test_analyze_batch_intensity_appends_prompt(monkeypatch):
+    """批量分析 intensity：fast/deep 在 system 后追加 [分析强度] 指令；普通不加。"""
+    _activate_mock_model()
+    _seed_index_intraday("000300", "09:31", 4000.0, 1.0e6)
+    captured = {}
+    monkeypatch.setattr(ai_svc, "chat_json", lambda cfg, system, user: captured.update(system=system) or {
+        "coherence": {"correlation": "neutral", "summary": "s", "points": [], "conclusion": "c"},
+        "stocks": [{"code": "000300", "correlation": "neutral", "summary": "x"}],
+    })
+    ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m", intensity="deep")
+    assert "[分析强度]" in captured["system"] and "深入详尽分析" in captured["system"]
+    ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m", intensity="fast")
+    assert "快速简要分析" in captured["system"]
+    # 普通（缺省）不追加强度指令
+    ai_svc.analyze_batch_fundflow(codes=["000300"], window="15m")
+    assert "[分析强度]" not in captured["system"]
+
+
+def test_coherence_scope_key_sorted(monkeypatch):
+    """批量分析 scope_key 排序归一：选中顺序无关，同一组合唯一（000922,000688 落库为 000688,000922）。"""
+    _activate_mock_model()
+    _seed_index_intraday("000688", "09:31", 4000.0, 1.0e6)
+    monkeypatch.setattr(ai_svc, "chat_json", lambda cfg, system, user: {
+        "coherence": {"correlation": "neutral", "summary": "s", "points": [], "conclusion": "c"},
+        "stocks": [{"code": "000688", "correlation": "neutral", "summary": "x"}],
+    })
+    # 乱序传入：000922 在前、000688 在后 → 落库 key 必须排序为 000688,000922
+    ai_svc.analyze_batch_fundflow(codes=["000922", "000688"], window="15m")
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT scope_key FROM ai_fundflow_coherence_reports ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+    assert row and row["scope_key"] == "000688,000922"
+    # 反序再分析 → UPSERT 命中同一 key（不产生第二行）
+    ai_svc.analyze_batch_fundflow(codes=["000688", "000922"], window="15m")
+    with get_conn() as c:
+        n = c.execute("SELECT COUNT(*) n FROM ai_fundflow_coherence_reports").fetchone()["n"]
+        keys = [r["scope_key"] for r in c.execute(
+            "SELECT scope_key FROM ai_fundflow_coherence_reports WHERE scope='indices'")]
+    assert n == len(keys) and all(k == "000688,000922" for k in keys)
