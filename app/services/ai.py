@@ -939,17 +939,18 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
                                 get_fundflow_min, get_index_intraday)
     from app.data.fundflow import FUNDFLOW_WINDOWS, index_intraday_window_series, intraday_window_series
     from app.instruments import get_instrument
+    from app.market.calendar import resolve_trade_day
 
     w = _norm_flow_window(window)
     is_day = w.endswith("d")
-    today = date.today().isoformat()
+    today, _ = resolve_trade_day(None)
     out = {"mode": "stock", "window": w, "date": today, "points": []}
     inst = get_instrument(code)
     # 指数：无逐笔成交、无五档 → 资金面全用腾讯量价（分时 mkline / 日级 fqkline volume），成交额按量派生
     if getattr(inst, "is_index", False):
         scale = _index_amount_scale(code)
         if is_day:
-            start = (date.today() - timedelta(days=45)).isoformat()
+            start = (date.fromisoformat(today) - timedelta(days=45)).isoformat()
             rows = [dict(r) for r in get_daily_prices(code, start, today)]
             for r in rows:
                 if r.get("volume") is not None:
@@ -987,7 +988,7 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
         if bands:
             out["bands"] = bands
     if is_day:
-        start = (date.today() - timedelta(days=45)).isoformat()
+        start = (date.fromisoformat(today) - timedelta(days=45)).isoformat()
         rows = get_daily_fundflows(code, start, today)
         if not rows:
             return out
@@ -1150,13 +1151,12 @@ def build_batch_fundflow_context(tags: list[str] | None = None, window: int | st
       weights 与 codes 对齐（等权可传 None，AI 侧按 100/n 记）。
     返回 {mode,window,date,covered,total,stocks:[]}。
     """
-    from datetime import date
-
     from app.instruments import get_instrument
+    from app.market.calendar import resolve_trade_day
     from app.services.quote import get_quote
 
     w = _norm_flow_window(window)
-    today = date.today().isoformat()
+    today, _ = resolve_trade_day(None)
     if codes:
         members: list[dict] = []
         for i, code in enumerate(codes):

@@ -14,10 +14,13 @@ def _tag_list(tags: str | None) -> list[str] | None:
 
 
 @router.get("/portfolio")
-def portfolio(code: str | None = None, tags: str | None = None):
-    """整体组合分析；tags=标签子集（逗号分隔，缺省全选）；带 code 则返回该股在组合内的贡献与上下文。"""
+def portfolio(code: str | None = None, tags: str | None = None, as_of: str | None = None):
+    """整体组合分析；tags=标签子集（逗号分隔，缺省全选）；带 code 则返回该股在组合内的贡献与上下文。
+
+    as_of：可选历史回看日；仅估值倍数/分位/股息率用该日收盘价，市值/盈亏仍为实时。
+    """
     try:
-        p = compute_portfolio(tags=_tag_list(tags))
+        p = compute_portfolio(tags=_tag_list(tags), as_of=as_of)
     except Exception as e:
         raise HTTPException(500, f"组合分析失败: {e}")
 
@@ -48,11 +51,14 @@ def portfolio_weights():
 
 
 @router.get("/portfolio/fundflow")
-def portfolio_fundflow(tags: str | None = None):
-    """组合资金流穿透：按选中 A 股个股持仓求和（tags 逗号分隔，缺省全选）。ETF/港股不参与。"""
+def portfolio_fundflow(tags: str | None = None, as_of: str | None = None):
+    """组合资金流穿透：按选中 A 股个股持仓求和（tags 逗号分隔，缺省全选）。ETF/港股不参与。
+
+    as_of：可选历史回看日；非交易日退到最近交易日。
+    """
     try:
         from app.analysis.portfolio import portfolio_fundflow as _pf
 
-        return {"ok": True, "data": _pf(tags=_tag_list(tags))}
+        return {"ok": True, "data": _pf(tags=_tag_list(tags), as_of=as_of)}
     except Exception as e:
         raise HTTPException(500, f"组合资金流失败: {e}")

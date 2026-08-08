@@ -2,13 +2,30 @@
 const _chartResizeWired = new WeakSet();  // 同一 echarts 实例只绑一次 resize，避免 loadPage 累加监听
 
 function initChart(el) {
-  if (!window.echarts) return null;
+  if (!el || !window.echarts) return null;
+  // 容器曾被 display:none / 清空过：先恢复可见，否则 init 宽高为 0，切回有数据也画不出来
+  if (el.style.display === 'none') el.style.display = '';
   const chart = echarts.getInstanceByDom(el) || echarts.init(el);
   if (!_chartResizeWired.has(chart)) {
     _chartResizeWired.add(chart);
     window.addEventListener('resize', () => chart.resize());
   }
+  // 切日期后容器刚恢复显示：下一帧补一次 resize
+  requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
   return chart;
+}
+
+/** 安全清空图容器：先 dispose 再清 DOM，并恢复可见（避免切日期后图永久空白）。 */
+function clearChart(el) {
+  if (!el) return;
+  if (window.echarts) {
+    const chart = echarts.getInstanceByDom(el);
+    if (chart) {
+      try { chart.dispose(); } catch (e) { /* ignore */ }
+    }
+  }
+  el.innerHTML = '';
+  el.style.display = '';
 }
 
 // 图例「一键独显」：点某条线一次 → 只显示它（关掉其余）；独显状态再点同一条 → 恢复全部。
@@ -189,6 +206,9 @@ function fundflowBars(el, latest) {
 //   - 图上方有分位线控制条（P10/30/50/70/90），数值显示在按钮上
 // ============================================================
 function valuationChart(el, series, opts) {
+  if (!el) return null;
+  // 每次重画先 dispose：切 as_of / 空态写过 .empty / 折叠态 0 宽高后，复用实例容易白板挂死
+  clearChart(el);
   const chart = initChart(el);
   if (!chart) return null;
   const o = opts || {};
@@ -411,9 +431,10 @@ function valuationChart(el, series, opts) {
       { type: 'slider', height: 16, bottom: 8, start: 0, end: 100 },
     ],
     series: [buildSeries()],
-  });
+  }, { notMerge: true });
   renderControls();
   updateSub();
+  requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
   return chart;
 }
 
@@ -683,12 +704,12 @@ function fundflowDayBuySell(el, days, windowLabel) {
 // 股价/净值独立折线图（资金流趋势面板最上方）：只看价格/净值自身走势，独立自适应刻度。
 // points 为分时（{ts,price}）或日级（{trade_date,price}）；无 price 返回空。
 function fundflowPrice(el, points, windowLabel) {
+  const labels = (points || []).map((p) => p.ts || p.trade_date || '');
+  const prices = (points || []).map((p) => (p.price != null ? p.price : null));
+  if (!prices.some((v) => v != null)) { clearChart(el); el.style.display = 'none'; return null; }
+  el.style.display = '';
   const chart = initChart(el);
   if (!chart) return null;
-  const labels = points.map((p) => p.ts || p.trade_date || '');
-  const prices = points.map((p) => (p.price != null ? p.price : null));
-  if (!prices.some((v) => v != null)) { el.innerHTML = ''; el.style.display = 'none'; return null; }
-  el.style.display = '';
   chart.setOption({
     title: { text: '股价 / 组合净值（' + windowLabel + '）', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
@@ -709,6 +730,8 @@ function fundflowPrice(el, points, windowLabel) {
       areaStyle: { color: 'rgba(25,113,194,.08)' },
     }],
   }, { notMerge: true });
+  // 容器曾隐藏过：下一帧强制 resize，否则宽高为 0
+  requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
   return chart;
 }
 
@@ -716,10 +739,9 @@ function fundflowPrice(el, points, windowLabel) {
 // points 为 [{ts|date, amount(该期成交额), prices|closes:{code:price}}]，names={code:指数名}。
 // 成交额从起始逐期累积（单调递增），避免当期波动造成「越看越少」的错觉；柱显示各期独立量。
 function indexVolumePrice(el, points, windowLabel, names) {
+  if (!points || !points.length) { clearChart(el); return null; }
   const chart = initChart(el);
-  if (!chart) return null;
-  if (!points || !points.length) { el.innerHTML = ''; return null; }
-  const PALETTE = ['#2563eb', '#e03131', '#2f9e44', '#f76707', '#7048e8', '#0ca678',
+  if (!chart) return null;  const PALETTE = ['#2563eb', '#e03131', '#2f9e44', '#f76707', '#7048e8', '#0ca678',
                    '#f59f00', '#339af0', '#c2255c', '#495057', '#1c7ed6', '#12b886'];
   const labels = points.map((p) => p.ts || p.date);
   const amounts = points.map((p) => p.amount || 0);

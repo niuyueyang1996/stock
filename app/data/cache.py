@@ -52,6 +52,15 @@ def get_daily_price(code: str, trade_date: str):
         ).fetchone()
 
 
+def get_daily_price_asof(code: str, as_of: str):
+    """trade_date ≤ as_of 的最近一条收盘价（历史估值用）。"""
+    with get_conn() as c:
+        return c.execute(
+            "SELECT * FROM daily_price_cache WHERE code=? AND trade_date<=? ORDER BY trade_date DESC LIMIT 1",
+            (code, as_of),
+        ).fetchone()
+
+
 def get_daily_prices(code: str, start: str, end: str) -> list:
     """查询 [start,end] 区间缓存行（升序）。"""
     with get_conn() as c:

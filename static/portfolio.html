@@ -36,6 +36,9 @@
     <div style="flex:1; min-width:0">
       <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个标签。</div>
       <div id="rightContent">
+        <div class="panel" id="asOfPanel" style="padding:10px 14px;margin-bottom:12px">
+          <div id="asOfPicker"></div>
+        </div>
         <div id="summary"></div>
         <div class="panel" id="pfGrowthPanel">
           <h2>盈利与成长（组合） <span class="sub">静态 / TTM / 前瞻</span></h2>
@@ -138,12 +141,34 @@
     let aiPortfolioReport = null;   // 最新组合 AI 报告（GET /ai-scoring/portfolio）
     let aiConfigured = false;
     let flowReports = {};           // 持仓资金面 map：{code:{correlation,summary,trade_date,window,source}}
+    let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（估值+分时）
 
-    function tagsQS() {
-      if (!allTags.length) return '';
-      if (selectedTags.size === allTags.length) return '';   // 全选 = 全持仓
-      return '?tags=' + encodeURIComponent([...selectedTags].join(','));
+    function tagsQS(extra) {
+      const parts = [];
+      if (allTags.length && selectedTags.size < allTags.length) {
+        parts.push('tags=' + encodeURIComponent([...selectedTags].join(',')));
+      }
+      if (asOfDate) parts.push('as_of=' + encodeURIComponent(asOfDate));
+      if (extra) {
+        Object.keys(extra).forEach((k) => {
+          if (extra[k] != null && extra[k] !== '') parts.push(k + '=' + encodeURIComponent(extra[k]));
+        });
+      }
+      return parts.length ? '?' + parts.join('&') : '';
     }
+
+    function refreshAsOfPicker() {
+      mountAsOfPicker(document.getElementById('asOfPicker'), {
+        value: asOfDate,
+        label: '按日期查看（估值 · 资金流分时）',
+        onChange: (iso) => {
+          asOfDate = iso;
+          refreshAsOfPicker();
+          loadPage();
+        },
+      });
+    }
+    refreshAsOfPicker();
 
     // 顶部「全选」卡片：全持仓合计市值/今日盈亏 + 选择状态
     function renderTagAll() {
@@ -256,6 +281,7 @@
 
     function renderSummary(p) {
       const pf = p.portfolio;
+      setAsOfHint(document.getElementById('asOfPicker'), pf);
       const main = [
         ['AI 组合打分',
           aiPortfolioReport ? `${fmtNum(aiPortfolioReport.report.score)} ${aiPortfolioReport.report.rating}` : (aiConfigured ? '—' : '未配置'),
@@ -301,7 +327,8 @@
         return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
       }).join('');
       setPanelSummary('pfGrowthPanel',
-        sumKV('PE', fmtNum(pf.pe)) + sumSep() + sumKV('PB', fmtNum(pf.pb)) + sumSep() + sumKV('ROE', fmtPct(pf.roe_ttm)));
+        (pf.hist_view && pf.as_of ? sumChip('截至 ' + pf.as_of) + sumSep() : '')
+        + sumKV('PE', fmtNum(pf.pe)) + sumSep() + sumKV('PB', fmtNum(pf.pb)) + sumSep() + sumKV('ROE', fmtPct(pf.roe_ttm)));
     }
 
     // ============ AI 组合打分 ============
@@ -390,6 +417,8 @@
     }
 
     function gauge(el, value, name, color) {
+      if (!el) return;
+      clearChart(el);
       const chart = initChart(el);
       if (!chart) return;
       chart.setOption({
@@ -406,13 +435,25 @@
           title: { offsetCenter: [0, '82%'], fontSize: 13, color: '#8a919f' },
           data: [{ value: value ?? 0, name }],
         }],
-      });
+      }, { notMerge: true });
+      requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
     }
 
     function renderGauges(p) {
       const pe = p.portfolio.pe_pct, pb = p.portfolio.pb_pct;
-      gauge(document.getElementById('peGauge'), pe, '综合 PE 分位(1y)', '#2f6fed');
-      gauge(document.getElementById('pbGauge'), pb, '综合 PB 分位(1y)', '#1f56cf');
+      const peEl = document.getElementById('peGauge');
+      const pbEl = document.getElementById('pbGauge');
+      // 无分位时也清空旧图，避免切日期后残留上一天的仪表盘
+      if (pe == null && pb == null) {
+        clearChart(peEl); clearChart(pbEl);
+        setPanelSummary('gaugePanel',
+          (p.portfolio.hist_view
+            ? asOfEmptyHint(p.portfolio, 'valuation')
+            : '暂无分位（完整更新后生成组合序列）'));
+        return;
+      }
+      gauge(peEl, pe, '综合 PE 分位(1y)', '#2f6fed');
+      gauge(pbEl, pb, '综合 PB 分位(1y)', '#1f56cf');
       setPanelSummary('gaugePanel',
         sumL('PE分位') + ' ' + sumQ(pe) + sumSep() + sumL('PB分位') + ' ' + sumQ(pb));
     }
@@ -458,9 +499,12 @@
       if (!s || !Object.keys(s).length) {
         empty.style.display = 'block';
         tabsWrap.innerHTML = '';
-        peEl.innerHTML = '';
-        pbEl.innerHTML = '';
-        setPanelSummary('seriesPanel', '暂无序列');
+        clearChart(peEl);
+        clearChart(pbEl);
+        setPanelSummary('seriesPanel',
+          (p.portfolio && p.portfolio.hist_view)
+            ? asOfEmptyHint(p.portfolio, 'valuation')
+            : '暂无序列');
         return;
       }
       empty.style.display = 'none';
@@ -473,8 +517,10 @@
       }));
       drawSeries(s);
       const d0 = s[seriesPeriod];
+      const pf = p.portfolio || {};
       setPanelSummary('seriesPanel', d0 && d0.dates
-        ? sumChip(seriesPeriod) + ' ' + sumKV('样本', d0.dates.length + '日') + sumSep()
+        ? (pf.hist_view && pf.as_of ? sumChip('截至 ' + pf.as_of) + ' ' : '')
+          + sumChip(seriesPeriod) + ' ' + sumKV('样本', d0.dates.length + '日') + sumSep()
           + sumKV('PE', fmtNum(d0.cur_pe)) + sumSep() + sumKV('PB', fmtNum(d0.cur_pb))
         : seriesPeriod);
     }
@@ -483,9 +529,10 @@
       const d = s[seriesPeriod];
       if (!d || !d.dates.length) return;
       const fwd = lastPortfolio ? lastPortfolio.portfolio : {};
-      // 组合图：实时(蓝线+pin) + 前瞻(橙线+triangle)，与个股图同款颜色规范；图上不写字，由上方图例说明颜色对应
+      // 组合图：实时/回看(蓝线+pin) + 前瞻(橙线+triangle)，与个股图同款；图上不写字，由上方图例说明
+      const markName = fwd.hist_view ? '回看' : '实时';
       const mk = (cur, fwdVal) => [
-        { name: '实时', value: cur, color: '#2563eb', line: true },
+        { name: markName, value: cur, color: '#2563eb', line: true },
         ...(fwdVal == null ? [] : [{ name: '前瞻', value: fwdVal, color: '#e8590c', symbol: 'triangle', line: true }]),
       ];
       valuationChart(document.getElementById('peSeriesLine'), { dates: d.dates, values: d.pe }, {
@@ -508,8 +555,6 @@
         if (seq !== pfFlowSeq) return;                     // 过期响应丢弃
         const panel = document.getElementById('fundflowPanel');
         if (panel) panel.style.display = '';               // 成功渲染恢复面板可见（防先前失败隐藏后无法恢复）
-        const note = document.getElementById('pfFlowNote');
-        if (note) note.textContent = '穿透持仓：A股个股按持仓求和（覆盖 ' + d.covered + '/' + d.total + ' 持仓）';
         const empty = document.getElementById('pfFlowEmpty');
         const base = d.fundflow_15m || [];
         const hist = d.fundflow_history || [];
@@ -522,24 +567,44 @@
         const priceEl = document.getElementById('pfFlowPrice');
         if (!base.length && !hist.length && !hasBars) {
           empty.style.display = 'block';
-          tabsEl.innerHTML = ''; intraEl.innerHTML = ''; bsEl.innerHTML = ''; barsEl.innerHTML = '';
-          if (priceEl) priceEl.innerHTML = '';
+          empty.textContent = (asOfDate || d.as_of_adjusted)
+            ? asOfEmptyHint(d, 'flow')
+            : '暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。';
+          tabsEl.innerHTML = '';
+          clearChart(intraEl); clearChart(bsEl); clearChart(barsEl); clearChart(priceEl);
           return;
         }
         empty.style.display = 'none';
+        const note = document.getElementById('pfFlowNote');
+        if (note) {
+          const day = d.as_of ? ` · ${d.as_of}` : '';
+          note.textContent = '穿透持仓：A股个股按持仓求和（覆盖 ' + d.covered + '/' + d.total + ' 持仓）' + day;
+        }
         // 统一时间窗：分钟读当日分时，天窗口读多日逐日五档（本地聚合桶）
         const isMin = (w) => /m$/.test(w);
         const draw = (w) => {
           pfFlowWindow = w;
           if (isMin(w)) {
-            if (!base.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = ''; return; }
+            if (!base.length) {
+              clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
+              empty.style.display = 'block';
+              empty.textContent = asOfEmptyHint(d, 'flow') || '当日分时暂无数据（当时未刷新采集），可切到「1天」看近45日走势。';
+              return;
+            }
+            empty.style.display = 'none';
             const pts = resampleFlow(base, parseInt(w, 10));
             fundflowPrice(priceEl, pts, FLOW_WINDOW_LABEL[w] + '分时');   // 组合净值独立图（最上边）
             fundflowIntraday(intraEl, pts, parseInt(w, 10));
             fundflowBuySell(bsEl, pts, parseInt(w, 10));
           } else {
+            empty.style.display = 'none';
             const days = bucketFlowDays(hist, parseInt(w, 10));
-            if (!days.length) { intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = ''; return; }
+            if (!days.length) {
+              clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
+              empty.style.display = 'block';
+              empty.textContent = asOfEmptyHint(d, 'flow') || '该时间窗暂无日级资金流。';
+              return;
+            }
             fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 组合净值独立图
             fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
             fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
@@ -552,8 +617,7 @@
           onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
         }));
         draw(pfFlowWindow);
-        if (hasBars) fundflowBars(barsEl, latest); else barsEl.innerHTML = '';
-        const net = latest && (latest.netamount != null ? latest.netamount
+        if (hasBars) fundflowBars(barsEl, latest); else clearChart(barsEl);        const net = latest && (latest.netamount != null ? latest.netamount
           : (latest.main_net != null ? latest.main_net : null));
         setPanelSummary('fundflowPanel',
           d.covered

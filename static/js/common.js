@@ -1334,3 +1334,91 @@ async function openTagPrefModal(tag, onSaved) {
     }
   };
 }
+
+// ---------- 按日期查看（估值 + 资金流分时） ----------
+
+function todayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function shiftISO(iso, days) {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** 周一→周五吸附；周末退到上周五（与后端 resolve_trade_day 工作日近似一致）。 */
+function lastWeekdayISO(iso) {
+  const d = new Date((iso || todayISO()) + 'T12:00:00');
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function asOfQuery(asOf) {
+  return asOf ? '&as_of=' + encodeURIComponent(asOf) : '';
+}
+
+function asOfEmptyHint(meta, kind) {
+  /** kind: 'flow' | 'valuation' */
+  if (!meta) return '';
+  if (kind === 'flow') {
+    if (meta.as_of_adjusted) {
+      return `所选日期非交易日，已自动切到 ${meta.as_of}。该日没有分时数据（当时未刷新采集），可切到「1天」看近45日走势。`;
+    }
+    return `${meta.as_of || '该日'}没有分时数据（当时未刷新采集），可切到「1天」看近45日走势。`;
+  }
+  if (meta.as_of_adjusted) {
+    return `所选日期非交易日，已自动切到 ${meta.as_of}。这天还没有估值数据，试试其它日期或做一次完整更新。`;
+  }
+  return `${meta.as_of || '该日'}还没有估值数据，试试其它日期或做一次完整更新。`;
+}
+
+/**
+ * 挂载日期选择条。value=null 表示「最新」（不传 as_of）；选日期后 onChange(iso)。
+ * container: DOM 节点；会清空并写入控件。
+ */
+function mountAsOfPicker(container, { value, onChange, label } = {}) {
+  if (!container) return;
+  const cur = value || '';
+  const isLive = !cur;
+  container.innerHTML = `
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:0">
+      <span class="muted" style="font-size:13px">${esc(label || '按日期查看')}</span>
+      <button type="button" class="btn${isLive ? ' primary' : ''}" data-asof="live" style="padding:2px 10px;font-size:12px">最新</button>
+      <button type="button" class="btn" data-asof="yesterday" style="padding:2px 10px;font-size:12px">昨天</button>
+      <input type="date" data-asof-input value="${esc(cur)}" max="${todayISO()}"
+             style="padding:2px 8px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:6px">
+      <span class="muted" data-asof-hint style="font-size:12px"></span>
+    </div>`;
+  const emit = (iso) => {
+    if (typeof onChange === 'function') onChange(iso);
+  };
+  container.querySelector('[data-asof="live"]').onclick = () => emit(null);
+  container.querySelector('[data-asof="yesterday"]').onclick = () => {
+    emit(lastWeekdayISO(shiftISO(todayISO(), -1)));
+  };
+  const inp = container.querySelector('[data-asof-input]');
+  inp.onchange = () => {
+    if (!inp.value) { emit(null); return; }
+    emit(lastWeekdayISO(inp.value));
+  };
+}
+
+function setAsOfHint(container, meta) {
+  const hint = container && container.querySelector('[data-asof-hint]');
+  if (!hint) return;
+  if (!meta || !meta.as_of) { hint.textContent = ''; return; }
+  if (meta.hist_view) {
+    hint.textContent = meta.as_of_adjusted
+      ? `截至 ${meta.as_of}（已从非交易日自动调整）`
+      : `截至 ${meta.as_of}`;
+  } else if (meta.as_of_adjusted) {
+    hint.textContent = `分时按最近交易日 ${meta.as_of}`;
+  } else {
+    hint.textContent = '';
+  }
+}

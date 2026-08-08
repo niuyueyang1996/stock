@@ -9,9 +9,15 @@ from app.data.base import load_index_registry
 from app.instruments import get_instrument, type_of
 from app.instruments.base import Instrument
 from app.instruments.detail import build_detail
+from app.market.calendar import last_trade_date
 from app.models.db import get_conn
 from app.services import ai as ai_svc
 from tests.mock_instrument import MockInstrument
+
+
+def _trade_day():
+    """有效交易日（周末退到周五），与 combo_fundflow/build_detail 默认口径一致。"""
+    return last_trade_date(date.today()).isoformat()
 
 
 def _activate_mock_model():
@@ -20,14 +26,14 @@ def _activate_mock_model():
 
 
 def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net, price=None):
-    """插入 1 条分时资金流分钟点（trade_date=今天）。price 为分钟末笔价（股价折线）。"""
+    """插入 1 条分时资金流分钟点（trade_date=有效交易日）。price 为分钟末笔价（股价折线）。"""
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO fundflow_15m_cache
                (code, trade_date, ts, main_net, super_large_net, large_net, medium_net, small_net, xs_net,
                 buy_amount, sell_amount, price)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (code, date.today().isoformat(), ts,
+            (code, _trade_day(), ts,
              super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0, price),
         )
 
@@ -39,7 +45,7 @@ def _seed_day(code, netamount, main_net=None):
                (code, trade_date, netamount, main_net, main_net_pct, super_large_net, large_net,
                 medium_net, small_net, xs_net, p15, p40, p75, p95)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (code, date.today().isoformat(), netamount,
+            (code, _trade_day(), netamount,
              main_net if main_net is not None else netamount * 0.6, 5.0,
              netamount * 0.6, netamount * 0.4, 0.0, 0.0, 0.0, 100.0, 500.0, 2000.0, 10000.0),
         )
@@ -259,7 +265,7 @@ def _seed_index_intraday(code, ts, price, volume):
         c.execute(
             """INSERT OR REPLACE INTO index_intraday_cache(code, trade_date, ts, price, volume, amount)
                VALUES(?,?,?,?,?,NULL)""",
-            (code, date.today().isoformat(), ts, price, volume),
+            (code, _trade_day(), ts, price, volume),
         )
 
 
@@ -276,11 +282,12 @@ def _seed_index_price(code, trade_date, close, volume):
 def test_combo_index_volume_equal_weight_sum(monkeypatch):
     from app.analysis.instrument_fundflow import combo_index_volume
 
+    day = _trade_day()
     _seed_index_intraday("000300", "09:31", 4000.0, 1.0e6)
     _seed_index_intraday("000905", "09:31", 8000.0, 2.0e6)
     _seed_index_intraday("000905", "09:44", 8010.0, 3.0e6)
-    _seed_index_price("000300", date.today().isoformat(), 4000.0, 1.0e7)
-    _seed_index_price("000905", date.today().isoformat(), 8000.0, 3.0e7)
+    _seed_index_price("000300", day, 4000.0, 1.0e7)
+    _seed_index_price("000905", day, 8000.0, 3.0e7)
     # 行情成交额固定为「最新日量×2」→ scale=2.0，成交额 = Σ量×2
     monkeypatch.setattr("app.services.quote.get_quote",
                         lambda code: {"code": code, "amount": 2.0e7 if code == "000300" else 6.0e7})
@@ -292,9 +299,9 @@ def test_combo_index_volume_equal_weight_sum(monkeypatch):
     assert row["amount"] == (1.0e6 + 2.0e6) * 2.0
     assert row["prices"]["000300"] == 4000.0 and row["prices"]["000905"] == 8000.0
     # 日级 Σ成交额 + 各指数收盘
-    day = d["daily"][-1]
-    assert day["amount"] == (1.0e7 + 3.0e7) * 2.0
-    assert day["closes"]["000905"] == 8000.0
+    day_row = d["daily"][-1]
+    assert day_row["amount"] == (1.0e7 + 3.0e7) * 2.0
+    assert day_row["closes"]["000905"] == 8000.0
 
 
 def test_combo_index_volume_excludes_non_index():
@@ -351,7 +358,7 @@ def test_index_fundflow_context_includes_amount(monkeypatch):
 
     _seed_index_intraday("000300", "09:31", 4000.0, 1000.0)
     _seed_index_intraday("000300", "09:32", 4001.0, 1000.0)
-    _seed_index_price("000300", date.today().isoformat(), 4000.0, 2.0e5)  # 日量 → scale=1e6/2e5=5
+    _seed_index_price("000300", _trade_day(), 4000.0, 2.0e5)  # 日量 → scale=1e6/2e5=5
     ctx = ai_svc.build_fundflow_analysis_context("000300", "15m")
     assert ctx["mode"] == "index"
     pts = ctx["points"]
@@ -363,7 +370,7 @@ def test_index_fundflow_context_includes_amount(monkeypatch):
     # 天窗口：逐日量价带 amount
     ctx_d = ai_svc.build_fundflow_analysis_context("000300", "1d")
     assert ctx_d["mode"] == "index"
-    day = [p for p in ctx_d["points"] if p["date"] == date.today().isoformat()]
+    day = [p for p in ctx_d["points"] if p["date"] == _trade_day()]
     assert day and day[0]["amount"] == 2.0e5 * 5.0  # 日量 × scale
 
 
@@ -487,7 +494,7 @@ def test_build_detail_fundflow_has_price():
 
     _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6, price=10.1)
     _seed_day("600000", 1.5e6)
-    _seed_index_price("600000", date.today().isoformat(), 10.15, 1e6)
+    _seed_index_price("600000", _trade_day(), 10.15, 1e6)
     d = build_detail(get_instrument("600000"), "浦发银行")
     data = d["data"]
     assert data["fundflow_15m"] and data["fundflow_15m"][0]["price"] == 10.1
@@ -498,7 +505,7 @@ def test_portfolio_fundflow_value_line():
     """组合净值线：分时 Σ(分笔价×股数)、日级 Σ(收盘价×股数) 并入资金流点（仅参与资金流的 A股）。"""
     from app.analysis.portfolio import portfolio_fundflow
 
-    today = date.today().isoformat()
+    today = _trade_day()
     with get_conn() as c:
         c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600000','浦发银行','sh')")
         c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600519','贵州茅台','sh')")
@@ -526,7 +533,7 @@ def test_portfolio_fundflow_value_line_forward_fill():
     """组合净值线前向沿用：持仓某分钟缺价 → 沿用最近价，净值不砍半/不 null。"""
     from app.analysis.portfolio import portfolio_fundflow
 
-    today = date.today().isoformat()
+    today = _trade_day()
     with get_conn() as c:
         c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600000','浦发银行','sh')")
         c.execute("INSERT OR REPLACE INTO stocks(code,name,market) VALUES('600519','贵州茅台','sh')")

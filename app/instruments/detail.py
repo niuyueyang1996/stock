@@ -19,6 +19,7 @@ from app.data.cache import (
     get_valuation_series,
 )
 from app.data.fundflow import FUNDFLOW_WINDOWS
+from app.market.calendar import resolve_trade_day
 from app.services.quote import get_quote
 
 DEFAULT_CHART_PERIOD = "3y"
@@ -39,6 +40,7 @@ def build_detail(
     partial_missing: list | None = None,
     note: str = "当日分笔派生，历史从接入日起累积",
     extra: dict | None = None,
+    as_of: str | None = None,
 ) -> dict:
     """组装单标的详情响应（ok/data 结构）。共享四段 + 统一字段，差异经 extra 合并。
 
@@ -50,21 +52,36 @@ def build_detail(
     - partial_missing：partial=1 时缺失缓存项（个股），指数固定 []。
     - note：fundflow_15m_note 展示文案，传 None 省略。
     - extra：调用方差异字段（tag/is_etf/tracked_index/symbol/is_index 等）合并进 data。
+    - as_of：可选历史回看日；非交易日自动退到最近交易日。缺省时分时也走有效交易日
+      （修周末白板）；估值仅在显式传入 as_of 时改用该日收盘价。
     """
     code = instrument.code
     if quote is None:
         quote = get_quote(code)
-    live = compute_live(code, quote["price"] if quote else None)
+
+    trade_day, adjusted = resolve_trade_day(as_of)
+    hist_view = as_of is not None
+
+    if hist_view:
+        live = compute_live(code, as_of=trade_day)
+        ql = get_quantiles(code, as_of=trade_day)
+    else:
+        live = compute_live(code, quote["price"] if quote else None)
+        ql = get_quantiles(code)
+
     val = get_valuation(code)
-    ql = get_quantiles(code)
 
     # 百度/乐咕历史序列（画折线图，1y/3y/5y 多周期，前端可切换）
+    # 历史回看：截断到 as_of，避免图上出现「未来」点
+    def _hist_pts(indicator: str, period: str) -> list[dict]:
+        pts = get_valuation_series(code, indicator, period)
+        if hist_view:
+            pts = [p for p in pts if p[0] <= trade_day]
+        return [{"date": d, "value": v} for d, v in pts]
+
     valuation_history = {
         "periods": {
-            p: {
-                "pe": [{"date": d, "value": v} for d, v in get_valuation_series(code, "pe", p)],
-                "pb": [{"date": d, "value": v} for d, v in get_valuation_series(code, "pb", p)],
-            }
+            p: {"pe": _hist_pts("pe", p), "pb": _hist_pts("pb", p)}
             for p in PERIODS
         },
         "default": DEFAULT_CHART_PERIOD,
@@ -74,8 +91,8 @@ def build_detail(
     fin = get_financials(code)
     financials = dict(fin) if (fin and instrument.has_financials) else None
 
-    # 最新一天五档资金流 + 当日自适应分档阈值 P15/P40/P75/P95
-    row = get_daily_fundflow(code)
+    # 指定交易日五档资金流 + 自适应分档阈值 P15/P40/P75/P95
+    row = get_daily_fundflow(code, trade_day)
     flow_latest = dict(row) if row else None
     bands = {k: flow_latest[k] for k in ("p15", "p40", "p75", "p95")
              if flow_latest and flow_latest.get(k) is not None} or None
@@ -84,10 +101,10 @@ def build_detail(
         flow_latest = {k: flow_latest[k] for k in _FLOW_LATEST_FIELDS}
         flow_latest["xs_net"] = xs_net
 
-    # 近45日净流入历史（日级收盘价作股价折线）
-    today = date.today().isoformat()
-    flow_start = (date.today() - timedelta(days=45)).isoformat()
-    close_map = {r["trade_date"]: r["close"] for r in get_daily_prices(code, flow_start, today)}
+    # 近45日净流入历史（日级收盘价作股价折线）；终点为有效交易日
+    flow_end = date.fromisoformat(trade_day)
+    flow_start = (flow_end - timedelta(days=45)).isoformat()
+    close_map = {r["trade_date"]: r["close"] for r in get_daily_prices(code, flow_start, trade_day)}
     flow_hist = [
         {
             "trade_date": r["trade_date"],
@@ -102,12 +119,12 @@ def build_detail(
             "sell_amount": r["sell_amount"],
             "price": close_map.get(r["trade_date"]),   # 当日收盘价（股价折线）
         }
-        for r in get_daily_fundflows(code, flow_start, today)
+        for r in get_daily_fundflows(code, flow_start, trade_day)
     ]
 
-    # 当日分时五档资金流：始终 1 分钟基础粒度（前端本地按 1/5/15/30 重采样）
+    # 分时五档：有效交易日 1 分钟基础粒度（前端本地按 1/5/15/30 重采样）
     fundflow_window = window if window in FUNDFLOW_WINDOWS else 15
-    min_rows = get_fundflow_min(code, today)
+    min_rows = get_fundflow_min(code, trade_day)
     fundflow_15m = [
         {
             "ts": r["ts"],
@@ -123,13 +140,12 @@ def build_detail(
         for r in min_rows
     ]
 
-    # 指数当日分时量价（腾讯 mkline，1 分钟粒度）：指数无逐笔成交、无分时五档，
-    # 分时分析以量价为基础。个股无数据 → 空数组。
+    # 指数分时量价（腾讯 mkline）：指数无逐笔成交、无分时五档，分时分析以量价为基础。
     intraday = []
     if getattr(instrument, "is_index", False):
         intraday = [
             {"ts": r["ts"], "price": r["price"], "volume": r["volume"]}
-            for r in get_index_intraday(code, today)
+            for r in get_index_intraday(code, trade_day)
         ]
 
     data = {
@@ -151,6 +167,10 @@ def build_detail(
         "fundflow_window": fundflow_window,
         "fundflow_windows": FUNDFLOW_WINDOWS,
         "partial_missing": partial_missing or [],
+        "as_of": trade_day,
+        "as_of_adjusted": adjusted,
+        "as_of_requested": as_of,
+        "hist_view": hist_view,
     }
     if fx_rate is not None:
         data["fx_rate"] = fx_rate

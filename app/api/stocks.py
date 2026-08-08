@@ -408,12 +408,14 @@ def stock_latest_dividend(code: str):
 
 
 @router.get("/stocks/{code}")
-def stock_detail(code: str, partial: bool = False, window: int = 15):
+def stock_detail(code: str, partial: bool = False, window: int = 15, as_of: str | None = None):
     """单股全套：行情 + 实时估值/前瞻 + 分位 + 历史序列 + 财务 + 资金流。
 
     缓存缺失时返回 HTTP 409 CACHE_MISS（前端弹窗询问下载），GET 内绝不联网/写库/懒重建。
     下载由前端调用 POST /stocks/{code}/refresh/full 完成；partial=1 仅打开已有数据（缺失标记）。
     window=1|5|15|30：分时资金流重采样分钟窗口（默认 15）。
+    as_of：可选历史回看日（YYYY-MM-DD）；非交易日自动退到最近交易日。估值用该日收盘价，
+    分时读该日缓存；市值/行情卡仍为实时。
     """
     inst = get_instrument(code)
     # 指数：走指数详情口径（注册表名称 + 量价 intraday，无 409、无个股名称解析）
@@ -428,7 +430,7 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         except Exception:  # noqa: BLE001 指数无行情缓存按 None 展示
             q = None
         return build_detail(
-            inst, d["name"], quote=q, window=window,
+            inst, d["name"], quote=q, window=window, as_of=as_of,
             extra={"symbol": d["symbol"], "is_index": True, "is_etf": False},
         )
     status = _cache_status(code)
@@ -474,12 +476,14 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         if m and m["index_code"]:
             tracked_index = {"code": m["index_code"], "name": m["index_name"], "source": m["source"]}
 
-    # 港股：当前汇率（人民币折算展示用）
+    # 港股：汇率（历史回看用 as_of 日或之前最近；否则今日）
     fx_rate = None
     if inst.currency != "CNY":
+        from app.market.calendar import resolve_trade_day
         from app.services.fx import get_fx_rate_cny
 
-        fx_rate = get_fx_rate_cny(inst.currency, date.today().isoformat())
+        fx_day, _ = resolve_trade_day(as_of)
+        fx_rate = get_fx_rate_cny(inst.currency, fx_day)
 
     # 共享四段（估值序列/日资金流/近45日历史/分时）+ 统一装配（detail.py）
     return build_detail(
@@ -489,6 +493,7 @@ def stock_detail(code: str, partial: bool = False, window: int = 15):
         window=window,
         fx_rate=fx_rate,
         partial_missing=status["missing_items"] if partial else [],
+        as_of=as_of,
         extra={"tag": tag, "is_etf": is_etf, "tracked_index": tracked_index},
     )
 

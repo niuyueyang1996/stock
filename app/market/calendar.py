@@ -23,6 +23,24 @@ def last_trade_date(d: date | None = None) -> date:
     return d
 
 
+def resolve_trade_day(d: date | str | None = None) -> tuple[str, bool]:
+    """解析为有效交易日字符串。
+
+    返回 (YYYY-MM-DD, adjusted)：
+    - d 为空 → 今天（若非交易日则退到最近交易日）
+    - d 为非交易日 → 退到 <=d 最近交易日，adjusted=True
+    - 未来日期按给定日解析（仍会吸附到最近交易日）
+    """
+    if d is None or d == "":
+        raw = date.today()
+    elif isinstance(d, str):
+        raw = date.fromisoformat(d[:10])
+    else:
+        raw = d
+    resolved = last_trade_date(raw)
+    return resolved.isoformat(), resolved != raw
+
+
 def market_close_time(d: date) -> datetime:
     """给定日期的收盘时间（15:00+确认分钟数）。"""
     hh, mm = MARKET_CLOSE.split(":")

@@ -18,7 +18,7 @@ import hashlib
 import json
 from datetime import date
 
-from app.analysis.valuation import PERIODS, compute_live, compute_ttm, ttm_pair
+from app.analysis.valuation import PERIODS, compute_live, compute_ttm, get_quantiles, ttm_pair
 from app.analysis.volatility import compute_volatility
 from app.data.cache import get_financials, get_valuation_series
 from app.instruments import get_instrument
@@ -398,10 +398,12 @@ def _tag_section(tag: str, stocks, total_value: float) -> dict:
     }
 
 
-def compute_portfolio(tags: list[str] | None = None) -> dict:
+def compute_portfolio(tags: list[str] | None = None, as_of: str | None = None) -> dict:
     """整体 + 逐股组合分析（人民币口径 + 穿透式基本面）。
 
     tags：标签子集过滤（None=全选/全持仓；[]=空子集）。选中的子集决定全部汇总口径。
+    as_of：可选历史回看日。仅覆盖估值倍数/分位/股息率（该日收盘价×当前股数）；
+    市值、今日盈亏、持仓权重仍为实时口径，不重放账本。
     """
     all_holdings = [h for h in get_holdings(active_only=True) if h["quantity"] > 0]
     holdings = all_holdings
@@ -530,16 +532,96 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
         "annual": None, "per_stock": {}, "sample_days": 0,
     }
 
+    # 历史回看：用 as_of 收盘价重算估值倍数/分位，不改市值/盈亏
+    hist_view = as_of is not None
+    as_of_resolved, as_of_adjusted = (None, False)
+    if hist_view:
+        from app.data.cache import get_daily_price_asof
+        from app.market.calendar import resolve_trade_day
+        from app.services.fx import get_fx_rate_cny
+
+        as_of_resolved, as_of_adjusted = resolve_trade_day(as_of)
+        live_asof: dict[str, dict] = {}
+        for s in cny:
+            try:
+                live = compute_live(s["code"], as_of=as_of_resolved)
+            except Exception:  # noqa: BLE001
+                live = {}
+            live_asof[s["code"]] = live
+            if not live:
+                continue
+            for k in ("pe", "pb", "pe_static", "pb_static", "fwd_pe", "fwd_pb",
+                      "dv_static", "fwd_dv_ratio", "roe_static", "ps_static", "ps_ttm", "ps_fwd"):
+                if live.get(k) is not None:
+                    s[k] = live[k]
+            if live.get("dv_ratio") is not None:
+                s["dv"] = live["dv_ratio"]
+            if live.get("roe_ttm") is not None:
+                s["roe"] = live["roe_ttm"]
+            ql = get_quantiles(s["code"], as_of=as_of_resolved).get("1y") or {}
+            if ql.get("pe_pct") is not None:
+                s["pe_pct"] = ql["pe_pct"]
+            if ql.get("pb_pct") is not None:
+                s["pb_pct"] = ql["pb_pct"]
+
+        def _asof_value_cny(s: dict) -> float | None:
+            row = get_daily_price_asof(s["code"], as_of_resolved)
+            if not row or not row["close"]:
+                return None
+            price = float(row["close"])
+            if s.get("currency") == "HKD":
+                fx = get_fx_rate_cny("HKD", as_of_resolved)
+                if fx is None:
+                    return None
+                return price * s["quantity"] * fx
+            return price * s["quantity"]
+
+        fund_asof = [(s, v) for s, v in ((s, _asof_value_cny(s)) for s in fund_set) if v is not None]
+        if fund_asof:
+            fv = sum(v for _, v in fund_asof)
+            ps = sum(s["passthrough"]["attr_profit"] for s, _ in fund_asof)
+            ns = sum(s["passthrough"]["attr_net_assets"] for s, _ in fund_asof)
+            pe = round(fv / ps, 2) if ps != 0 else None
+            pb = round(fv / ns, 2) if ns != 0 else None
+            roe = round(ps / ns * 100, 2) if ns != 0 else None
+
+        fwd_pe_asof = [(s, v) for s, v in ((s, _asof_value_cny(s)) for s in fwd_pe_stocks) if v is not None]
+        if fwd_pe_asof:
+            fv = sum(v for _, v in fwd_pe_asof)
+            fp = sum(s["quantity"] / s["passthrough"]["total_shares"] * s["fwd_net_profit"]
+                     for s, _ in fwd_pe_asof)
+            fwd_pe = round(fv / fp, 2) if fp != 0 else None
+
+        fwd_pb_asof = [(s, v) for s, v in ((s, _asof_value_cny(s)) for s in fwd_stocks) if v is not None]
+        if fwd_pb_asof:
+            fv = sum(v for _, v in fwd_pb_asof)
+            fn = sum(s["quantity"] / s["passthrough"]["total_shares"] * s["fwd_net_assets"]
+                     for s, _ in fwd_pb_asof)
+            fwd_pb = round(fv / fn, 2) if fn != 0 else None
+            fwd_value = fv
+
+        asof_vals = [(s, v) for s, v in ((s, _asof_value_cny(s)) for s in cny) if v is not None]
+        tot_asof = sum(v for _, v in asof_vals)
+        if tot_asof:
+            dv = sum(v * (s.get("dv") or 0) for s, v in asof_vals if s.get("dv") is not None) / tot_asof
+            dv_static = (sum(v * (s.get("dv_static") or 0) for s, v in asof_vals
+                             if s.get("dv_static") is not None) / tot_asof)
+            fwd_dv_ratio = (sum(v * (s.get("fwd_dv_ratio") or 0) for s, v in asof_vals
+                                if s.get("fwd_dv_ratio") is not None) / tot_asof)
+
+        live_by_code = live_asof
+
     # 打包后的组合历史序列分位（首页 pe_pct/pb_pct）
     if tags is not None:
         # 子集：按选中持仓实时打包（读各股缓存序列 + 复用已算 live，零网络），不写缓存
         sub_weights = {s["code"]: s["value_cny"] for s in cny}
         tot = sum(sub_weights.values())
         series = (compute_portfolio_series(
-            {c: v / tot for c, v in sub_weights.items()}, live_by_code=live_by_code
+            {c: v / tot for c, v in sub_weights.items()},
+            live_by_code=live_by_code, as_of=as_of_resolved,
         ) if tot else {})
     else:
-        series = get_portfolio_series(live_by_code=live_by_code)   # 全选/默认视图读缓存（快路径）
+        series = get_portfolio_series(live_by_code=live_by_code, as_of=as_of_resolved)
     s1 = series.get("1y", {})
     pe_pct = s1.get("pe_pct")
     pb_pct = s1.get("pb_pct")
@@ -623,6 +705,10 @@ def compute_portfolio(tags: list[str] | None = None) -> dict:
             "volatility_sample_days": vol["sample_days"],
             "stocks_count": len(stocks),
             "etf_count": sum(1 for s in valid if s["is_etf"]),
+            "as_of": as_of_resolved,
+            "as_of_adjusted": as_of_adjusted,
+            "as_of_requested": as_of,
+            "hist_view": hist_view,
         },
         "weights": [
             {"code": s["code"], "name": s["name"], "tag": s["tag"], "is_etf": s["is_etf"],
@@ -786,19 +872,21 @@ def _portfolio_hash() -> str:
 
 
 def compute_portfolio_series(weights: dict | None = None,
-                             live_by_code: dict[str, dict] | None = None) -> dict:
+                             live_by_code: dict[str, dict] | None = None,
+                             as_of: str | None = None) -> dict:
     """用人民币市值权重 × 各股历史序列，构建组合综合 PE/PB 序列（1y/3y/5y）。
 
     综合 PE_t = 1/Σ(w_i/PE_i(t))；当前值用实时值；分位 = 当前值在「当前日期之前 + 覆盖≥90%」样本的分位。
     weights：可选指定权重（标签子集复用；缺省取当前全部持仓市值权重）。
     live_by_code：可选预计算 live，避免当前 PE/PB 再逐只 compute_live。
+    as_of：分位样本截断日（历史回看）；缺省=今天。
     返回 {period: {dates, pe, pb, cur_pe, cur_pb, pe_pct, pb_pct, sample_days}}。
     """
     if weights is None:
         weights = _portfolio_weights()
     if not weights:
         return {}
-    today = date.today().isoformat()
+    cutoff = as_of or date.today().isoformat()
     result = {}
     for period in PERIODS:
         day_pe, day_pb = _build_day_maps(weights, period)
@@ -816,10 +904,10 @@ def compute_portfolio_series(weights: dict | None = None,
             pb_cov_series.append(round(pb_cov, 4))
         cur_pe = _combo_current(weights, "pe", live_by_code=live_by_code)
         cur_pb = _combo_current(weights, "pb", live_by_code=live_by_code)
-        # 分位样本：当前估值日期之前 + 市值覆盖率≥90%
+        # 分位样本：截断日之前 + 市值覆盖率≥90%
         sample_pe, sample_pb = [], []
         for d in dates:
-            if d >= today:
+            if d >= cutoff:
                 continue
             pe_v, pe_cov = _combo_day(day_pe.get(d, {}), weights)
             if pe_cov >= SERIES_COVERAGE_GATE and pe_v is not None:
@@ -867,13 +955,15 @@ def rebuild_portfolio_series() -> int:
     return sum(len(d["dates"]) for d in data.values())
 
 
-def get_portfolio_series(live_by_code: dict[str, dict] | None = None) -> dict:
+def get_portfolio_series(live_by_code: dict[str, dict] | None = None,
+                         as_of: str | None = None) -> dict:
     """读取最近一次缓存的组合序列（纯读缓存零网络零写入）。
 
     缓存缺失/失效时返回空 dict，不联网、不写库、不懒重建（由刷新/交易写路径负责重建）。
     live_by_code：可选预计算 live，供当前 PE/PB 复用。
+    as_of：分位样本截断日（历史回看）；缺省=今天。
     """
-    today = date.today().isoformat()
+    cutoff = as_of or date.today().isoformat()
     with get_conn() as c:
         rows = c.execute(
             "SELECT period, trade_date, pe, pb, coverage, portfolio_hash FROM portfolio_valuation_cache ORDER BY trade_date"
@@ -904,7 +994,7 @@ def get_portfolio_series(live_by_code: dict[str, dict] | None = None) -> dict:
         d["cur_pe"], d["cur_pb"] = cur_pe, cur_pb
         sample_pe, sample_pb = [], []
         for i, dd in enumerate(d["dates"]):
-            if dd >= today:
+            if dd >= cutoff:
                 continue
             cov = d["coverage"][i] if d.get("coverage") else 1.0
             if cov >= SERIES_COVERAGE_GATE and d["pe"][i] is not None:
@@ -918,10 +1008,11 @@ def get_portfolio_series(live_by_code: dict[str, dict] | None = None) -> dict:
 
 # ---------- 组合资金流穿透（按持仓求和） ----------
 
-def portfolio_fundflow(tags: list[str] | None = None) -> dict:
+def portfolio_fundflow(tags: list[str] | None = None, as_of: str | None = None) -> dict:
     """组合资金流穿透：把选中持仓的资金流按字段求和（当作一个篮子）。
 
     tags：标签子集（None=全选）。A股/ETF 有资金流（腾讯分笔五档）**参与**，港股无资金流排除。
+    as_of：可选历史回看日；非交易日退到最近交易日（缺省=今天有效交易日）。
     聚合逻辑复用 combo_fundflow（participates_fundflow 过滤 + 等权求和），全部读本地缓存，零网络。返回：
       fundflow_15m：当日分时（按 ts 并集求和，升序）
       fundflow_latest：当日五档汇总 + netamount
@@ -933,8 +1024,10 @@ def portfolio_fundflow(tags: list[str] | None = None) -> dict:
     from app.analysis.instrument_fundflow import combo_fundflow
     from app.data.cache import get_daily_prices, get_fundflow_min
     from app.instruments import get_instrument
+    from app.market.calendar import resolve_trade_day
     from app.services.holdings import get_holdings
 
+    trade_day, _adjusted = resolve_trade_day(as_of)
     all_holdings = [h for h in get_holdings(active_only=True) if h["quantity"] > 0]
     if tags is not None:
         tag_set = set(tags)
@@ -942,21 +1035,21 @@ def portfolio_fundflow(tags: list[str] | None = None) -> dict:
     out = combo_fundflow(
         [h["code"] for h in all_holdings],
         note="持仓穿透求和（A股/ETF 腾讯分笔；港股无资金流排除）",
+        as_of=as_of,
     )
     # 组合净值线：Σ(价格 × 股数)，仅参与资金流的 A股/ETF（人民币），避免与港股混币。
     # 分时价「前向沿用」：某持仓某分钟缺价（数据结束/盘后）→ 沿用最近一次价，保证净值线连续不砍半/不 null。
     participants = [h for h in all_holdings if get_instrument(h["code"]).participates_fundflow]
     if participants:
-        from datetime import date, timedelta
+        from datetime import timedelta
 
-        today = date.today().isoformat()
-        start = (date.today() - timedelta(days=45)).isoformat()
+        start = (date.fromisoformat(trade_day) - timedelta(days=45)).isoformat()
         qty = {h["code"]: h["quantity"] for h in participants}
         union_ts = [pt["ts"] for pt in out.get("fundflow_15m", [])]   # 已按 ts 升序
         min_val: dict[str, float] = {}
         day_val: dict[str, float] = {}
         for h in participants:
-            rows = get_fundflow_min(h["code"], today)
+            rows = get_fundflow_min(h["code"], trade_day)
             if rows:
                 by_ts = {r["ts"]: r["price"] for r in rows if r.get("price") is not None}
                 last = None
@@ -965,7 +1058,7 @@ def portfolio_fundflow(tags: list[str] | None = None) -> dict:
                         last = by_ts[ts]
                     if last is not None:
                         min_val[ts] = min_val.get(ts, 0.0) + last * qty[h["code"]]
-            for r in get_daily_prices(h["code"], start, today):
+            for r in get_daily_prices(h["code"], start, trade_day):
                 c = r["close"]
                 if c:
                     day_val[r["trade_date"]] = day_val.get(r["trade_date"], 0.0) + c * qty[h["code"]]

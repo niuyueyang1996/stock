@@ -19,6 +19,7 @@ from app.data.cache import (
     get_expected_payout,
     get_expected_revenue_growth,
     get_financials,
+    get_latest_quantile,
     get_quantile,
     get_valuation_series,
     upsert_quantile,
@@ -141,36 +142,46 @@ def ttm_pair(series: list, key: str = "net_profit") -> tuple[float, float] | Non
     return (cur, prev)
 
 
-def _series_last(code: str, indicator: str, period: str = "1y") -> float | None:
-    """百度估值序列末值（最新一期 PE/PB），无 A 股财务的港股回退用。"""
+def _series_last(code: str, indicator: str, period: str = "1y",
+                 as_of: str | None = None) -> float | None:
+    """百度估值序列末值（最新一期 PE/PB），无 A 股财务的港股回退用。as_of 时只取 ≤as_of。"""
     series = get_valuation_series(code, indicator, period)
+    if as_of is not None:
+        series = [p for p in series if p[0] <= as_of]
     return series[-1][1] if series else None
 
 
-def _series_last_any(code: str, indicator: str) -> tuple[float | None, str | None]:
+def _series_last_any(code: str, indicator: str,
+                     as_of: str | None = None) -> tuple[float | None, str | None]:
     """任一周期序列末值 + 对应周期（1y→3y→5y）。部分周期缺失（如港股无 pb 1y）时兜底。"""
     for period in ("1y", "3y", "5y"):
-        v = _series_last(code, indicator, period)
+        v = _series_last(code, indicator, period, as_of)
         if v is not None:
             return v, period
     return None, None
 
 
+def _resolve_live_price(code: str, price: float | None, as_of: str | None) -> float | None:
+    """显式价优先；as_of 用 ≤该日收盘；否则最近缓存收盘。"""
+    if price is not None:
+        return float(price)
+    from app.data.cache import get_daily_price_asof, get_latest_daily_price
+
+    row = get_daily_price_asof(code, as_of) if as_of else get_latest_daily_price(code)
+    return float(row["close"]) if row and row["close"] else None
+
+
 def _compute_live_series_fallback(code: str, price: float | None, as_of: str | None = None) -> dict:
     """无财务（或港股缺汇率）回退：序列末值给实时 PE/PB + 分位；财务在时补 ROE/股息率/市值。
 
-    序列也没有 → {}（ETF 无序列自然保持排除）。total_mv 港股用港币（前端按 fx 折人民币）。
+    序列也没有 → {}（ETF 无序列自然保持排除）。total_mv 港股用港币（前端折人民币）。
     每股股息财务侧已统一人民币 → 股息率按 price×fx 折人民币计算（比率同货币）。
     """
-    from app.data.cache import get_latest_daily_price
-
-    pe, pe_period = _series_last_any(code, "pe")
-    pb, pb_period = _series_last_any(code, "pb")
+    pe, pe_period = _series_last_any(code, "pe", as_of)
+    pb, pb_period = _series_last_any(code, "pb", as_of)
     if pe is None and pb is None:
         return {}
-    if price is None:
-        row = get_latest_daily_price(code)
-        price = float(row["close"]) if row and row["close"] else None
+    price = _resolve_live_price(code, price, as_of)
     out = {"price": round(price, 3) if price else None, "pe": pe, "pb": pb, "source": "series"}
     fin = get_financials(code)
     if fin:
@@ -181,8 +192,9 @@ def _compute_live_series_fallback(code: str, price: float | None, as_of: str | N
         if fin["roe"] is not None:
             out["roe_ttm"] = fin["roe"]                         # 东财 ROE_AVG
         if fin["dv_per_share"] and price:
+            fx_date = as_of or date.today().isoformat()
             fx = get_fx_rate_cny("HKD" if get_instrument(code).currency == "HKD" else "CNY",
-                                 date.today().isoformat())
+                                 fx_date)
             price_cny = price * fx if fx else None
             if price_cny:
                 out["dv_ratio"] = round(fin["dv_per_share"] / price_cny * 100, 2)
@@ -197,6 +209,7 @@ def compute_live(code: str, price: float | None = None, as_of: str | None = None
     """实时估值全套（读缓存 + 本地计算，零网络）。
 
     price 为实时股价（当日日K末根）；缺省回退最近缓存收盘价。
+    as_of：历史回看日时用 ≤该日收盘价 + 当日/之前汇率，财务仍用最新 TTM。
     fin：可选预加载的 financial_cache 行，避免调用方重复 get_financials。
     返回 {price, total_shares, total_mv, ttm_net_profit, pe, pb, dv_ratio, payout_ratio,
           g, fwd_pe, fwd_pb, fwd_dv_ratio, pe_pct, pb_pct, fwd_pe_pct, fwd_pb_pct}
@@ -207,11 +220,7 @@ def compute_live(code: str, price: float | None = None, as_of: str | None = None
         fin = get_financials(code)
     if not fin:
         return _compute_live_series_fallback(code, price, as_of)
-    if price is None:
-        from app.data.cache import get_latest_daily_price
-
-        row = get_latest_daily_price(code)
-        price = float(row["close"]) if row and row["close"] else None
+    price = _resolve_live_price(code, price, as_of)
     if not price:
         return {}
 
@@ -235,8 +244,9 @@ def compute_live(code: str, price: float | None = None, as_of: str | None = None
     }
     # 货币统一：财务已由数据转换层折人民币；市值/股价按原生币种 → 比率计算须同货币。
     # 港股市值=港元 → mv_cny = total_mv×fx；缺汇率 → 序列回退（与 missing_fx 同口径，不按 1:1）。
+    fx_date = as_of or date.today().isoformat()
     if get_instrument(code).currency == "HKD":
-        fx = get_fx_rate_cny("HKD", date.today().isoformat())
+        fx = get_fx_rate_cny("HKD", fx_date)
         if fx is None:
             return _compute_live_series_fallback(code, price, as_of)
         mv_cny = total_mv * fx
@@ -426,14 +436,32 @@ def compute_quantiles(code: str, now: datetime | None = None, price: float | Non
     return {"periods": result, "live": live}
 
 
-def get_quantiles(code: str) -> dict:
-    """读取已缓存的全部周期分位（未算则返回空）。"""
+def get_quantiles(code: str, as_of: str | None = None) -> dict:
+    """读取分位：as_of 为空读今日/最近缓存行；有 as_of 则用序列截断后重算（不读未来分位行）。"""
     from datetime import date
+
+    from app.market.calendar import resolve_trade_day
+
+    if as_of:
+        resolved, _ = resolve_trade_day(as_of)
+        live = compute_live(code, as_of=resolved)
+        pe_cur, pb_cur = live.get("pe"), live.get("pb")
+        out = {}
+        for key in PERIODS:
+            pe_pct = percentile_in_series(code, "pe", key, pe_cur, resolved)
+            pb_pct = percentile_in_series(code, "pb", key, pb_cur, resolved)
+            sample_days = len(_series_values(code, "pe", key, resolved))
+            if pe_pct is None and pb_pct is None and sample_days == 0:
+                continue
+            out[key] = {"pe_pct": pe_pct, "pb_pct": pb_pct, "sample_days": sample_days}
+        return out
 
     calc_date = date.today().isoformat()
     out = {}
     for key in PERIODS:
         row = get_quantile(code, calc_date, key)
+        if not row:
+            row = get_latest_quantile(code, key)
         if row:
             out[key] = {
                 "pe_pct": row["pe_ttm_pct"],

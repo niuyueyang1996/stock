@@ -11,6 +11,7 @@ from app.data.fundflow import (
     resample_points,
     ticks_to_day,
 )
+from app.market.calendar import last_trade_date
 
 
 # ---------- 分位计算 ----------
@@ -241,7 +242,7 @@ def test_stock_fundflow_api(client):
     from app.data.cache import upsert_daily_fundflow, upsert_fundflow_min
     from app.data.fundflow import FundflowPoint
 
-    today = date.today().isoformat()
+    today = last_trade_date(date.today()).isoformat()
     upsert_fundflow_min("600000", today, [
         FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
                       medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6, price=10.1),
@@ -262,6 +263,7 @@ def test_stock_fundflow_api(client):
     assert data["fundflow_windows"] == [1, 5, 15, 30]
     assert data["fundflow_window"] == 1
     assert len(data["fundflow_15m"]) == 3
+    assert data["as_of"] == today
     assert data["fundflow_bands"] == {"p15": 2000, "p40": 5000, "p75": 20000, "p95": 100000}
     p0 = data["fundflow_15m"][0]
     assert p0["xs_net"] == 2 and p0["buy_amount"] == 10 and p0["sell_amount"] == 6
@@ -294,7 +296,7 @@ def test_portfolio_fundflow_aggregates(client):
     from app.data.fundflow import FundflowPoint
     from app.models.db import get_conn
 
-    today = date.today().isoformat()
+    today = last_trade_date(date.today()).isoformat()
     with get_conn() as c:
         for code, name, tag, qty in (("600000", "浦发银行", "银行", 100),
                                      ("600519", "贵州茅台", "白酒", 100),
@@ -332,6 +334,7 @@ def test_portfolio_fundflow_aggregates(client):
     # ETF 参与穿透（participates_fundflow=True）：total=3 含 510300；
     # 但 510300 无当日分时数据 → covered 只算有数据的 2 个
     assert d["total"] == 3 and d["covered"] == 2
+    assert d["as_of"] == today
     # 09:31 求和：buy 10+8=18 / sell 6+0=6 / small_net 5+0=5
     p31 = next(p for p in d["fundflow_15m"] if p["ts"] == "09:31")
     assert p31["buy_amount"] == 18 and p31["sell_amount"] == 6 and p31["small_net"] == 5

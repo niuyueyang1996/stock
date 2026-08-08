@@ -27,6 +27,10 @@
 
     <div class="cards" id="quoteCards"></div>
 
+    <div class="panel" id="asOfPanel" style="padding:10px 14px">
+      <div id="asOfPicker"></div>
+    </div>
+
     <div class="panel" id="metaPanel">
       <h2>标的设置 <span class="sub">预期增速 / 标签 / 跟踪指数</span></h2>
       <div id="growthPanel" style="display:none;margin-bottom:10px">
@@ -139,6 +143,27 @@
     const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
                                 '1d': '1天', '7d': '7天', '30d': '30天' };
     let flowWindow = '15m';     // 当前选中窗口（绘图与 AI 分析共用）
+    let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（估值+分时）
+
+    function stockDetailQS(extra) {
+      const parts = ['window=1'];
+      if (extra && extra.partial) parts.push('partial=1');
+      if (asOfDate) parts.push('as_of=' + encodeURIComponent(asOfDate));
+      return '?' + parts.join('&');
+    }
+
+    function refreshAsOfPicker() {
+      mountAsOfPicker(document.getElementById('asOfPicker'), {
+        value: asOfDate,
+        label: '按日期查看（估值 · 资金流分时）',
+        onChange: (iso) => {
+          asOfDate = iso;
+          refreshAsOfPicker();
+          reloadAsOf();
+        },
+      });
+    }
+    refreshAsOfPicker();
 
     // AI 资金流分析按钮（个股模式）：按当前窗口发分时资金流 + 对应股价点
     (function () {
@@ -203,27 +228,45 @@
       document.getElementById('growthPanel').style.display = 'none';
       document.getElementById('tagPanel').style.display = 'none';
       document.getElementById('finCards').innerHTML = '';
-      ['peQ', 'pbQ'].forEach((id) => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+      ['peQ', 'pbQ', 'peLine', 'pbLine', 'flowBars'].forEach((id) => clearChart(document.getElementById(id)));
+      // 估值图上方插入的图例/分位控件一并清掉，避免切股后残留
+      document.querySelectorAll('.valuation-legend, .valuation-quantiles').forEach((n) => n.remove());
       document.getElementById('histTabs').innerHTML = '';
-      document.getElementById('peLine').innerHTML = '';
-      document.getElementById('pbLine').innerHTML = '';
-      document.getElementById('flowBars').innerHTML = '';
       document.getElementById('flowEmpty').style.display = 'block';
       document.getElementById('flowTabs').innerHTML = '';
-      const fpEl = document.getElementById('flowPrice');
-      if (fpEl) { fpEl.innerHTML = ''; fpEl.style.display = ''; }
-      document.getElementById('flowIntraday').innerHTML = '';
-      document.getElementById('flowBuySell').innerHTML = '';
+      clearChart(document.getElementById('flowPrice'));
+      clearChart(document.getElementById('flowIntraday'));
+      clearChart(document.getElementById('flowBuySell'));
       document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
       const flowAi = document.getElementById('flowAiPanel');
       if (flowAi) { flowAi.style.display = 'none'; flowAi.innerHTML = ''; }
     }
 
+    // 仅切「按日期查看」：不清空整页（避免估值 ECharts 被 innerHTML 拆掉后挂死），只重拉并 render
+    async function reloadAsOf() {
+      if (!currentCode) return;
+      try {
+        if (isIndexMode || lastIsIndex) {
+          const d = await api('/indices/' + currentCode + '?window=1' + asOfQuery(asOfDate), { blocking: true });
+          render(d);
+          return;
+        }
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
+        render(d);
+      } catch (e) {
+        if (e.status === 409) {
+          // 历史日也可能缺缓存：仍走原下载弹窗路径
+          return openStock();
+        }
+        toast('按日期加载失败：' + (e.message || e), 4000);
+      }
+    }
+
     // 指数详情：无 409 缓存缺失弹窗，数据不全对应区域显示「暂无」
     async function openIndex() {
       try {
-        const d = await api('/indices/' + currentCode + '?window=1', { blocking: true });
+        const d = await api('/indices/' + currentCode + '?window=1' + asOfQuery(asOfDate), { blocking: true });
         render(d);
       } catch (e) {
         document.getElementById('title').textContent = `查询失败：${e.message}`;
@@ -238,7 +281,7 @@
       // 直接调 api 以便捕获 409（loadPage 内部会吞掉错误，不适合这里）
       // window=1：分时资金流返回 1 分钟基础，前端切换刻度本地重采样
       try {
-        const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
         render(d);   // render → renderFlow → draw 会按当前 window 加载落库资金流 AI 结果
       } catch (e) {
         if (e.status === 409) {
@@ -264,7 +307,7 @@
             } else if (choice === 'open') {
               // 仅打开已有数据：partial=1 展示部分数据 + 缺失标记
               try {
-                const dp = await api('/stocks/' + currentCode + '?partial=1&window=1', { blocking: true });
+                const dp = await api('/stocks/' + currentCode + stockDetailQS({ partial: true }), { blocking: true });
                 render(dp);
               } catch (e2) {
                 document.getElementById('title').textContent = `查询失败：${e2.message}`;
@@ -638,7 +681,7 @@
       try {
         if (isIndexMode) return openIndex();
         // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
-        const d = await api('/stocks/' + currentCode + '?window=1', { blocking: true });
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
         render(d);
       } catch (e) {
         document.getElementById('title').textContent = `查询失败：${e.message}`;
@@ -699,6 +742,7 @@
 
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
+      setAsOfHint(document.getElementById('asOfPicker'), d);
       // 指数模式：隐藏买卖/个股面板（无五档/估值/财务），资金流趋势改量价渲染；AI 资金流照常可用
       const idxMode = !!d.is_index;
       lastIsIndex = idxMode;
@@ -738,7 +782,7 @@
         renderValuationHistory(d);
         renderFlow(d);
         renderFinancials(d.financials);
-        renderGrowth(d.live || {});
+        renderGrowth(d.live || {}, d);
         document.getElementById('growthPanel').style.display = 'none';
         document.getElementById('tagPanel').style.display = idxMode ? 'none' : '';
         document.getElementById('tagInput').value = d.tag || '';
@@ -750,7 +794,7 @@
 
       const live = d.live || {};
       lastLive = live;
-      renderGrowth(live);
+      renderGrowth(live, d);
       const growthPanel = document.getElementById('growthPanel');
       if (!idxMode && live.expected_growth != null) {
         growthPanel.style.display = '';
@@ -819,7 +863,7 @@
       loadAiReport();
     }
 
-    function renderGrowth(live) {
+    function renderGrowth(live, meta) {
       const body = document.getElementById('growthBody');
       const rows = [
         ['ROE', live.roe_static, live.roe_ttm, live.fwd_roe, 'pct'],
@@ -835,7 +879,8 @@
         return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
       }).join('');
       setPanelSummary('growthTablePanel',
-        sumKV('PE', fmtNum(live.pe)) + sumSep() + sumKV('PB', fmtNum(live.pb)) + sumSep() + sumKV('前瞻PE', fmtNum(live.fwd_pe)));
+        (meta && meta.hist_view && meta.as_of ? sumChip('截至 ' + meta.as_of) + sumSep() : '')
+        + sumKV('PE', fmtNum(live.pe)) + sumSep() + sumKV('PB', fmtNum(live.pb)) + sumSep() + sumKV('前瞻PE', fmtNum(live.fwd_pe)));
     }
 
     // 估值历史折线图：周期切换 + 标注实时/前瞻值（拖动缩放分位联动在 charts.js 内）
@@ -845,11 +890,17 @@
       const tabsWrap = document.getElementById('histTabs');
       const peEl = document.getElementById('peLine');
       const pbEl = document.getElementById('pbLine');
-      if (!hist || !hist.periods || !Object.keys(hist.periods).length) {
-        peEl.innerHTML = '<div class="empty" style="padding:20px">暂无历史估值，请先「完整更新此股」。</div>';
-        pbEl.innerHTML = '';
+      const showEmpty = (msg) => {
+        document.querySelectorAll('#valHistPanel .valuation-legend, #valHistPanel .valuation-quantiles')
+          .forEach((n) => n.remove());
+        clearChart(peEl); clearChart(pbEl);
+        if (peEl) peEl.innerHTML = '<div class="empty" style="padding:20px">' + msg + '</div>';
         tabsWrap.innerHTML = '';
-        setPanelSummary('valHistPanel', '暂无序列');
+        setPanelSummary('valHistPanel',
+          (d && d.hist_view) ? asOfEmptyHint(d, 'valuation') || '暂无序列' : '暂无序列');
+      };
+      if (!hist || !hist.periods || !Object.keys(hist.periods).length) {
+        showEmpty('暂无历史估值，请先「完整更新此股」。');
         return;
       }
       if (!(histPeriod in hist.periods)) histPeriod = hist.default || '3y';
@@ -861,41 +912,51 @@
       }));
       const series = hist.periods[histPeriod];
       if (!series || !series.pe.length) {
-        peEl.innerHTML = '<div class="empty" style="padding:20px">该周期暂无序列。</div>';
-        pbEl.innerHTML = '';
+        showEmpty('该周期暂无序列。');
         return;
       }
       const live = d.live || {};
       // 个股图：实时(蓝pin+蓝虚线) + 前瞻(橙triangle+橙虚线)，与组合图同款样式，数值显示在图上方 subtext
       const mk = (v) => (v == null ? [] : [{ name: '前瞻', value: v, color: '#e8590c', symbol: 'triangle', line: true }]);
+      const markName = d.hist_view ? '回看' : '实时';
       valuationChart(peEl, series.pe, {
         title: 'PE 历史（' + histPeriod + '）', label: 'PE', color: '#2563eb',
         marks: [
-          { name: '实时', value: live.pe, color: '#2563eb', line: true },
+          { name: markName, value: live.pe, color: '#2563eb', line: true },
           ...mk(live.fwd_pe),
         ],
       });
       valuationChart(pbEl, series.pb, {
         title: 'PB 历史（' + histPeriod + '）', label: 'PB', color: '#2563eb',
         marks: [
-          { name: '实时', value: live.pb, color: '#2563eb', line: true },
+          { name: markName, value: live.pb, color: '#2563eb', line: true },
           ...mk(live.fwd_pb),
         ],
+      });
+      // 折叠面板展开后 / 切日期后：再补两帧 resize，避免宽高仍为 0 的白板
+      requestAnimationFrame(() => {
+        [peEl, pbEl].forEach((el) => {
+          try { const c = echarts.getInstanceByDom(el); if (c) c.resize(); } catch (e) { /* ignore */ }
+        });
       });
       const peNow = live.pe != null ? fmtNum(live.pe) : '—';
       const pbNow = live.pb != null ? fmtNum(live.pb) : '—';
       setPanelSummary('valHistPanel',
-        sumChip(histPeriod) + ' ' + sumKV('PE', peNow) + sumSep() + sumKV('PB', pbNow));
+        (d.hist_view && d.as_of ? sumChip('截至 ' + d.as_of) + ' ' : '')
+        + sumChip(histPeriod) + ' ' + sumKV('PE', peNow) + sumSep() + sumKV('PB', pbNow));
     }
 
     function renderQuantiles(ql) {
+      ql = ql || {};
       const mk = (el, key) => {
+        if (!el) return;
+        clearChart(el);   // 切 as_of 后强制重建，避免复用 0 宽高实例
         const chart = initChart(el);
         if (!chart) return;
         const periods = ['1y', '3y', '5y'];
         chart.setOption({
           title: { text: `${key === 'pe_pct' ? 'PE' : 'PB'} 分位`, left: 'center', textStyle: { fontSize: 14 } },
-          tooltip: { formatter: (p) => `${p.name}：${p.value}%` },
+          tooltip: { formatter: (p) => `${p.name}：${p.value == null ? '—' : p.value + '%'}` },
           grid: { left: 40, right: 40, top: 40, bottom: 30 },
           xAxis: { type: 'category', data: periods.map((x) => x + '分位') },
           yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
@@ -904,11 +965,12 @@
             data: periods.map((p) => {
               const row = ql[p];
               const v = row ? row[key] : null;
-              return { value: v, itemStyle: { color: v === null ? '#ccc' : v <= 25 ? '#2f9e44' : v >= 75 ? '#e03131' : '#2563eb' } };
+              return { value: v, itemStyle: { color: v == null ? '#ccc' : v <= 25 ? '#2f9e44' : v >= 75 ? '#e03131' : '#2563eb' } };
             }),
-            label: { show: true, position: 'top', formatter: (p) => (p.value === null ? '—' : p.value + '%') },
+            label: { show: true, position: 'top', formatter: (p) => (p.value == null ? '—' : p.value + '%') },
           }],
-        });
+        }, { notMerge: true });
+        requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
       };
       mk(document.getElementById('peQ'), 'pe_pct');
       mk(document.getElementById('pbQ'), 'pb_pct');
@@ -961,7 +1023,7 @@
           intraEmpty.style.display = 'block';
           intraEmpty.textContent = '暂无分时量价（请先「⚡ 刷新此股」拉取，或今日非交易日）。';
           tabsEl.innerHTML = '';
-          intraEl.innerHTML = '';
+          clearChart(intraEl);
           return;
         }
         intraEmpty.style.display = 'none';
@@ -970,11 +1032,11 @@
           flowWindow = w;
           loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
           if (/m$/.test(w)) {
-            if (!intraday.length) { intraEl.innerHTML = ''; return; }
+            if (!intraday.length) { clearChart(intraEl); return; }
             const pts = resampleIndexVolume(intraday, parseInt(w, 10));
             indexVolumePrice(intraEl, pts, FLOW_WINDOW_LABEL[w] + '分时', names);
           } else {
-            if (!daily.length) { intraEl.innerHTML = ''; return; }
+            if (!daily.length) { clearChart(intraEl); return; }
             const days = bucketIndexVolume(daily, parseInt(w, 10));
             indexVolumePrice(intraEl, days, FLOW_WINDOW_LABEL[w], names);
           }
@@ -998,18 +1060,31 @@
       // 从指数模式切回个股：恢复五档/买卖盘面板可见 + 空态文案复位
       ['flowBands', 'flowBuySell'].forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = ''; });
       const fe = document.getElementById('flowIntradayEmpty');
-      if (fe) fe.textContent = '当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。';
+      if (fe) {
+        fe.textContent = (d.fundflow_15m && d.fundflow_15m.length)
+          ? ''
+          : (asOfDate || d.as_of_adjusted
+            ? asOfEmptyHint(d, 'flow')
+            : '当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。');
+      }
       // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
       const bandsEl = document.getElementById('flowBands');
       const bands = d.fundflow_bands;
+      const dayLabel = d.as_of || '今日';
       bandsEl.textContent = bands
-        ? '今日分档（自适应）：特小单 <' + fmtFlow(bands.p15)
+        ? dayLabel + '分档（自适应）：特小单 <' + fmtFlow(bands.p15)
           + ' · 小单 ' + fmtFlow(bands.p15) + '~' + fmtFlow(bands.p40)
           + ' · 中单 ' + fmtFlow(bands.p40) + '~' + fmtFlow(bands.p75)
           + ' · 大单 ' + fmtFlow(bands.p75) + '~' + fmtFlow(bands.p95)
           + ' · 特大单 >' + fmtFlow(bands.p95)
         : '';
       const latest = d.fundflow_latest;
+      const barsTitle = document.querySelector('#flowBarsPanel h2');
+      if (barsTitle) {
+        barsTitle.textContent = d.as_of
+          ? `全天五档资金流（${d.as_of}）`
+          : '全天五档资金流（最新交易日）';
+      }
       if (latest) {
         document.getElementById('flowEmpty').style.display = 'none';
         fundflowBars(document.getElementById('flowBars'), latest);
@@ -1019,7 +1094,7 @@
           net != null ? sumL('净流入') + ' ' + sumSigned(net, fmtFlow(net)) : sumL('五档资金'));
       } else {
         document.getElementById('flowEmpty').style.display = 'block';
-        document.getElementById('flowBars').innerHTML = '';
+        clearChart(document.getElementById('flowBars'));
         setPanelSummary('flowBarsPanel', '暂无五档');
       }
       // 统一时间窗：分钟窗口读当日分时，天窗口读多日逐日五档（本地聚合桶）
@@ -1038,7 +1113,7 @@
         if (isMin(w)) {
           if (!base.length) {
             intraEmpty.style.display = 'block';
-            intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = '';
+            clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
             return;
           }
           intraEmpty.style.display = 'none';
@@ -1050,7 +1125,7 @@
           const days = bucketFlowDays(hist, parseInt(w, 10));
           if (!days.length) {
             intraEmpty.style.display = 'block';
-            intraEl.innerHTML = ''; bsEl.innerHTML = ''; if (priceEl) priceEl.innerHTML = '';
+            clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
             return;
           }
           intraEmpty.style.display = 'none';
