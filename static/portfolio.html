@@ -6,29 +6,11 @@
   <title>组合分析 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
-  <style>
-    #tagSidebar { flex: 0 0 190px; padding-right: 6px; }
-    #tagSidebar h3 { margin: 0 0 8px; font-size: 14px; }
-    #tagSidebar h3 .sub { font-size: 11px; color: var(--muted, #868e96); font-weight: 400; }
-    .tag-card { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 8px 10px;
-                margin-bottom: 8px; cursor: pointer; user-select: none;
-                transition: border-color .12s, background .12s, box-shadow .12s; }
-    .tag-card:hover { border-color: #b9cdff; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-    .tag-card.on { border-color: var(--primary); background: var(--primary-weak);
-                   box-shadow: inset 0 0 0 1px rgba(47,111,237,.28); }
-    .tag-card .tc-head { display: flex; align-items: center; gap: 4px; }
-    .tag-card .tc-check { color: var(--primary); font-weight: 700; width: 12px; font-size: 12px; }
-    .tag-card .tc-name { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tag-card .tc-count { font-size: 11px; color: var(--muted, #868e96); flex: none; }
-    .tag-card .tc-val { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 3px; }
-    .tag-card .tc-day { font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 1px; }
-    .tag-card.all { background: rgba(0,0,0,.02); }
-  </style>
 </head>
 <body>
   <nav></nav>
-  <div class="container" style="display:flex; align-items:flex-start; gap:16px">
-    <aside id="tagSidebar" class="tag-sidebar-sticky">
+  <div class="container layout-with-sidebar" style="display:flex; align-items:flex-start; gap:16px">
+    <aside id="tagSidebar" class="tag-sidebar tag-sidebar-sticky">
       <h3>标签 <span class="sub" id="tagCount"></span></h3>
       <div id="tagAllCard" class="tag-card all" title="全选 / 全持仓（点击切换）"></div>
       <div id="tagList"></div>
@@ -36,7 +18,7 @@
     <div style="flex:1; min-width:0">
       <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个标签。</div>
       <div id="rightContent">
-        <div class="panel" id="asOfPanel" style="padding:10px 14px;margin-bottom:12px">
+        <div class="panel panel-tight" id="asOfPanel">
           <div id="asOfPicker"></div>
         </div>
         <div id="summary"></div>
@@ -53,23 +35,23 @@
           <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
         </div>
         <div class="panel" id="gaugePanel">
-          <h2>综合估值分位（1y，穿透式打包序列）</h2>
+          <h2>综合估值分位（近1年）</h2>
           <div style="display:flex;gap:20px;flex-wrap:wrap">
             <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
             <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
           </div>
         </div>
         <div class="panel" id="seriesPanel">
-          <h2>组合综合 PE/PB 序列 <span class="sub">市值加权打包 · 可拖动缩放，分位随可见窗口变化</span></h2>
+          <h2>组合综合 PE/PB 序列 <span class="sub">市值加权 · 可拖动缩放，分位随可见窗口变化</span></h2>
           <div id="seriesTabs"></div>
           <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
           <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
-          <div class="empty" id="seriesEmpty" style="display:none;padding:20px">
+          <div class="empty pad" id="seriesEmpty" style="display:none">
             暂无组合估值序列。录入持仓后，点右上角「完整更新」拉取历史数据。
           </div>
         </div>
         <div class="panel" id="fundflowPanel">
-          <h2>组合资金流 <span class="sub" id="pfFlowNote">穿透持仓：A股个股五档/买盘卖盘按持仓求和 · 分钟窗口=当日分时，天窗口=多日聚合</span></h2>
+          <h2>组合资金流 <span class="sub" id="pfFlowNote">按持仓汇总：A股个股五档/买卖盘求和 · 分钟=当日分时，天窗=多日聚合</span></h2>
           <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
             <div id="pfFlowTabs"></div>
             <div style="flex:1"></div>
@@ -177,10 +159,10 @@
       const partial = selectedTags.size > 0 && !on;
       const total = tagCards.reduce((s, c) => s + c.value_cny, 0);
       const day = tagCards.reduce((s, c) => s + (c.day_pnl || 0), 0);
-      el.className = 'tag-card all' + (on ? ' on' : '');
+      el.className = 'tag-card all' + (on ? ' on' : partial ? ' partial' : '');
       el.innerHTML = `
         <div class="tc-head">
-          <span class="tc-check">${on ? '✓' : partial ? '–' : ''}</span>
+          <span class="tc-check">${on ? '✓' : partial ? '–' : '✓'}</span>
           <span class="tc-name">全选</span>
           <span class="tc-count">${selectedTags.size}/${allTags.length}</span>
         </div>
@@ -196,7 +178,7 @@
         return `
         <div class="tag-card ${on ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
           <div class="tc-head">
-            <span class="tc-check">${on ? '✓' : ''}</span>
+            <span class="tc-check">✓</span>
             <span class="tc-name">${esc(c.tag)}</span>
             <span class="tc-count">${c.count}只</span>
             <span class="link muted" data-pref="${esc(c.tag)}" title="设置该标签偏好（AI 打分依据）" style="font-size:12px">⚙偏好</span>
@@ -452,8 +434,8 @@
             : '暂无分位（完整更新后生成组合序列）'));
         return;
       }
-      gauge(peEl, pe, '综合 PE 分位(1y)', '#2f6fed');
-      gauge(pbEl, pb, '综合 PB 分位(1y)', '#1f56cf');
+      gauge(peEl, pe, '综合 PE 分位(1y)', CHART_COLORS.primary);
+      gauge(pbEl, pb, '综合 PB 分位(1y)', CHART_COLORS.primaryDeep);
       setPanelSummary('gaugePanel',
         sumL('PE分位') + ' ' + sumQ(pe) + sumSep() + sumL('PB分位') + ' ' + sumQ(pb));
     }
@@ -532,15 +514,15 @@
       // 组合图：实时/回看(蓝线+pin) + 前瞻(橙线+triangle)，与个股图同款；图上不写字，由上方图例说明
       const markName = fwd.hist_view ? '回看' : '实时';
       const mk = (cur, fwdVal) => [
-        { name: markName, value: cur, color: '#2563eb', line: true },
-        ...(fwdVal == null ? [] : [{ name: '前瞻', value: fwdVal, color: '#e8590c', symbol: 'triangle', line: true }]),
+        { name: markName, value: cur, color: CHART_COLORS.primary, line: true },
+        ...(fwdVal == null ? [] : [{ name: '前瞻', value: fwdVal, color: CHART_COLORS.warn, symbol: 'triangle', line: true }]),
       ];
       valuationChart(document.getElementById('peSeriesLine'), { dates: d.dates, values: d.pe }, {
-        title: `组合综合 PE（${seriesPeriod}）`, label: '综合PE', color: '#2563eb',
+        title: `PE · ${seriesPeriod}`, label: '综合PE', color: CHART_COLORS.primary,
         marks: mk(d.cur_pe, fwd.fwd_pe),
       });
       valuationChart(document.getElementById('pbSeriesLine'), { dates: d.dates, values: d.pb }, {
-        title: `组合综合 PB（${seriesPeriod}）`, label: '综合PB', color: '#1971c2',
+        title: `PB · ${seriesPeriod}`, label: '综合PB', color: CHART_COLORS.primaryDeep,
         marks: mk(d.cur_pb, fwd.fwd_pb),
       });
     }
@@ -578,7 +560,7 @@
         const note = document.getElementById('pfFlowNote');
         if (note) {
           const day = d.as_of ? ` · ${d.as_of}` : '';
-          note.textContent = '穿透持仓：A股个股按持仓求和（覆盖 ' + d.covered + '/' + d.total + ' 持仓）' + day;
+          note.textContent = '按持仓汇总：A股个股求和（覆盖 ' + d.covered + '/' + d.total + ' 持仓）' + day;
         }
         // 统一时间窗：分钟读当日分时，天窗口读多日逐日五档（本地聚合桶）
         const isMin = (w) => /m$/.test(w);

@@ -17,7 +17,16 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
+# uvicorn 默认 access log 形如「GET /api/status/jobs HTTP/1.1」——关掉，改走下方中文请求日志
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger("api")
+
+# 前端轮询/健康检查：不打请求日志，避免刷屏
+_QUIET_PATHS = frozenset({
+    "/api/status/jobs",
+    "/api/status/prewarm",
+    "/api/health",
+})
 
 
 def create_app() -> FastAPI:
@@ -122,20 +131,24 @@ def create_app() -> FastAPI:
         pass
 
     # 请求日志（在 CORS 之后 add，即最先执行）：记录方法/路径/查询/状态/耗时
+    # 轮询类接口静默（jobs/prewarm/health），否则每秒刷屏
     @app.middleware("http")
     async def log_requests(request, call_next):  # noqa: ANN001
         start = time.time()
+        quiet = request.url.path in _QUIET_PATHS
         try:
             response = await call_next(request)
         except Exception:
             logger.exception("[请求] %s %s 处理异常", request.method, request.url.path)
             raise
-        dur_ms = int((time.time() - start) * 1000)
-        logger.info(
-            "[请求] %s %s%s → %s（%dms）",
-            request.method, request.url.path,
-            f"?{request.url.query}" if request.url.query else "", response.status_code, dur_ms,
-        )
+        if not quiet:
+            dur_ms = int((time.time() - start) * 1000)
+            logger.info(
+                "[请求] %s %s%s → %s（%dms）",
+                request.method, request.url.path,
+                f"?{request.url.query}" if request.url.query else "",
+                response.status_code, dur_ms,
+            )
         return response
 
     # 桌面版只绑定 loopback；同时限制 Host 与浏览器跨域来源，避免其他网站操作本机 API。

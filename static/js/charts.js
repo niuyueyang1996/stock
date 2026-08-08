@@ -1,4 +1,23 @@
 /** ECharts 封装。 */
+/** 与 style.css 令牌对齐的图表色板（ECharts 无法读 CSS 变量） */
+const CHART_COLORS = {
+  primary: '#2f6fed',
+  primaryDeep: '#1f56cf',
+  up: '#e03131',
+  down: '#2f9e44',
+  warn: '#e8590c',
+  orange: '#f76707',
+  mid: '#339af0',
+  purple: '#7048e8',
+  grid: '#f1f3f5',
+  axis: '#ced4da',
+  muted: '#999',
+};
+const CHART_PALETTE = [
+  CHART_COLORS.primary, CHART_COLORS.up, CHART_COLORS.down, CHART_COLORS.orange,
+  CHART_COLORS.purple, '#0ca678', '#f59f00', CHART_COLORS.mid,
+  '#c2255c', '#495057', '#1c7ed6', '#12b886',
+];
 const _chartResizeWired = new WeakSet();  // 同一 echarts 实例只绑一次 resize，避免 loadPage 累加监听
 
 function initChart(el) {
@@ -123,7 +142,7 @@ function quantileBars(el, items, title) {
     series: [{
       type: 'bar', data: items.map((i) => ({
         value: i.value, name: i.name,
-        itemStyle: { color: i.value <= 25 ? '#2f9e44' : i.value >= 75 ? '#e03131' : '#2563eb' },
+        itemStyle: { color: i.value <= 25 ? CHART_COLORS.down : i.value >= 75 ? CHART_COLORS.up : CHART_COLORS.primary },
       })),
       label: { show: true, position: 'right', formatter: '{c}%' },
       barWidth: 16,
@@ -153,8 +172,8 @@ function scoreRadar(el, factors, title) {
         value: factors.filter((f) => f.used).map((f) => f.score),
         name: '因子得分',
         areaStyle: { opacity: 0.15 },
-        lineStyle: { color: '#2563eb', width: 2 },
-        itemStyle: { color: '#2563eb' },
+        lineStyle: { color: CHART_COLORS.primary, width: 2 },
+        itemStyle: { color: CHART_COLORS.primary },
       }],
     }],
   });
@@ -185,7 +204,7 @@ function fundflowBars(el, latest) {
       type: 'bar', barWidth: 16,
       data: items.map(([name, v]) => ({
         value: v,
-        itemStyle: { color: v >= 0 ? '#e03131' : '#2f9e44' },
+        itemStyle: { color: v >= 0 ? CHART_COLORS.up : CHART_COLORS.down },
       })),
       label: { show: true, position: 'right', formatter: (p) => fmtFlow(p.value) },
     }],
@@ -214,7 +233,7 @@ function valuationChart(el, series, opts) {
   const o = opts || {};
   const title = o.title || '';
   const label = o.label || '估值';
-  const color = o.color || '#2563eb';
+  const color = o.color || CHART_COLORS.primary;
   const isArr = Array.isArray(series);
   const dates = isArr ? series.map((d) => d.date) : (series.dates || []);
   const values = isArr ? series.map((d) => d.value) : (series.values || []);
@@ -226,7 +245,7 @@ function valuationChart(el, series, opts) {
     value: m.name,
     symbol: m.symbol || 'pin',
     symbolSize: m.symbolSize || (m.symbol === 'triangle' ? 8 : 11),
-    itemStyle: { color: m.color || '#2563eb' },
+    itemStyle: { color: m.color || CHART_COLORS.primary },
     label: { show: false }, // 图形旁不写「实时/前瞻」文字，只靠颜色图案区分
   }));
   const QUANTILES = [10, 30, 50, 70, 90];
@@ -242,7 +261,7 @@ function valuationChart(el, series, opts) {
   legend.className = 'valuation-legend';
   legend.dataset.for = ctrlKey;
   legend.innerHTML = targets.map((m) => {
-    const c = m.color || '#e03131';
+    const c = m.color || CHART_COLORS.up;
     return m.symbol === 'triangle'
       ? `<span class="vg"><i class="vg-tri" style="border-bottom-color:${c}"></i>${m.name}</span>`
       : `<span class="vg"><i class="vg-pin" style="background:${c}"></i>${m.name}</span>`;
@@ -295,14 +314,14 @@ function valuationChart(el, series, opts) {
     if (min) {
       pointData.push({
         coord: [min.i, min.v], value: '低 ' + fmtNum(min.v),
-        symbol: 'circle', symbolSize: 8, itemStyle: { color: '#2f9e44' },
+        symbol: 'circle', symbolSize: 8, itemStyle: { color: CHART_COLORS.down },
         label: { ...tipLabel, position: inward(min.v), fontSize: 10 },
       });
     }
     if (max) {
       pointData.push({
         coord: [max.i, max.v], value: '高 ' + fmtNum(max.v),
-        symbol: 'circle', symbolSize: 8, itemStyle: { color: '#e03131' },
+        symbol: 'circle', symbolSize: 8, itemStyle: { color: CHART_COLORS.up },
         label: { ...tipLabel, position: inward(max.v), fontSize: 10 },
       });
     }
@@ -311,13 +330,13 @@ function valuationChart(el, series, opts) {
     targets.filter((m) => m.line).forEach((m) => {
       lineData.push({
         yAxis: m.value, name: m.name,
-        lineStyle: { color: m.color || '#e03131', type: 'dashed' },
+        lineStyle: { color: m.color || CHART_COLORS.up, type: 'dashed' },
       });
     });
     currentQs.filter((q) => activeLines.has(q.p)).forEach((q) => {
       lineData.push({
         yAxis: q.v, pct: q.p,
-        lineStyle: { color: '#2f9e44', type: 'dashed' },
+        lineStyle: { color: CHART_COLORS.down, type: 'dashed' },
       });
     });
     return {
@@ -341,11 +360,11 @@ function valuationChart(el, series, opts) {
       const p = percentileOf(vis, v);
       return p == null ? '' : 'P' + p;
     };
-    const rich = { q: { color: '#2f9e44', fontSize: 11, fontWeight: 'bold' } };
+    const rich = { q: { color: CHART_COLORS.down, fontSize: 11, fontWeight: 'bold' } };
     const parts = targets.map((m, i) => {
       const k = 'c' + i;
       rich[k] = {
-        color: '#fff', backgroundColor: m.color || '#2563eb',
+        color: '#fff', backgroundColor: m.color || CHART_COLORS.primary,
         borderRadius: 3, padding: [2, 5], fontSize: 11, fontWeight: 'bold',
       };
       const p = pct(m.value);
@@ -355,8 +374,8 @@ function valuationChart(el, series, opts) {
     const mm = [];
     if (min) mm.push('{lo|低 ' + fmtNum(min.v) + '}');
     if (max) mm.push('{hi|高 ' + fmtNum(max.v) + '}');
-    rich.lo = { color: '#2f9e44', fontSize: 12 };
-    rich.hi = { color: '#e03131', fontSize: 12 };
+    rich.lo = { color: CHART_COLORS.down, fontSize: 12 };
+    rich.hi = { color: CHART_COLORS.up, fontSize: 12 };
     const sub = [parts.join('　　'), mm.join('　　')].filter((s) => s).join('\n');
     chart.setOption({
       title: { subtext: sub, subtextStyle: { fontSize: 12, color: '#495057', lineHeight: 20, rich } },
@@ -409,7 +428,7 @@ function valuationChart(el, series, opts) {
         const q = percentileOf(windowValues(), v);
         let qTxt = '';
         if (q != null) {
-          const c = q <= 25 ? '#2f9e44' : q >= 75 ? '#e03131' : '#2563eb';
+          const c = q <= 25 ? CHART_COLORS.down : q >= 75 ? CHART_COLORS.up : CHART_COLORS.primary;
           qTxt = `<br>窗口分位 <b style="color:${c}">${q}%</b>`;
         }
         return `${p.axisValue}<br>${label}：${v}${qTxt}`;
@@ -419,12 +438,12 @@ function valuationChart(el, series, opts) {
     xAxis: {
       type: 'category', data: dates, boundaryGap: false,
       axisLabel: { fontSize: 10, hideOverlap: true },
-      axisLine: { lineStyle: { color: '#ced4da' } },
+      axisLine: { lineStyle: { color: CHART_COLORS.axis } },
       axisTick: { alignWithLabel: true },
     },
     yAxis: {
       type: 'value', scale: true, axisLabel: { fontSize: 10 },
-      splitLine: { lineStyle: { color: '#f1f3f5', type: 'dashed' } },
+      splitLine: { lineStyle: { color: CHART_COLORS.grid, type: 'dashed' } },
     },
     dataZoom: [
       { type: 'inside', start: 0, end: 100 },
@@ -474,24 +493,24 @@ function fundflowIntraday(el, points, window) {
   }
   const series = [
     { name: '特大单', type: 'line', smooth: true, symbol: 'none', data: cum.super_large_net,
-      itemStyle: { color: '#e03131' }, lineStyle: { width: 2.5, color: '#e03131' },
+      itemStyle: { color: CHART_COLORS.up }, lineStyle: { width: 2.5, color: CHART_COLORS.up },
       emphasis: { focus: 'series' },
       markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
     { name: '大单', type: 'line', smooth: true, symbol: 'none', data: cum.large_net,
-      itemStyle: { color: '#f76707' }, lineStyle: { width: 1.5, color: '#f76707' },
+      itemStyle: { color: CHART_COLORS.orange }, lineStyle: { width: 1.5, color: CHART_COLORS.orange },
       emphasis: { focus: 'series' } },
     { name: '中单', type: 'line', smooth: true, symbol: 'none', data: cum.medium_net,
-      itemStyle: { color: '#339af0' }, lineStyle: { width: 1.5, color: '#339af0' },
+      itemStyle: { color: CHART_COLORS.mid }, lineStyle: { width: 1.5, color: CHART_COLORS.mid },
       emphasis: { focus: 'series' } },
     { name: '小单', type: 'line', smooth: true, symbol: 'none', data: cum.small_net,
       itemStyle: { color: '#12b886' }, lineStyle: { width: 1.5, color: '#12b886' },
       emphasis: { focus: 'series' } },
     { name: '特小单', type: 'line', smooth: true, symbol: 'none', data: cum.xs_net,
-      itemStyle: { color: '#7048e8' }, lineStyle: { width: 1.5, color: '#7048e8' },
+      itemStyle: { color: CHART_COLORS.purple }, lineStyle: { width: 1.5, color: CHART_COLORS.purple },
       emphasis: { focus: 'series' } },
   ];
   chart.setOption({
-    title: { text: '分时资金流（' + window + '分钟 · 累积净流入）', left: 'center', textStyle: { fontSize: 14 } },
+    title: { text: window + '分钟 · 累积净流入', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
@@ -564,13 +583,13 @@ function fundflowBuySell(el, points, window) {
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     series: [
       { name: '买盘', type: 'line', smooth: true, symbol: 'none', data: cum.buy_amount,
-        itemStyle: { color: '#e03131' }, lineStyle: { width: 2, color: '#e03131' },
+        itemStyle: { color: CHART_COLORS.up }, lineStyle: { width: 2, color: CHART_COLORS.up },
         emphasis: { focus: 'series' } },
       { name: '卖盘', type: 'line', smooth: true, symbol: 'none', data: cum.sell_amount,
-        itemStyle: { color: '#2f9e44' }, lineStyle: { width: 2, color: '#2f9e44' },
+        itemStyle: { color: CHART_COLORS.down }, lineStyle: { width: 2, color: CHART_COLORS.down },
         emphasis: { focus: 'series' } },
       { name: '净流入', type: 'line', smooth: true, symbol: 'none', data: cum.net,
-        itemStyle: { color: '#2563eb' }, lineStyle: { width: 2, color: '#2563eb', type: 'dashed' },
+        itemStyle: { color: CHART_COLORS.primary }, lineStyle: { width: 2, color: CHART_COLORS.primary, type: 'dashed' },
         emphasis: { focus: 'series' },
         markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
       { name: '窗口净流入', type: 'bar', yAxisIndex: 1, data: windowNet, barWidth: '60%',
@@ -608,9 +627,9 @@ function fundflowStacked(el, days, windowLabel) {
   const chart = initChart(el);
   if (!chart) return null;
   const labels = days.map((d) => d.trade_date);
-  const BANDS = [['xs_net', '特小单', '#7048e8'], ['small_net', '小单', '#12b886'],
-                 ['medium_net', '中单', '#339af0'], ['large_net', '大单', '#f76707'],
-                 ['super_large_net', '特大单', '#e03131']];
+  const BANDS = [['xs_net', '特小单', CHART_COLORS.purple], ['small_net', '小单', '#12b886'],
+                 ['medium_net', '中单', CHART_COLORS.mid], ['large_net', '大单', CHART_COLORS.orange],
+                 ['super_large_net', '特大单', CHART_COLORS.up]];
   const series = BANDS.map(([key, name, color]) => ({
     name, type: 'bar', stack: 'flow', data: days.map((d) => Math.round(d[key] || 0)),
     itemStyle: { color }, emphasis: { focus: 'series' },
@@ -680,13 +699,13 @@ function fundflowDayBuySell(el, days, windowLabel) {
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     series: [
       { name: '买盘', type: 'line', smooth: true, symbol: 'none', data: cumBuy,
-        itemStyle: { color: '#e03131' }, lineStyle: { width: 2, color: '#e03131' },
+        itemStyle: { color: CHART_COLORS.up }, lineStyle: { width: 2, color: CHART_COLORS.up },
         emphasis: { focus: 'series' } },
       { name: '卖盘', type: 'line', smooth: true, symbol: 'none', data: cumSell,
-        itemStyle: { color: '#2f9e44' }, lineStyle: { width: 2, color: '#2f9e44' },
+        itemStyle: { color: CHART_COLORS.down }, lineStyle: { width: 2, color: CHART_COLORS.down },
         emphasis: { focus: 'series' } },
       { name: '净流入', type: 'line', smooth: true, symbol: 'none', data: cumNet,
-        itemStyle: { color: '#2563eb' }, lineStyle: { width: 2, color: '#2563eb', type: 'dashed' },
+        itemStyle: { color: CHART_COLORS.primary }, lineStyle: { width: 2, color: CHART_COLORS.primary, type: 'dashed' },
         emphasis: { focus: 'series' },
         markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } },
       { name: windowLabel + '净流入', type: 'bar', yAxisIndex: 1, data: bucketNet, barWidth: '60%',
@@ -726,8 +745,8 @@ function fundflowPrice(el, points, windowLabel) {
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     series: [{
       name: '股价', type: 'line', smooth: true, symbol: 'none', data: prices,
-      itemStyle: { color: '#1971c2' }, lineStyle: { width: 2, color: '#1971c2' },
-      areaStyle: { color: 'rgba(25,113,194,.08)' },
+      itemStyle: { color: CHART_COLORS.primaryDeep }, lineStyle: { width: 2, color: CHART_COLORS.primaryDeep },
+      areaStyle: { color: 'rgba(47,111,237,.08)' },
     }],
   }, { notMerge: true });
   // 容器曾隐藏过：下一帧强制 resize，否则宽高为 0
@@ -741,8 +760,8 @@ function fundflowPrice(el, points, windowLabel) {
 function indexVolumePrice(el, points, windowLabel, names) {
   if (!points || !points.length) { clearChart(el); return null; }
   const chart = initChart(el);
-  if (!chart) return null;  const PALETTE = ['#2563eb', '#e03131', '#2f9e44', '#f76707', '#7048e8', '#0ca678',
-                   '#f59f00', '#339af0', '#c2255c', '#495057', '#1c7ed6', '#12b886'];
+  if (!chart) return null;
+  const PALETTE = CHART_PALETTE;
   const labels = points.map((p) => p.ts || p.date);
   const amounts = points.map((p) => p.amount || 0);
   const cum = []; let acc = 0;

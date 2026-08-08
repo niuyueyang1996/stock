@@ -2,7 +2,8 @@
 
 - 模型配置存 ai_models 表，切换时 is_active 唯一。
 - chat_json 调 OpenAI 兼容 /v1/chat/completions，优先 response_format json_object，
-  HTTP 失败或 content 空时降级（去掉 json_object / reasoning_effort）再试。
+  HTTP 失败或 content 空时降级（去掉 json_object / reasoning_effort）再试；
+  JSON 解析失败时本地修复 + 必要时请模型重发合法 JSON。
 - build_stock_context 复用缓存汇总个股数据（读缓存零网络）作为结构化输入。
 - analyze_stock 组装 prompt → 调 AI → 规整输出 → 存 ai_reports。
 """
@@ -298,21 +299,211 @@ def _post_chat_completion(url: str, headers: dict, payload: dict):
     return _extract_message_content(data)
 
 
+def _strip_code_fence(txt: str) -> str:
+    """去掉 ``` / ```json 围栏。"""
+    s = (txt or "").strip()
+    if not s.startswith("```"):
+        return s
+    s = s[3:]
+    if s.lower().startswith("json"):
+        s = s[4:]
+    s = s.lstrip("\r\n")
+    if s.endswith("```"):
+        s = s[:-3]
+    return s.strip()
+
+
+def _extract_json_blob(txt: str) -> str:
+    """取首个 { 到末个 }（忽略前后废话）。"""
+    start = txt.find("{")
+    end = txt.rfind("}")
+    if start >= 0 and end > start:
+        return txt[start : end + 1]
+    return txt
+
+
+def _fix_trailing_commas(txt: str) -> str:
+    """去掉 }, ] 前的多余逗号（模型常见笔误）。"""
+    import re
+
+    prev = None
+    s = txt
+    while prev != s:
+        prev = s
+        s = re.sub(r",(\s*[}\]])", r"\1", s)
+    return s
+
+
+def _normalize_json_quotes(txt: str) -> str:
+    """智能引号 → 标准 ASCII 引号。"""
+    return (
+        txt.replace("\u201c", '"').replace("\u201d", '"')
+        .replace("\u2018", "'").replace("\u2019", "'")
+    )
+
+
+def _repair_brackets(txt: str) -> str:
+    """按栈修补括号：漏写 ]/}、错关、尾部截断；字符串字面量内不改。
+
+    典型坏例：`"reasons": ["a", "b"}` → 期望 ] 却遇到 }，先插入 ]。
+    """
+    out: list[str] = []
+    stack: list[str] = []  # 期望的闭合符
+    in_str = False
+    escape = False
+    for ch in txt:
+        if in_str:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            continue
+        if ch == "{":
+            stack.append("}")
+            out.append(ch)
+            continue
+        if ch == "[":
+            stack.append("]")
+            out.append(ch)
+            continue
+        if ch in "}]":
+            # 错关：先补上栈顶期望的闭合符，再消费当前字符
+            while stack and stack[-1] != ch:
+                out.append(stack.pop())
+            if stack and stack[-1] == ch:
+                stack.pop()
+            out.append(ch)
+            continue
+        out.append(ch)
+    if in_str:
+        out.append('"')
+    while stack:
+        out.append(stack.pop())
+    return "".join(out)
+
+
+def _try_salvage_html_field(txt: str) -> dict | None:
+    """html 字段里常有未转义的双引号导致整段 JSON 崩掉。
+
+    策略：从 `"html": "` 切开，前面当普通 JSON 解析，后面直到最后一个 `"\\s*}` 当作 html 原文。
+    """
+    import re
+
+    m = re.search(r'"html"\s*:\s*"', txt)
+    if not m:
+        return None
+    head = txt[: m.start()].rstrip().rstrip(",")
+    if not head.endswith("{"):
+        head = head + "}"
+    else:
+        head = head + "}"
+    try:
+        obj = json.loads(_fix_trailing_commas(head))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    rest = txt[m.end() :]
+    end = None
+    for mm in re.finditer(r'"\s*\}', rest):
+        end = mm
+    if end is None:
+        return None
+    html_raw = rest[: end.start()]
+    # 还原常见转义（模型若部分转义了）
+    obj["html"] = (
+        html_raw.replace("\\r\\n", "\n").replace("\\n", "\n")
+        .replace('\\"', '"').replace("\\\\", "\\")
+    )
+    return obj
+
+
+def _loads_json_lenient(txt: str) -> dict:
+    """逐步放宽解析：原样 → 抽对象 → 修逗号/引号/括号 → 抢救 html 字段。"""
+    candidates: list[str] = []
+    raw = (txt or "").strip()
+    if raw:
+        candidates.append(raw)
+    blob = _extract_json_blob(raw)
+    if blob and blob not in candidates:
+        candidates.append(blob)
+
+    last_err: Exception | None = None
+
+    def _try(variant: str) -> dict | None:
+        nonlocal last_err
+        try:
+            obj = json.loads(variant)
+            if isinstance(obj, dict):
+                return obj
+            raise ValueError(f"AI 输出不是 JSON 对象（got {type(obj).__name__}）")
+        except (ValueError, TypeError) as e:
+            last_err = e
+            return None
+
+    for base in list(candidates):
+        for variant in (
+            base,
+            _fix_trailing_commas(base),
+            _fix_trailing_commas(_normalize_json_quotes(base)),
+        ):
+            if variant not in candidates:
+                candidates.append(variant)
+            got = _try(variant)
+            if got is not None:
+                return got
+
+    # 括号修补（漏 ]、截断等）——在逗号/引号修复之后再试
+    for base in list(candidates):
+        repaired = _fix_trailing_commas(
+            _repair_brackets(_normalize_json_quotes(base))
+        )
+        if repaired not in candidates:
+            candidates.append(repaired)
+        got = _try(repaired)
+        if got is not None:
+            return got
+
+    for base in candidates:
+        salvaged = _try_salvage_html_field(base)
+        if salvaged is not None:
+            return salvaged
+        salvaged = _try_salvage_html_field(_repair_brackets(base))
+        if salvaged is not None:
+            return salvaged
+
+    raise ValueError(str(last_err) if last_err else "无法解析 JSON")
+
+
 def _parse_json_content(content: str) -> dict:
-    """把模型返回文本解析为 dict（支持 ```json 围栏）。"""
-    txt = str(content or "").strip()
-    if not txt:
+    """把模型返回文本解析为 dict（支持 ```json 围栏 + 常见坏 JSON 修复）。"""
+    txt = _strip_code_fence(str(content or ""))
+    if not txt.strip():
         raise ValueError(
             "AI 返回空内容（接口 HTTP 成功但 message.content 为空；"
             "DeepSeek JSON 模式偶发此问题，或思考级别/模型不兼容。请重试，或换模型/降低思考级别）"
         )
-    if txt.startswith("```"):
-        txt = txt.strip("`").strip()
-        if txt.lower().startswith("json"):
-            txt = txt[4:].strip()
     try:
-        return json.loads(txt)
+        return _loads_json_lenient(txt)
     except (ValueError, TypeError) as e:
+        # 日志带出错附近片段，方便对照
+        hint = ""
+        msg = str(e)
+        if "column" in msg or "char" in msg:
+            import re
+            m = re.search(r"char (\d+)", msg)
+            if m:
+                i = int(m.group(1))
+                lo, hi = max(0, i - 60), min(len(txt), i + 60)
+                hint = f" | near=…{txt[lo:hi]!r}…"
+        logger.warning("[AI] JSON 解析失败: %s%s", e, hint)
         raise ValueError(f"AI 输出解析失败: {e}") from e
 
 
@@ -322,6 +513,7 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
     - 附带 reasoning_effort（思考级别，默认 high 最高）；provider 不支持会被忽略。
     - effort 非 None 时覆盖全局思考级别（「分析强度」快速/深入用）；None 用全局配置。
     - 首次失败（HTTP 错 / content 空）会去掉 response_format 与 reasoning_effort 再试一次。
+    - JSON 解析失败时再请求模型重发一轮合法 JSON（不重复整段业务推理指令）。
     """
     url = _openai_compat_url(model_cfg["base_url"], "chat/completions")
     payload = {
@@ -364,7 +556,47 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
 
     logger.info("[AI] 响应 %s | finish=%s | content=%s",
                 url, finish or "-", str(content or "")[:2000])
-    return _parse_json_content(content)
+    try:
+        return _parse_json_content(content)
+    except ValueError as parse_err:
+        # 解析失败：请模型只重发合法 JSON（带上坏输出片段便于对照）
+        logger.warning("[AI] 解析失败，请求模型重发合法 JSON：%s", parse_err)
+        repair_payload = {
+            "model": model_cfg["model"],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 JSON 校正器。用户会给你一段不合法的模型输出。"
+                        "请只输出一个合法 JSON 对象：修正语法（未转义引号、尾逗号、截断等），"
+                        "保留原有字段与含义；不要 markdown 围栏，不要解释。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"解析错误：{parse_err}\n\n"
+                        f"请修复为合法 JSON：\n{str(content or '')[:12000]}"
+                    ),
+                },
+            ],
+            "temperature": 0.1,
+            "max_tokens": _AI_MAX_TOKENS,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            content2, finish2 = _post_chat_completion(url, headers, repair_payload)
+        except Exception as e_rep:  # noqa: BLE001
+            # 部分 provider 不接受 response_format：再试一次无 format
+            logger.warning("[AI] JSON 重发（带 format）失败，降级：%s", e_rep)
+            repair_payload.pop("response_format", None)
+            try:
+                content2, finish2 = _post_chat_completion(url, headers, repair_payload)
+            except Exception as e_rep2:  # noqa: BLE001
+                raise ValueError(f"{parse_err}；重发亦失败：{e_rep2}") from e_rep2
+        logger.info("[AI] 重发响应 | finish=%s | content=%s",
+                    finish2 or "-", str(content2 or "")[:2000])
+        return _parse_json_content(content2)
 
 
 # ---------- 个股数据汇总（结构化输入） ----------

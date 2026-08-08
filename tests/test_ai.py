@@ -85,6 +85,34 @@ def test_openai_compat_url_with_and_without_v1():
     )
 
 
+def test_parse_json_repairs_missing_array_close():
+    """模型漏写 reasons 的 ]：本地括号修补应直接吃下，无需再打 API。"""
+    # 复现 2026-08-08 组合打分失败形态
+    bad = (
+        '{"score": 68, "rating": "B", "summary": "ok", "advice": ["a"], '
+        '"risks": ["r"], "reasons": ["组合估值优势", "资金面偏空", '
+        '"组合当前浮盈5.16%，限制了进一步加分。"}'
+    )
+    out = ai_svc._parse_json_content(bad)
+    assert out["score"] == 68
+    assert out["rating"] == "B"
+    assert len(out["reasons"]) == 3
+    assert "浮盈" in out["reasons"][-1]
+
+
+def test_parse_json_repairs_trailing_comma_and_fence():
+    """围栏 + 尾逗号也能解析。"""
+    raw = '```json\n{"score": 1, "reasons": ["x",],}\n```'
+    assert ai_svc._parse_json_content(raw) == {"score": 1, "reasons": ["x"]}
+
+
+def test_parse_json_repairs_truncated_object():
+    """尾部截断少闭合括号。"""
+    out = ai_svc._parse_json_content('{"score": 2, "advice": ["买"]')
+    assert out["score"] == 2
+    assert out["advice"] == ["买"]
+
+
 def test_chat_json_retries_on_empty_content(monkeypatch):
     """DeepSeek JSON 模式偶发空 content：首次空 → 去掉 json_object 重试成功。"""
     calls = []

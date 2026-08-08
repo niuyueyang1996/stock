@@ -27,7 +27,7 @@
 
     <div class="cards" id="quoteCards"></div>
 
-    <div class="panel" id="asOfPanel" style="padding:10px 14px">
+    <div class="panel panel-tight" id="asOfPanel">
       <div id="asOfPicker"></div>
     </div>
 
@@ -97,7 +97,7 @@
     </div>
 
     <div class="panel" id="valHistPanel">
-      <h2>估值历史 <span class="sub">百度源 · 标注实时/前瞻值 · 可拖动缩放切换分位窗口</span></h2>
+      <h2>估值历史 <span class="sub">可拖动缩放切换分位窗口</span></h2>
       <div id="histTabs"></div>
       <div class="chart lg" id="peLine" style="height:340px"></div>
       <div class="chart lg" id="pbLine" style="height:340px"></div>
@@ -392,7 +392,7 @@
     // ---------- AI 诊股 ----------
     const AI_DIM_CN = { cyclicality: '周期性', moat: '护城河', fundamentals: '基本面',
       growth: '增长', dividend: '股息', valuation: '估值', competition: '同业竞争', fundflow: '资金面' };
-    const AI_RATING = { A: ['A 强烈推荐', '#2f9e44'], B: ['B 推荐', '#2563eb'], C: ['C 中性', '#e8590c'], D: ['D 回避', '#e03131'] };
+    const AI_RATING = { A: ['A 强烈推荐', '#2f9e44'], B: ['B 推荐', '#2f6fed'], C: ['C 中性', '#e8590c'], D: ['D 回避', '#e03131'] };
     const AI_RISK = ['低风险', '中风险', '高风险'];
 
     async function loadAiReport() {
@@ -461,9 +461,9 @@
         ? `<div style="font-size:12px;color:#555;margin-top:4px"><span style="color:#666">营收依据：</span>${eg.revenue_reason}</div>` : '';
       const applyBtn = np != null
         ? `<button class="btn primary" style="padding:4px 14px;font-size:12px" onclick="applyAiGrowth(${np}, ${rev})">应用为预期增速</button>` : '';
-      return `<div style="border:1px solid #1971c2;border-radius:8px;padding:10px 12px;margin-bottom:12px;background:#e7f5ff">
+      return `<div style="border:1px solid var(--primary,#2f6fed);border-radius:8px;padding:10px 12px;margin-bottom:12px;background:var(--primary-weak,#eef3ff)">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <strong style="font-size:13px;color:#1971c2">AI 预期增速</strong>
+          <strong style="font-size:13px;color:var(--primary,#2f6fed)">AI 预期增速</strong>
           <span style="font-size:12px;color:#333">净利同比 <b>${npTxt}</b> · 营收同比 <b>${revTxt}</b></span>
           ${applyBtn}
         </div>
@@ -541,8 +541,8 @@
       if (ti) {
         meta.innerHTML = `<a href="/static/stock.html?code=${ti.code}&index=1">${esc(ti.name)}（${ti.code}）</a>`;
         actions.innerHTML = ti.source === 'auto'
-          ? '<span class="badge" style="background:#2563eb;color:#fff">自动匹配</span>'
-          : '<span class="badge" style="background:#e8590c;color:#fff">手动设置</span>';
+          ? '<span class="badge B">自动匹配</span>'
+          : '<span class="badge C">手动设置</span>';
         return;
       }
       meta.textContent = '未设置（估值将从对应指数获取）';
@@ -917,19 +917,19 @@
       }
       const live = d.live || {};
       // 个股图：实时(蓝pin+蓝虚线) + 前瞻(橙triangle+橙虚线)，与组合图同款样式，数值显示在图上方 subtext
-      const mk = (v) => (v == null ? [] : [{ name: '前瞻', value: v, color: '#e8590c', symbol: 'triangle', line: true }]);
+      const mk = (v) => (v == null ? [] : [{ name: '前瞻', value: v, color: CHART_COLORS.warn, symbol: 'triangle', line: true }]);
       const markName = d.hist_view ? '回看' : '实时';
       valuationChart(peEl, series.pe, {
-        title: 'PE 历史（' + histPeriod + '）', label: 'PE', color: '#2563eb',
+        title: 'PE · ' + histPeriod, label: 'PE', color: CHART_COLORS.primary,
         marks: [
-          { name: markName, value: live.pe, color: '#2563eb', line: true },
+          { name: markName, value: live.pe, color: CHART_COLORS.primary, line: true },
           ...mk(live.fwd_pe),
         ],
       });
       valuationChart(pbEl, series.pb, {
-        title: 'PB 历史（' + histPeriod + '）', label: 'PB', color: '#2563eb',
+        title: 'PB · ' + histPeriod, label: 'PB', color: CHART_COLORS.primary,
         marks: [
-          { name: markName, value: live.pb, color: '#2563eb', line: true },
+          { name: markName, value: live.pb, color: CHART_COLORS.primary, line: true },
           ...mk(live.fwd_pb),
         ],
       });
@@ -965,7 +965,7 @@
             data: periods.map((p) => {
               const row = ql[p];
               const v = row ? row[key] : null;
-              return { value: v, itemStyle: { color: v == null ? '#ccc' : v <= 25 ? '#2f9e44' : v >= 75 ? '#e03131' : '#2563eb' } };
+              return { value: v, itemStyle: { color: v == null ? '#ccc' : v <= 25 ? CHART_COLORS.down : v >= 75 ? CHART_COLORS.up : CHART_COLORS.primary } };
             }),
             label: { show: true, position: 'top', formatter: (p) => (p.value == null ? '—' : p.value + '%') },
           }],

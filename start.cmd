@@ -73,7 +73,7 @@ if not errorlevel 1 (
     exit /b 1
 )
 
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port %PORT%
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port %PORT% --no-access-log
 if errorlevel 1 (
     echo [ERROR] App failed to start. See error above.
     pause
