@@ -1,8 +1,13 @@
 /** ECharts 封装。 */
+const _chartResizeWired = new WeakSet();  // 同一 echarts 实例只绑一次 resize，避免 loadPage 累加监听
+
 function initChart(el) {
   if (!window.echarts) return null;
   const chart = echarts.getInstanceByDom(el) || echarts.init(el);
-  window.addEventListener('resize', () => chart.resize());
+  if (!_chartResizeWired.has(chart)) {
+    _chartResizeWired.add(chart);
+    window.addEventListener('resize', () => chart.resize());
+  }
   return chart;
 }
 

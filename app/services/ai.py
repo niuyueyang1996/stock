@@ -263,7 +263,8 @@ def _http_error_detail(resp) -> str:
 def _extract_message_content(data: dict) -> tuple[str, str]:
     """从 chat/completions JSON 取 assistant content 与 finish_reason。
 
-    content 可能为 null（DeepSeek JSON 模式偶发空返回；思考模式也可能先填 reasoning_content）。
+    content 可能为 null（DeepSeek JSON 模式偶发空返回；思考模式也可能只填 reasoning_content）。
+    content 空白时回退 reasoning_content，避免思考模型被误判为空。
     """
     choices = data.get("choices") if isinstance(data, dict) else None
     if not choices:
@@ -271,8 +272,13 @@ def _extract_message_content(data: dict) -> tuple[str, str]:
     choice0 = choices[0] if isinstance(choices[0], dict) else {}
     msg = choice0.get("message") if isinstance(choice0.get("message"), dict) else {}
     content = msg.get("content")
+    text = "" if content is None else str(content)
+    if not text.strip():
+        reasoning = msg.get("reasoning_content")
+        if reasoning is not None and str(reasoning).strip():
+            text = str(reasoning)
     finish = str(choice0.get("finish_reason") or "")
-    return ("" if content is None else str(content)), finish
+    return text, finish
 
 
 def _post_chat_completion(url: str, headers: dict, payload: dict):

@@ -79,6 +79,27 @@
   <script>
     initNav('trade');
     let editingId = null;
+    let editingAdjust = false;
+
+    function setTradeFormMode(isAdjust) {
+      editingAdjust = !!isAdjust;
+      const side = document.getElementById('side');
+      const price = document.getElementById('price');
+      const qty = document.getElementById('quantity');
+      const fee = document.getElementById('fee');
+      side.disabled = editingAdjust;
+      price.disabled = editingAdjust;
+      qty.disabled = editingAdjust;
+      fee.disabled = editingAdjust;
+      const tip = document.getElementById('formTip');
+      if (tip && editingAdjust) {
+        tip.dataset.prev = tip.dataset.prev || tip.innerHTML;
+        tip.innerHTML = '成本/拆股调整记录：只能改备注与时间（股数增量与调整额会保留）。';
+      } else if (tip && tip.dataset.prev) {
+        tip.innerHTML = tip.dataset.prev;
+        delete tip.dataset.prev;
+      }
+    }
     let lastTrades = [];
 
     // 默认时间 = 现在
@@ -130,6 +151,23 @@
     async function submitTrade() {
       const stock = parseStockChoice(sb.querySelector('input').value);
       if (!stock) return toast('请选择股票（代码或 代码 名称）');
+      const t = document.getElementById('tradeTime').value;
+      // 调整记录：后端只允许改 note/时间，不传 price/quantity/side，避免前端校验卡住
+      if (editingId && editingAdjust) {
+        const body = {
+          note: document.getElementById('note').value || null,
+        };
+        if (t) body.trade_time = t.replace('T', ' ') + ':00';
+        try {
+          await api('/trades/' + editingId, { method: 'PUT', body });
+          toast('已修改调整记录');
+          cancelEdit();
+          await loadPage();
+        } catch (e) {
+          toast('失败：' + e.message, 4000);
+        }
+        return;
+      }
       const body = {
         code: stock.code, name: stock.name,
         side: document.getElementById('side').value,
@@ -139,7 +177,6 @@
         note: document.getElementById('note').value || null,
       };
       if (!body.price || !body.quantity) return toast('请填写价格与数量');
-      const t = document.getElementById('tradeTime').value;
       if (t) body.trade_time = t.replace('T', ' ') + ':00';
       try {
         if (editingId) {
@@ -229,8 +266,22 @@
       const t = lastTrades.find((x) => x.id === id);
       if (!t) return;
       editingId = t.id;
+      setTradeFormMode(t.side === 'adjust');
       sb.querySelector('input').value = `${t.code}`;
-      document.getElementById('side').value = t.side;
+      const side = document.getElementById('side');
+      if (t.side === 'adjust') {
+        // select 只有 buy/sell：临时加 adjust 选项以便展示
+        let opt = [...side.options].find((o) => o.value === 'adjust');
+        if (!opt) {
+          opt = document.createElement('option');
+          opt.value = 'adjust';
+          opt.textContent = '调整';
+          side.appendChild(opt);
+        }
+        side.value = 'adjust';
+      } else {
+        side.value = t.side;
+      }
       document.getElementById('price').value = t.price;
       document.getElementById('quantity').value = t.quantity;
       document.getElementById('fee').value = t.fee || 0;
@@ -245,11 +296,14 @@
 
     function cancelEdit() {
       editingId = null;
+      setTradeFormMode(false);
+      const side = document.getElementById('side');
+      [...side.options].filter((o) => o.value === 'adjust').forEach((o) => o.remove());
       document.getElementById('formTitle').textContent = '录入交易';
       document.getElementById('submitBtn').textContent = '提交';
       document.getElementById('cancelBtn').style.display = 'none';
       sb.querySelector('input').value = '';
-      document.getElementById('side').value = 'buy';
+      side.value = 'buy';
       document.getElementById('price').value = '';
       document.getElementById('quantity').value = '';
       document.getElementById('fee').value = '0';

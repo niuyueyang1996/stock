@@ -121,6 +121,48 @@ def test_chat_json_retries_on_empty_content(monkeypatch):
     assert len(calls) == 2
 
 
+def test_extract_falls_back_to_reasoning_content():
+    """思考模型 content 空、reasoning_content 有值 → 取 reasoning_content。"""
+    text, finish = ai_svc._extract_message_content({
+        "choices": [{
+            "message": {"content": "", "reasoning_content": '{"ok": true}'},
+            "finish_reason": "stop",
+        }],
+    })
+    assert text == '{"ok": true}'
+    assert finish == "stop"
+
+
+def test_chat_json_uses_reasoning_content_without_retry(monkeypatch):
+    """content 空但 reasoning_content 有 JSON → 一次成功，不触发空内容降级重试。"""
+    calls = []
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {"content": None, "reasoning_content": '{"score": 1}'},
+                    "finish_reason": "stop",
+                }],
+            }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(1)
+        return _Resp()
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setattr(ai_svc, "get_reasoning_effort", lambda: "high")
+    out = ai_svc.chat_json(
+        {"base_url": "https://api.deepseek.com", "api_key": "sk", "model": "deepseek-v4-flash"},
+        "sys", "user",
+    )
+    assert out == {"score": 1}
+    assert len(calls) == 1
+
+
 def test_chat_json_http_error_includes_body(monkeypatch):
     """鉴权/余额失败应带 HTTP 状态与 body，不应误报缓存过少。"""
 
@@ -281,6 +323,30 @@ def test_ai_models_api(client):
     assert r.json()["data"]["is_active"] == 1
     r = client.delete(f"/api/ai/models/{mid}")
     assert r.status_code == 200
+
+
+def test_deepseek_one_click_uses_first_available_model(client, monkeypatch):
+    """一键启用 DeepSeek：模型取 available 列表第一个，不写死 deepseek-chat。"""
+    monkeypatch.setattr(
+        ai_svc, "list_available_models",
+        lambda base_url, api_key: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    )
+    r = client.post("/api/ai/models/available", json={
+        "base_url": "https://api.deepseek.com", "api_key": "sk-test",
+    })
+    assert r.status_code == 200
+    models = r.json()["data"]["models"]
+    assert models[0] == "deepseek-v4-flash"
+    r = client.post("/api/ai/models", json={
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-test",
+        "model": models[0],
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["model"] == "deepseek-v4-flash"
+    mid = r.json()["data"]["id"]
+    assert client.post(f"/api/ai/models/{mid}/activate").status_code == 200
 
 
 def test_ai_report_api_no_model_400(client):

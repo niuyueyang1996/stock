@@ -96,6 +96,16 @@ def test_portfolio_profile_hash_stable_and_changes():
     assert svc.portfolio_profile_hash() == h3
 
 
+def test_portfolio_profile_hash_changes_on_stock_tag():
+    """改个股标签后组合画像哈希变化（报告会标 stale）。"""
+    _seed_trade("600000", qty=100)
+    holdings.set_tag("600000", "红利")
+    h1 = svc.portfolio_profile_hash()
+    holdings.set_tag("600000", "科技")
+    h2 = svc.portfolio_profile_hash()
+    assert h2 != h1
+
+
 def test_normalize_portfolio_report_clamps_and_passes_rating():
     r = svc._normalize_portfolio_report({"score": 999, "rating": "B", "summary": "s",
                                          "advice": ["a"], "risks": "不是列表", "reasons": [],

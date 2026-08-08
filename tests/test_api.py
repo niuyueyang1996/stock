@@ -704,6 +704,48 @@ def test_cancel_queued_job(client):
         _await_job(client)
 
 
+def test_cancel_batch_cancels_stages_job():
+    """批次取消时，已入队的收尾 stages 任务也必须被取消。"""
+    import threading
+    import time
+
+    from app import jobs
+
+    gate = threading.Event()
+    stages_ran = threading.Event()
+
+    def hang(prog):
+        gate.wait(timeout=10)
+
+    def stages_fn(prog):
+        stages_ran.set()
+        gate.wait(timeout=10)
+
+    # 先占满 refresh worker，再入队纯收尾批次，确保 stages 停在 queued
+    blockers = [jobs.start("refresh.hang", f"挂起{i}", hang, total=1) for i in range(8)]
+    try:
+        batch_id, ids = jobs.enqueue_batch(
+            kind="refresh.dynamic",
+            label="测试批次",
+            children=[],
+            stages={"kind": "refresh.stages", "label": "收尾", "fn": stages_fn, "total": 1},
+        )
+        assert ids
+        stages_id = ids[0]
+        time.sleep(0.05)
+        with jobs._lock:
+            assert jobs._jobs[stages_id]["status"] == "queued"
+        assert jobs.cancel_batch(batch_id) is True
+        with jobs._lock:
+            sj = jobs._jobs.get(stages_id)
+            assert sj is not None
+            assert sj["status"] == "cancelled"
+        assert not stages_ran.is_set()
+    finally:
+        gate.set()
+        time.sleep(0.2)
+
+
 def test_global_refresh_fanout_uses_names(client):
     """全局刷新扇出：batch 进度含股票名称。"""
     client.post("/api/holdings", json={"items": [

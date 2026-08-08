@@ -1,11 +1,12 @@
 """持仓交易单元测试：移动加权成本、卖出、撤销回滚、超量校验。"""
 import pytest
 
+from app.models.db import get_conn
 from app.services import holdings
 
 
 def _qty(code):
-    with pytest.importorskip("app.models.db").get_conn() as c:
+    with get_conn() as c:
         row = c.execute("SELECT quantity, avg_cost, status FROM holdings WHERE code=?", (code,)).fetchone()
         return dict(row) if row else None
 
@@ -59,6 +60,44 @@ def test_adjust_qty_split_shares():
     h = _qty("600000")
     assert h["quantity"] == 200
     assert h["avg_cost"] == pytest.approx(5.0)  # 1000/200
+
+
+def test_update_adjust_preserves_split_qty():
+    """编辑拆股 adjust 记录（改备注）不得清零 quantity，持仓股数保持。"""
+    holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
+    r = holdings.adjust_cost("600000", delta_qty=100, note="1拆2")
+    tid = r["trade_id"]
+    holdings.update_trade(tid, note="1拆2（备注修正）")
+    with get_conn() as c:
+        row = c.execute("SELECT quantity, amount, note FROM trades WHERE id=?", (tid,)).fetchone()
+    assert row["quantity"] == pytest.approx(100.0)
+    assert row["amount"] == pytest.approx(0.0)
+    assert "备注修正" in (row["note"] or "")
+    assert _qty("600000")["quantity"] == 200
+    assert _qty("600000")["avg_cost"] == pytest.approx(5.0)
+
+
+def test_hk_buy_fee_without_fx_not_one_to_one():
+    """港股买入：amount_cny 有值但 fx_rate 缺失时，费用不得按 1:1 计入；标记 missing_fx。"""
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO stocks(code,name,market,currency,tag) VALUES(?,?,?,?,?)
+               ON CONFLICT(code) DO UPDATE SET currency='HKD'""",
+            ("00700", "腾讯控股", "hk", "HKD", "港股"),
+        )
+        c.execute(
+            """INSERT INTO trades(code,side,price,quantity,amount,fee,trade_time,note,fx_rate,amount_cny)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ("00700", "buy", 300.0, 100, 30000.0, 100.0, "2026-08-01 10:00:00", "测试",
+             None, 27000.0),  # 有 amount_cny、无 fx_rate
+        )
+    from app.services.holdings import rebuild
+    with get_conn() as c:
+        h = rebuild("00700", c)
+    assert h["missing_fx"] is True
+    assert h["avg_cost_cny"] is None
+    # 本金 27000 已折算，但缺汇率 → 整段人民币口径不可信，不假算费用
+    assert h["total_buy_cny"] is None
 
 
 def test_adjust_qty_and_amount_combined():

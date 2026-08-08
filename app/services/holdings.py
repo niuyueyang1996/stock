@@ -51,7 +51,14 @@ def rebuild(code: str, conn) -> dict:
             if amt_cny is None:
                 cny_ok = False
             else:
-                fee_cny = fee if currency == "CNY" else fee * (t["fx_rate"] or 1.0)
+                # 缺汇率绝不按 1:1：本金已有 amount_cny 时费用也必须同汇率；无汇率则费用不计入并标 missing_fx
+                if currency == "CNY":
+                    fee_cny = fee
+                elif t["fx_rate"]:
+                    fee_cny = fee * float(t["fx_rate"])
+                else:
+                    fee_cny = 0.0
+                    cny_ok = False
                 total_buy_cny += amt_cny + fee_cny
                 avg_cost_cny = (qty * avg_cost_cny + amt_cny + fee_cny) / new_qty if new_qty > 0 else 0.0
             qty = new_qty
@@ -318,11 +325,11 @@ def update_trade(trade_id: int, **fields) -> dict:
             "note": fields["note"] if "note" in fields else row["note"],
         }
         if row["side"] == "adjust":
-            # 成本调整记录：只允许改 note/时间，保留调整额
+            # 成本/股数调整：只允许改 note/时间；quantity=拆股增量、amount=成本调整额必须保留
             new["side"] = "adjust"
             new["price"] = 0.0
-            new["quantity"] = 0.0
-            new["fee"] = 0.0
+            new["quantity"] = row["quantity"] or 0.0
+            new["fee"] = row["fee"] or 0.0
             amount = row["amount"] or 0.0
         else:
             if new["side"] not in ("buy", "sell"):

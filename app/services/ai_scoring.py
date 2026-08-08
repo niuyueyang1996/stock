@@ -151,10 +151,10 @@ def expand_tag_prompt(tag: str, raw_pref: str) -> dict:
 # ============================================================ 组合 AI
 
 def _holdings_tuples(tags: list[str] | None = None) -> list[tuple]:
-    """筛选标签内的活跃持仓 (code, round(qty,6), currency) 排序元组；tags 为空=全部。纯读。
+    """筛选标签内的活跃持仓 (code, round(qty,6), currency, tag) 排序元组；tags 为空=全部。纯读。
 
     标签解析与 compute_portfolio/get_holdings 同口径（NULL 标签按 auto_tag 兜底），
-    保证 profile_hash 与组合筛选视角一致。
+    保证 profile_hash 与组合筛选视角一致；tag 纳入哈希，改标签后报告会标 stale。
     """
     from app.instruments import get_instrument
 
@@ -170,7 +170,8 @@ def _holdings_tuples(tags: list[str] | None = None) -> list[tuple]:
         rows = [r for r in rows if ((r["tag"] or get_instrument(r["code"]).tag or "") in tag_set)]
     out = []
     for r in rows:
-        out.append((str(r["code"]), round(float(r["quantity"] or 0.0), 6), str(r["currency"])))
+        tag = (r["tag"] or get_instrument(r["code"]).tag or "")
+        out.append((str(r["code"]), round(float(r["quantity"] or 0.0), 6), str(r["currency"]), str(tag)))
     return sorted(out)
 
 

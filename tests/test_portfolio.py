@@ -159,6 +159,19 @@ def test_day_pnl_fee_deducted():
     assert pnl == pytest.approx(-5.0)
 
 
+def test_stock_snapshot_stale_quote_skips_day_pnl(monkeypatch):
+    """行情 stale（回退非今日）时 day_pnl 应为 None，不误用上一日涨跌。"""
+    from app.analysis import portfolio as pf
+
+    monkeypatch.setattr(pf, "get_quote", lambda code, now=None, stale=None: {
+        "code": code, "name": code, "price": 10.0, "pct_chg": 2.0, "prev_close": 9.8,
+        "open": 9.9, "high": 10.1, "low": 9.7, "volume": 1, "amount": 1,
+        "ts": "2026-08-07 15:00:00", "stale": True,
+    })
+    s = pf._stock_snapshot("600000", "浦发", 100, 8.0, tag="个股")
+    assert s.get("day_pnl") is None
+
+
 # ---------- 打包分位 ----------
 
 def test_percentile_pack():
@@ -231,9 +244,12 @@ def test_rebuild_portfolio_series_writes_cache():
 
 
 def test_record_trade_triggers_rebuild():
-    """开仓后 portfolio_valuation_cache 出现数据（整体重算触发生效）。"""
+    """开仓后触发组合序列重算；有估值序列数据时应写入 portfolio_valuation_cache。"""
     from app.services import holdings
 
+    _seed_fin("600000")
+    _seed_series("600000", "pe", [("2026-01-01", 10.0), ("2026-01-02", 11.0)])
+    _seed_series("600000", "pb", [("2026-01-01", 2.0), ("2026-01-02", 2.1)])
     holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
     with get_conn() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM portfolio_valuation_cache").fetchone()["n"]

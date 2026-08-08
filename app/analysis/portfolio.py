@@ -200,7 +200,11 @@ def _stock_snapshot(code: str, name: str, quantity: float, avg_cost: float,
 
     prev_close = q.get("prev_close") if q else None
     td = trade_date or date.today().isoformat()
-    day_pnl_native = _day_pnl(code, quantity, price, prev_close, td, rows=day_trade_rows)
+    # 行情回退到非今日（stale）时，不算「今日盈亏」，避免把上一日涨跌当成今日
+    if q.get("stale"):
+        day_pnl_native = None
+    else:
+        day_pnl_native = _day_pnl(code, quantity, price, prev_close, td, rows=day_trade_rows)
     day_pnl_cny = round(day_pnl_native * rate, 2) if (day_pnl_native is not None and rate) else None
 
     val = get_valuation_safe(code)

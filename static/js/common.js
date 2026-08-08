@@ -619,15 +619,18 @@ function stockSearchInput() {
   const input = wrap.querySelector('input');
   const sug = wrap.querySelector('.stock-sug');
   let timer = null;
+  let reqId = 0;
   input.addEventListener('input', () => {
     clearTimeout(timer);
     const q = input.value.trim();
     if (!q) { sug.style.display = 'none'; return; }
     timer = setTimeout(async () => {
+      const myId = ++reqId;
       try {
         // 读完整 JSON（含 lists_ready）；api() 只返回 data，看不到预热失败提示
         const res = await fetch('/api/stocks/search?q=' + encodeURIComponent(q) + '&limit=10');
         const json = await res.json().catch(() => ({}));
+        if (myId !== reqId) return;  // 过期响应丢弃，防旧结果覆盖新输入
         if (!res.ok) throw new Error(json.detail || json.msg || `HTTP ${res.status}`);
         const rows = json.data || [];
         sug.innerHTML = '';
@@ -674,11 +677,10 @@ function parseStockChoice(text) {
 // ============ AI 模型配置弹窗 ============
 let _aiEditingId = null;
 
-// DeepSeek 一键模板：用户只需填 API Key，其余写死推荐值
+// DeepSeek 一键模板：用户只需填 API Key；模型名从接口列表取第一个（不写死，避免 deepseek-chat 下线）
 const DEEPSEEK_PRESET = {
   name: 'DeepSeek',
   base_url: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
   docs_keys: 'https://platform.deepseek.com/api_keys',
   docs_guide: 'https://api-docs.deepseek.com/zh-cn/',
 };
@@ -708,7 +710,7 @@ async function openAiSettings() {
             <a href="${DEEPSEEK_PRESET.docs_keys}" target="_blank" rel="noopener">DeepSeek 控制台</a>
             注册/登录，创建「API Key」
           </li>
-          <li>把 Key 粘贴到下方，点「一键启用」（地址和模型已帮你填好）</li>
+          <li>把 Key 粘贴到下方，点「一键启用」（地址自动填好，模型取接口列表第一个）</li>
         </ol>
         <p class="muted" style="font-size:11px;margin:0 0 8px">
           说明文档：<a href="${DEEPSEEK_PRESET.docs_guide}" target="_blank" rel="noopener">api-docs.deepseek.com/zh-cn</a>
@@ -785,18 +787,28 @@ async function openAiSettings() {
     const btn = mask.querySelector('#aiDsEnable');
     btn.disabled = true;
     try {
+      const avail = await api('/ai/models/available', {
+        method: 'POST',
+        body: { base_url: DEEPSEEK_PRESET.base_url, api_key: apiKey },
+      });
+      const models = avail.models || [];
+      if (!models.length) {
+        toast('未获取到可用模型，请检查 Key 或稍后重试', 4000);
+        return;
+      }
+      const model = models[0];
       const row = await api('/ai/models', {
         method: 'POST',
         body: {
           name: DEEPSEEK_PRESET.name,
           base_url: DEEPSEEK_PRESET.base_url,
           api_key: apiKey,
-          model: DEEPSEEK_PRESET.model,
+          model,
         },
       });
       await api('/ai/models/' + row.id + '/activate', { method: 'POST' });
       mask.querySelector('#aiDsKey').value = '';
-      toast('DeepSeek 已启用，可以开始 AI 分析了');
+      toast('已启用 DeepSeek（' + model + '），可以开始 AI 分析了');
       await loadAiModels(mask);
     } catch (e) {
       toast('启用失败：' + e.message, 4000);

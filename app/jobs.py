@@ -462,14 +462,29 @@ def cancel(job_id: str) -> bool:
 
 
 def cancel_batch(batch_id: str) -> bool:
-    """取消整批未完成子任务，并跳过收尾。"""
+    """取消整批未完成子任务，并取消已入队/执行中的收尾。"""
     with _lock:
         b = _batches.get(batch_id)
         if not b:
             return False
         b["cancel_requested"] = True
         b["stages_job"] = None  # 不再入队收尾
-        any_ok = False
+        # 收尾任务不在 child_ids 里：已入队/运行中也要请求取消
+        stages_id = b.get("stages_job_id")
+        if stages_id:
+            sj = _jobs.get(stages_id)
+            if sj and sj["status"] in ("queued", "running"):
+                sj["cancel_requested"] = True
+                if sj["status"] == "queued":
+                    sj["status"] = "cancelled"
+                    sj["ok"] = False
+                    sj["error"] = "已取消"
+                    sj["updated_at"] = _now()
+                    _recent.appendleft({
+                        "job_id": sj["job_id"], "kind": sj["kind"], "label": sj["label"],
+                        "status": "cancelled", "ok": False, "error": "已取消",
+                        "batch_id": batch_id,
+                    })
         for jid in list(b["child_ids"]):
             j = _jobs.get(jid)
             if not j or j["status"] in ("done", "error", "cancelled"):
@@ -485,11 +500,15 @@ def cancel_batch(batch_id: str) -> bool:
                     "status": "cancelled", "ok": False, "error": "已取消",
                     "batch_id": batch_id,
                 })
-            any_ok = True
-        if not any(
+        children_busy = any(
             (j := _jobs.get(jid)) and j["status"] in ("queued", "running")
             for jid in b["child_ids"]
-        ):
+        )
+        stages_busy = False
+        if stages_id:
+            sj = _jobs.get(stages_id)
+            stages_busy = bool(sj and sj["status"] in ("queued", "running"))
+        if not children_busy and not stages_busy:
             _finish_batch_locked(b, cancelled=True)
         return True
 
