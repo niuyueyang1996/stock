@@ -26,32 +26,41 @@ def _seed_trade(code="600000", tag=None):
         holdings.set_tag(code, tag)
 
 
-def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net):
-    """插入 1 条分时资金流分钟点（trade_date=今天）。"""
+def _asof_today():
+    """与 build_fundflow_analysis_context 一致：非交易日回落到最近交易日。"""
+    from app.market.calendar import resolve_trade_day
+
+    return resolve_trade_day(None)[0]
+
+
+def _asof_today_date():
     from datetime import date
 
+    return date.fromisoformat(_asof_today())
+
+
+def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net):
+    """插入 1 条分时资金流分钟点（trade_date=当前 as-of 交易日）。"""
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO fundflow_15m_cache
                (code, trade_date, ts, main_net, super_large_net, large_net, medium_net, small_net, xs_net,
                 buy_amount, sell_amount)
                VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (code, date.today().isoformat(), ts,
+            (code, _asof_today(), ts,
              super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0),
         )
 
 
 def _seed_day(code, netamount=1.5e6, main_net=1.0e6, p15=100.0, p40=500.0, p75=2000.0, p95=10000.0,
               trade_date=None):
-    from datetime import date
-
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO daily_fundflow_cache
                (code, trade_date, netamount, main_net, main_net_pct, super_large_net, large_net,
                 medium_net, small_net, xs_net, p15, p40, p75, p95)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (code, (trade_date or date.today().isoformat()), netamount, main_net, 5.0,
+            (code, (trade_date or _asof_today()), netamount, main_net, 5.0,
              main_net * 0.6, main_net * 0.4, 0.0, 0.0, 0.0, p15, p40, p75, p95),
         )
 
@@ -67,14 +76,12 @@ def _seed_daily_price(code, trade_date, close, pct_change=0.0):
 
 
 def _seed_index_intraday(code, ts, price, volume):
-    """插入 1 条指数分时量价（trade_date=今天）。"""
-    from datetime import date
-
+    """插入 1 条指数分时量价（trade_date=当前 as-of 交易日）。"""
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO index_intraday_cache(code, trade_date, ts, price, volume, amount)
                VALUES(?,?,?,?,?,NULL)""",
-            (code, date.today().isoformat(), ts, price, volume),
+            (code, _asof_today(), ts, price, volume),
         )
 
 
@@ -131,12 +138,12 @@ def test_build_fundflow_context_no_intraday_returns_empty(monkeypatch):
 # ============================================================ 天窗口（多日逐日五档 + 日K收盘价）
 
 def test_build_fundflow_context_stock_day_1d():
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    d0 = date.today() - timedelta(days=2)
-    d1 = date.today() - timedelta(days=1)
-    d2 = date.today()
-    # 3 个交易日的逐日五档 + 日K 收盘价
+    d2 = _asof_today_date()
+    d1 = d2 - timedelta(days=1)
+    d0 = d2 - timedelta(days=2)
+    # 3 个日历日的逐日五档 + 日K 收盘价（锚点=as-of 交易日，周末也可绿）
     _seed_day("600000", netamount=1.0e6, main_net=0.8e6, trade_date=d0.isoformat())
     _seed_day("600000", netamount=-0.4e6, main_net=-0.3e6, trade_date=d1.isoformat())
     _seed_day("600000", netamount=0.5e6, main_net=0.4e6, trade_date=d2.isoformat())
@@ -153,9 +160,9 @@ def test_build_fundflow_context_stock_day_1d():
 
 
 def test_build_fundflow_context_stock_day_7d_buckets():
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    today = date.today()
+    today = _asof_today_date()
     # 5 天数据，'7d' 桶 → 1 个点（5 天求和），price/pct_chg 取末交易日
     days = [(1.0e6, 10.0, 0.5), (-0.4e6, 10.2, 2.0), (0.5e6, 10.1, -1.0),
             (0.2e6, 10.3, 1.5), (0.3e6, 10.5, 2.0)]
@@ -173,9 +180,7 @@ def test_build_fundflow_context_stock_day_7d_buckets():
 
 
 def test_build_fundflow_context_stock_day_no_prices():
-    from datetime import date
-
-    _seed_day("600000", netamount=1.0e6, trade_date=date.today().isoformat())
+    _seed_day("600000", netamount=1.0e6, trade_date=_asof_today())
     ctx = ai_svc.build_fundflow_analysis_context("600000", "30d")
     assert ctx["window"] == "30d"
     assert len(ctx["points"]) == 1
@@ -201,9 +206,9 @@ def test_build_fundflow_context_index_minute_volume_price():
 
 
 def test_build_fundflow_context_index_day_volume_price():
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    today = date.today()
+    today = _asof_today_date()
     d0 = (today - timedelta(days=2)).isoformat()
     d1 = (today - timedelta(days=1)).isoformat()
     d2 = today.isoformat()
@@ -220,9 +225,9 @@ def test_build_fundflow_context_index_day_volume_price():
 
 
 def test_build_fundflow_context_index_day_30d_buckets():
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    today = date.today()
+    today = _asof_today_date()
     closes = [(4000.0, 1.0e7), (4020.0, 2.0e7), (4010.0, 1.5e7), (4050.0, 3.0e7)]
     for i, (close, vol) in enumerate(closes):
         d = (today - timedelta(days=len(closes) - 1 - i)).isoformat()
@@ -236,11 +241,12 @@ def test_build_fundflow_context_index_day_30d_buckets():
 
 
 def test_analyze_fundflow_day_window(monkeypatch):
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     _activate_mock_model()
-    _seed_day("600000", netamount=1.0e6, trade_date=(date.today() - timedelta(days=1)).isoformat())
-    _seed_day("600000", netamount=0.5e6, trade_date=date.today().isoformat())
+    today = _asof_today_date()
+    _seed_day("600000", netamount=1.0e6, trade_date=(today - timedelta(days=1)).isoformat())
+    _seed_day("600000", netamount=0.5e6, trade_date=today.isoformat())
     _fake_chat(monkeypatch, {
         "summary": "多日资金持续流入", "correlation": "positive", "divergence": [],
         "main_force": "主力连日流入", "rhythm": "近两日单边", "alerts": [], "conclusion": "c",
@@ -336,8 +342,6 @@ def test_build_fundflow_context_stock_with_price_false(monkeypatch):
 def test_build_batch_context(monkeypatch):
     """批量上下文：只含有效持仓（有资金流），covered/total 正确，15m/1d 原样，
     分钟窗口带 window 匹配股价（批量与个股一致）与买卖盘。"""
-    from datetime import date
-
     _seed_trade("600000", tag="红利")
     _seed_trade("600001", tag="红利")
     _seed_trade("600002", tag="红利")   # 无资金流 → 跳过
@@ -362,7 +366,7 @@ def test_build_batch_context(monkeypatch):
     assert ctx1["window"] == "1d"
     assert ctx1["covered"] == 2
     s1 = next(s for s in ctx1["stocks"] if s["code"] == "600000")
-    assert len(s1["points"]) == 1 and s1["points"][0]["date"] == date.today().isoformat()
+    assert len(s1["points"]) == 1 and s1["points"][0]["date"] == _asof_today()
 
 
 def test_build_batch_context_empty():
@@ -438,12 +442,13 @@ def test_analyze_single_persists(monkeypatch):
 
 def test_single_persists_per_window(monkeypatch):
     """个股按 window 分存：15m 与 1d 各分析一次 → 2 行（跨窗互不覆盖）。"""
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     _activate_mock_model()
     _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
     _seed_day("600000")
-    _seed_day("600000", netamount=0.5e6, trade_date=(date.today() - timedelta(days=1)).isoformat())
+    _seed_day("600000", netamount=0.5e6,
+              trade_date=(_asof_today_date() - timedelta(days=1)).isoformat())
     monkeypatch.setattr(ai_svc, "_minute_price_map", lambda code, w: {"09:30": 10.0})
     _fake_chat(monkeypatch, {"summary": "分时", "correlation": "positive", "divergence": [],
                              "main_force": "m", "rhythm": "r", "alerts": [], "conclusion": "c"})
