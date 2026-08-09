@@ -146,6 +146,19 @@ function makeFoldable(panel, opts = {}) {
   return panel;
 }
 
+/** 按 URL hash 展开对应 foldable 面板并滚入视野（组合批量列表跳 #newsAiPanel/#techAiPanel 用）。 */
+function openFoldableFromHash() {
+  const id = (location.hash || '').replace(/^#/, '');
+  if (!id) return;
+  const panel = document.getElementById(id);
+  if (!panel || !panel.classList.contains('foldable')) return;
+  panel.classList.remove('folded');
+  try { localStorage.setItem(_foldKey(panel.dataset.foldId || id), '1'); } catch (e) { /* ignore */ }
+  requestAnimationFrame(() => {
+    try { panel.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) { /* ignore */ }
+  });
+}
+
 function setPanelSummary(panelOrId, html) {
   const panel = typeof panelOrId === 'string'
     ? document.getElementById(panelOrId)
@@ -701,6 +714,14 @@ async function openAiSettings() {
           <option value="max">最高</option>
         </select>
       </div>
+      <div class="row" style="align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <span class="muted" style="font-size:12px">输出预算 max_tokens</span>
+        <input type="number" id="aiMaxTokens" min="2048" step="1024" style="width:110px"
+               title="AI 单次回复最大 token 数。持仓多/组合深入分析时调大（缺省 81920）；提供商上限内越大越稳、也越费">
+        <span class="muted" style="font-size:12px;margin-left:8px">请求超时（秒）</span>
+        <input type="number" id="aiTimeout" min="30" step="10" style="width:90px"
+               title="AI 请求超时。大任务（几十只/深入 HTML）生成更久，超时会掐断；缺省 300">
+      </div>
       <div id="aiModelList" style="max-height:180px;overflow-y:auto;margin-bottom:12px"></div>
 
       <div class="ai-preset">
@@ -779,6 +800,31 @@ async function openAiSettings() {
     } catch (e) {
       toast('保存失败：' + e.message, 4000);
     }
+  };
+
+  // AI 输出预算 / 请求超时（config 表 ai_max_tokens / ai_request_timeout，改动即时生效）
+  const mtEl = mask.querySelector('#aiMaxTokens');
+  const toEl = mask.querySelector('#aiTimeout');
+  api('/ai/runtime', { silent: true })
+    .then((d) => {
+      if (mtEl) mtEl.value = d.max_tokens != null ? d.max_tokens : '';
+      if (toEl) toEl.value = d.request_timeout != null ? d.request_timeout : '';
+    })
+    .catch(() => {});
+  const saveRuntime = () => {
+    const body = {};
+    if (mtEl && mtEl.value) body.max_tokens = parseInt(mtEl.value, 10);
+    if (toEl && toEl.value) body.request_timeout = parseInt(toEl.value, 10);
+    if (!Object.keys(body).length) return Promise.resolve();
+    return api('/ai/runtime', { method: 'PUT', body });
+  };
+  if (mtEl) mtEl.onchange = async () => {
+    try { await saveRuntime(); toast('已保存输出预算 max_tokens'); }
+    catch (e) { toast('保存失败：' + e.message, 4000); }
+  };
+  if (toEl) toEl.onchange = async () => {
+    try { await saveRuntime(); toast('已保存请求超时'); }
+    catch (e) { toast('保存失败：' + e.message, 4000); }
   };
 
   mask.querySelector('#aiDsEnable').onclick = async () => {
@@ -1233,6 +1279,221 @@ async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weigh
       if (typeof onDone === 'function') onDone();
     } catch (e) {
       panel.innerHTML = `<div class="empty" style="padding:10px;margin:0">批量分析失败：${esc(e.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// ============ 消息面 / 技术面 AI 共享渲染（个股面板 + 组合批量列表） ============
+
+// 消息面立场 / 技术面趋势徽章配色（A股口径：红=多/涨，绿=空/跌）
+const NEWS_STANCE = {
+  bullish: ['利多', '#e03131'], neutral: ['中性', '#8792a4'], bearish: ['利空', '#2f9e44'],
+};
+const TECH_TREND = {
+  up: ['上行', '#e03131'], down: ['下行', '#2f9e44'], range: ['震荡', '#8792a4'],
+};
+
+function newsStanceBadge(r) {
+  if (!r || !r.stance) return '<span class="muted">—</span>';
+  const [label, color] = NEWS_STANCE[r.stance] || NEWS_STANCE.neutral;
+  const src = r.source === 'batch' ? '组合批量' : r.source === 'single' ? '个股分析' : '';
+  const t = `${r.summary || ''} · ${r.as_of || ''} · ${src}`;
+  return `<span class="badge" style="color:#fff;background:${color};cursor:default" title="${esc(t)}">${label}</span>`;
+}
+
+function techTrendBadge(r) {
+  if (!r || !r.trend_short) return '<span class="muted">—</span>';
+  const [shortLabel, color] = TECH_TREND[r.trend_short] || TECH_TREND.range;
+  const midLabel = r.trend_mid ? ((TECH_TREND[r.trend_mid] || TECH_TREND.range)[0]) : '';
+  // 紧凑展示短期/中期，持仓表与批量列表共用
+  const label = midLabel ? `短${shortLabel}/中${midLabel}` : shortLabel;
+  const src = r.source === 'batch' ? '组合批量' : r.source === 'single' ? '个股分析' : '';
+  const t = `短期${shortLabel}${midLabel ? ` · 中期${midLabel}` : ''} · ${r.summary || ''} · ${r.as_of || ''} · ${src}`;
+  return `<span class="badge" style="color:#fff;background:${color};cursor:default" title="${esc(t)}">${label}</span>`;
+}
+
+// 渲染个股页消息面结果：d=null → 未分析空态；d.omit_reason → AI 判定无足够新信息（非错误样式）；否则完整报告
+function renderNewsPanel(el, d) {
+  if (!el) return;
+  if (!d) {
+    el.innerHTML = '<div class="empty" style="padding:14px;margin:0">尚未分析消息面。点上方「🤖 分析消息面」。</div>';
+    return;
+  }
+  const src = d.source === 'batch' ? '组合批量分析' : '个股分析';
+  const items = (d.items || []).map((it) => `
+    <li style="margin:6px 0">
+      <div style="font-size:13px"><b>${esc(it.headline || '')}</b>
+        ${it.event_date ? `<span class="muted" style="font-size:11px;margin-left:6px">${esc(it.event_date)}</span>` : ''}
+        ${it.impact ? `<span class="chip" style="margin-left:6px;font-size:11px">${esc(it.impact)}</span>` : ''}
+      </div>
+      ${it.summary ? `<div style="font-size:12px;color:#555;margin-top:2px;line-height:1.6">${esc(it.summary)}</div>` : ''}
+    </li>`).join('');
+  const risks = (d.risks || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  const hasContent = !!(d.summary || items || risks);
+  // AI 因时效放弃且无任何实质内容 → 空态说明（非错误样式）
+  if (d.omit_reason && !hasContent) {
+    el.innerHTML = `
+      <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          ${newsStanceBadge(d)}
+          <span class="muted" style="font-size:12px">${src} · ${d.as_of || ''}</span>
+        </div>
+        <div style="font-size:13px;margin-top:8px">AI 判定当前无近期可确认的新闻事件（基于模型公开知识，非实时新闻源，时效由 AI 自行判定）。</div>
+        <div style="font-size:12px;color:#868e96;margin-top:4px">${esc(d.omit_reason)}</div>
+      </div>`;
+    return;
+  }
+  // 完整报告：立场徽章 + 摘要 + 事件/风险；omit_reason 作为「时效说明」附注，不与立场冲突
+  el.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        ${newsStanceBadge(d)}
+        <span class="muted" style="font-size:12px">${src} · ${d.as_of || ''}</span>
+        ${d.html ? aiHtmlButton() : ''}
+      </div>
+      ${d.summary ? `<div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(d.summary)}</div>` : ''}
+      ${d.omit_reason ? `<div style="font-size:12px;color:#e8590c;margin:6px 0"><b>📌 时效说明</b>：${esc(d.omit_reason)}</div>` : ''}
+      ${items ? `<div style="margin:7px 0"><b style="font-size:12.5px">📅 近期事件</b><ul style="margin:4px 0 0 18px;font-size:13px">${items}</ul></div>` : ''}
+      ${risks ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:var(--red)">⚠️ 风险</b><ul style="margin:4px 0 0 18px;font-size:13px">${risks}</ul></div>` : ''}
+    </div>`;
+  wireAiHtmlButton(el, d);
+}
+
+// 渲染个股页技术面结果：d=null → 未分析空态；否则完整报告（短/中趋势 + 关键位 + 白话信号 + 证伪条件）
+function renderTechPanel(el, d) {
+  if (!el) return;
+  if (!d) {
+    el.innerHTML = '<div class="empty" style="padding:14px;margin:0">尚未分析技术面。点上方「🤖 分析技术面」。</div>';
+    return;
+  }
+  const src = d.source === 'batch' ? '组合批量分析' : '个股分析';
+  const [shortLabel, shortColor] = TECH_TREND[d.trend_short] || TECH_TREND.range;
+  const [midLabel, midColor] = TECH_TREND[d.trend_mid] || TECH_TREND.range;
+  const lv = d.key_levels || {};
+  const support = (lv.support || []).map((x) => `<span class="chip">支撑 ${esc(x)}</span>`).join(' ');
+  const resistance = (lv.resistance || []).map((x) => `<span class="chip">压力 ${esc(x)}</span>`).join(' ');
+  const signals = (d.signals || []).map((x) => `<li>${esc(x)}</li>`).join('');
+  el.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="badge" style="color:#fff;background:${shortColor}">短期 ${shortLabel}</span>
+        <span class="badge" style="color:#fff;background:${midColor}">中期 ${midLabel}</span>
+        <span class="muted" style="font-size:12px">${src} · ${d.as_of || ''}</span>
+        ${d.html ? aiHtmlButton() : ''}
+      </div>
+      ${d.summary ? `<div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(d.summary)}</div>` : ''}
+      ${(support || resistance) ? `<div style="margin:7px 0"><b style="font-size:12.5px">🔑 关键价位</b><div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap">${resistance}${support}</div></div>` : ''}
+      ${signals ? `<div style="margin:7px 0"><b style="font-size:12.5px">💬 白话信号</b><ul style="margin:4px 0 0 18px;font-size:13px">${signals}</ul></div>` : ''}
+      ${d.invalidation ? `<div style="margin:7px 0;font-size:12px;color:#e8590c"><b>证伪条件：</b>${esc(d.invalidation)}</div>` : ''}
+    </div>`;
+  wireAiHtmlButton(el, d);
+}
+
+// 组合批量列表通用渲染：rows 每行含 code/name/summary；badge(r) 输出徽章；
+// fragment 为个股页对应面板锚点（如 '#newsAiPanel' / '#techAiPanel'），点击跳转对应面板；
+// coherence={summary,html} 为整组合整体输出（深入模式），非空时顶部展示 + 📄 按钮
+function renderBatchListPanel(el, title, rows, badge, fragment, coherence) {
+  if (!el) return;
+  const frag = fragment || '';
+  const coh = coherence || {};
+  const cohHtml = (coh.summary || coh.html) ? `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(37,99,235,.04);border:1px solid #b9cdff;border-radius:8px;padding:8px 10px;margin-bottom:8px">
+      <span style="font-size:13px;font-weight:700">整组合${title.replace('批量分析', '')}</span>
+      ${coh.summary ? `<span style="flex:1;font-size:12px;color:var(--muted,#868e96);min-width:160px">${esc(coh.summary)}</span>` : ''}
+      ${coh.html ? aiHtmlButton() : ''}
+    </div>` : '';
+  el.innerHTML = `
+    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
+      ${cohHtml}
+      <div style="font-size:13px;font-weight:700;margin-bottom:6px">${title}（${rows.length} 只）</div>
+      ${rows.map((r) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:4px 0;border-bottom:1px dashed var(--border)">
+          <a href="/static/stock.html?code=${r.code}${frag}" style="white-space:nowrap;min-width:120px">${r.code} ${esc(r.name || '')}</a>
+          ${badge(r)}
+          <span style="flex:1;font-size:13px">${esc(r.summary || '')}</span>
+        </div>`).join('') || '<div class="muted">无分析结果</div>'}
+    </div>`;
+  wireAiHtmlButton(el, coh);   // 📄 按钮（整组合深入 html 非空时绑定）
+}
+
+// 读取最近一次整组合批量消息面/技术面报告（含整组合 HTML；F5 后 AI 扩展分析 tab 重建用）
+async function loadNewsCoherence(scope, scopeKey) {
+  try {
+    const params = new URLSearchParams({ scope: scope || 'portfolio' });
+    if (scopeKey) params.set('scope_key', scopeKey);
+    return (await api('/ai/news-coherence?' + params.toString(), { silent: true })) || null;
+  } catch (e) { return null; }
+}
+
+async function loadTechCoherence(scope, scopeKey) {
+  try {
+    const params = new URLSearchParams({ scope: scope || 'portfolio' });
+    if (scopeKey) params.set('scope_key', scopeKey);
+    return (await api('/ai/tech-coherence?' + params.toString(), { silent: true })) || null;
+  } catch (e) { return null; }
+}
+
+// 一次拉取多只最近落库消息面/技术面报告 map：{code:{stance|trend_short,summary,as_of,source}}
+async function loadNewsReports(codes) {
+  if (!codes || !codes.length) return {};
+  try {
+    return (await api('/ai/news-reports?codes=' + encodeURIComponent(codes.join(',')), { silent: true })) || {};
+  } catch (e) { return {}; }
+}
+
+async function loadTechReports(codes) {
+  if (!codes || !codes.length) return {};
+  try {
+    return (await api('/ai/tech-reports?codes=' + encodeURIComponent(codes.join(',')), { silent: true })) || {};
+  } catch (e) { return {}; }
+}
+
+// 批量分析消息面：POST 批量端点 → onDone 重载持久化面板（先弹窗确认/编辑指令）
+async function runNewsBatch({ tags, btn, panel, onDone, codes }) {
+  openPromptEditor('news_batch', async (systemPrompt, intensity) => {
+    btn.disabled = true;
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量消息面 AI 已提交，进度见顶部…</div>';
+    try {
+      const body = { intensity };
+      if (systemPrompt) body.system_prompt = systemPrompt;
+      if (codes && codes.length) body.codes = codes.join(',');
+      else body.tags = tags || null;
+      const job = await startBackgroundJob('/ai/news-batch', body, { toast: '批量消息面 AI 已开始' });
+      await waitForJob(job.job_id);
+      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {
+      panel.innerHTML = /AI 模型/.test(e.message)
+        ? aiNotConfiguredHtml()
+        : `<div class="empty" style="padding:10px;margin:0">批量分析失败：${esc(e.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+// 批量分析技术面：POST 批量端点 → onDone 重载持久化面板（先弹窗确认/编辑指令）
+async function runTechBatch({ tags, btn, panel, onDone, codes }) {
+  openPromptEditor('tech_batch', async (systemPrompt, intensity) => {
+    btn.disabled = true;
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量技术面 AI 已提交，进度见顶部…</div>';
+    try {
+      const body = { intensity };
+      if (systemPrompt) body.system_prompt = systemPrompt;
+      if (codes && codes.length) body.codes = codes.join(',');
+      else body.tags = tags || null;
+      const job = await startBackgroundJob('/ai/tech-batch', body, { toast: '批量技术面 AI 已开始' });
+      await waitForJob(job.job_id);
+      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {
+      panel.innerHTML = /AI 模型/.test(e.message)
+        ? aiNotConfiguredHtml()
+        : `<div class="empty" style="padding:10px;margin:0">批量分析失败：${esc(e.message)}</div>`;
     } finally {
       btn.disabled = false;
     }

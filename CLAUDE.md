@@ -75,8 +75,18 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - **每日打分偏好去重**：一天 50 笔时 `tag_prefs` 只放当天涉及的标签各一份，每笔交易只带 `tag` 名 + 该股因子（`compute_live` 现取）；AI 按 tag 匹配指引逐笔打分再汇总。
 - **触发**：组合 = 手动按钮（GET 读最新报告，`stale`=画像哈希变化提示重新打分）；新交易 = 录入时 `maybe_auto_score_daily` 失效并后台线程重打分（无激活模型/当日无交易不起线程）。
 - **HTML 详细报告**：个股诊股/组合打分/每日打分/个股资金流/批量资金流五种 AI 分析，仅分析强度「深入」要求生成**自包含 HTML 报告**（`_HTML_REQUIREMENT`/`_PORTFOLIO_HTML_REQUIREMENT`/`_DAILY_HTML_REQUIREMENT`/`_FUNDFLOW_HTML_REQUIREMENT`/`_BATCH_FUNDFLOW_HTML_REQUIREMENT`，≥1000字、内联 CSS、无外部依赖、禁止 `<script>`；基础 prompt 不含 HTML 块）；快速/普通不要求（schema 去 `html` 字段），无「📄」按钮。资金流 HTML 落库：个股存 `ai_fundflow_reports.html`（v8 迁移），批量存 `ai_fundflow_coherence_reports.html`，F5 后 📄 按钮恢复。前端「📄 查看详细报告」按钮用 `openAiHtmlReport` 在新窗口打开。**HTML 聚焦深入分析，不罗列用户已可见的原始数据表**；内联 summary/advice/risks/reasons 保留。规整函数缺省把 html 置空串（AI 未生成时按钮不显示）。
-- **思考级别**：`chat_json` 附带 `reasoning_effort`（默认 `high`，`config.py AI_REASONING_EFFORT`；用户可在「🤖 AI」弹窗选 low/medium/high/max，写 config 表 `ai_reasoning_effort`，端点 `GET/PUT /api/ai/reasoning`）。provider 不支持时 `chat_json` 降级重试会移除该参数。
+- **思考级别（用用户配置，不做强度覆盖）**：`chat_json` 附带 `reasoning_effort`，**一律取用户全局配置**（config 表 `ai_reasoning_effort`，默认 `high`；「🤖 AI」弹窗可选 low/medium/high/max，端点 `GET/PUT /api/ai/reasoning`）——**不因分析强度压级/拔高**（用户确认：配的啥就用啥，不怕烧）。provider 不支持时 `chat_json` 降级重试会移除该参数。
+- **输出预算与超时（可在「🤖 AI」弹窗配置）**：`_AI_MAX_TOKENS=81920`（实测 deepseek-v4-flash 接受；组合/批量几十只持仓 + 整组合 HTML 需要大预算；8192 时高思考级常被 reasoning 烧光 → `finish=length` 只出盘算不出 JSON）；`AI_REQUEST_TIMEOUT=300s`。用户可在「🤖 AI」弹窗改 config 表 `ai_max_tokens`（2048~262144）/ `ai_request_timeout`（30~1800），端点 `GET/PUT /api/ai/runtime`，`chat_json`/`_post_chat_completion` 每次读取即时生效；`get_max_tokens()`/`get_request_timeout()` 读配置，缺省回落常量。提供商拒绝大值则 `chat_json` 降级 `_AI_MAX_TOKENS_SAFE=16384` 重试。
+- **输出格式双端强化**：所有带 schema 的 AI 调用（诊股/资金流/批量资金流/消息面/技术面/批量消息面/批量技术面/组合打分/每日打分）统一用 `ai._schema_user(label, ctx, schema)` 组装 user 消息——完整 schema **写在开头与结尾双端**（首因+近因效应，减少模型跑偏/乱答），中间夹输入数据；两端都重申「只输出严格 JSON、不要额外文字、不要 markdown 围栏」。
 - `profile_hash` 只基于持仓(筛选内 code/qty/currency) + 已确认偏好(筛选内) + 标签筛选 + 模型——**绝不含时间戳/价格**。
+
+### 消息面 / 技术面 AI（专项深入层，阶段一）
+- 两张新表 `ai_news_reports` / `ai_tech_reports`（PK `code+as_of+source`，`source='single'/'batch'`，进 `_SCHEMA` 幂等补建，**无需 bump 版本**）。个股 GET 取该 code 最近一条（`ORDER BY as_of DESC, updated_at DESC LIMIT 1`）。
+- **时效机制（核心）**：所有消息面/技术面 AI 调用的 user JSON 注入 `as_of_datetime`（`now_as_of_datetime()` 本地时区带时区 ISO）；prompt 强制 `_ASOF_RULES`——AI 相对该时刻判定时效，过时/不确信不输出，宁可 `items: []` + `omit_reason`。后端只轻量规整：剥离无 `event_date` 或 AI 自标过时的 item、枚举兜底（stance→neutral、trend→range）、**空结果视为成功**；不设 N 天死阈值。
+- 技术面原始数 = `daily_price_cache` 日K，`build_technical_bars(code, as_of, limit=120)`（`resolve_trade_day(as_of)` 截断到最近交易日，无数据返回 `[]`）+ `build_technical_bars_many`（`get_daily_prices_many` 一次多只）。阶段二打分 context 复用同一函数。
+- 端点 10 个：`POST /ai/news-analysis`、`GET /ai/news-report/{code}`、`GET /ai/news-reports?codes=`、`POST /ai/news-batch`、`GET /ai/news-coherence?scope&scope_key`，技术面同形 `/ai/tech-analysis|tech-report|tech-reports|tech-batch|tech-coherence`。批量 tags/codes 互斥 400、无模型 400；逐只落库 `source='batch'`，单只失败记日志继续。
+- **HTML 门控（用户确认：每个深入类请求都要该次请求的整体 HTML）**：个股/批量**深入**强度均要求 `html`（`_NEWS_HTML_REQUIREMENT`/`_TECH_HTML_REQUIREMENT`/`_BATCH_NEWS_HTML_REQUIREMENT`/`_BATCH_TECH_HTML_REQUIREMENT`）。批量 HTML 是**整组合整体输出**（不是逐只拼接），落 `ai_news_coherence_reports` / `ai_tech_coherence_reports`（scope='portfolio'/'indices' + scope_key='全部'/排序 tags/codes，`_coherence_key` 归一同 key；**每次批量都写最新一条**，GET 按 `as_of DESC` 取最近——普通/深入均覆盖旧结果，要看最新不保留旧深入 HTML）。GET 端点 `/ai/news-coherence|tech-coherence` 供 F5 重建，前端批量面板顶部展示整组合 summary + 📄 按钮。
+- 前端：个股页两块 panel（`newsAiPanel`/`techAiPanel`，诊股面板后、资金流前；**指数模式隐藏消息面、保留技术面**）；组合页「AI 扩展分析」区**三个 tab**（消息面/技术面/资金流，`.ptab` 样式，批量跟随标签筛选，F5 从 `source='batch'` 重建；资金流批量已从组合资金流面板收敛进来，资金流面板只留图表）；持仓页（index.html）**不展示**资金面/消息面/技术面列（只在个股/组合页看）。`_EDITABLE_PROMPTS` 增 `news/technical/news_batch/tech_batch` 4 key。共享渲染在 common.js（`renderNewsPanel`/`renderTechPanel`/`renderBatchListPanel`/`newsStanceBadge`/`techTrendBadge`/`runNewsBatch`/`runTechBatch`/`loadNewsCoherence`/`loadTechCoherence` 等）。
 
 ### 港股折算
 - 五位代码（06198/00700）→ `currency='HKD'`；港股**不再复用 ETF 分类**（is_etf 仅按场内基金代码/ETF 标签）。
@@ -135,5 +145,6 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 
 ## 测试
-- 287 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发，mock chat_json 离线）、ai（诊股 8 维度含资金面/分析强度 HTML 门控含资金流）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v8 资金流 html 列 + v9 分时 price 列）、api（409 CACHE_MISS/GET 零写入/AI 评分端点/指数代码返回 is_index）、instruments（判型/ETF 名称搜索/指数刷新补估值）、indices（估值列 add* 整体法）、fundflow（分时点带 price）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
+- 352 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发，mock chat_json 离线）、ai（诊股 8 维度含资金面/分析强度 HTML 门控含资金流）、ai_news_tech（消息面/技术面：as_of 注入、时效空态、剥离规则、技术面 bars as-of 锚点截断、批量落库/单只失败/tags-codes 400、迁移建表、HTML 门控）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v8 资金流 html 列 + v9 分时 price 列）、api（409 CACHE_MISS/GET 零写入/AI 评分端点/指数代码返回 is_index）、instruments（判型/ETF 名称搜索/指数刷新补估值）、indices（估值列 add* 整体法）、fundflow（分时点带 price）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
+- conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。测试灌数据一律用 as-of 锚点（`resolve_trade_day(None)[0]`），不用 `date.today()`，否则周末必红。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。

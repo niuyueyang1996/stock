@@ -16,8 +16,12 @@ from app.models.db import get_conn
 
 logger = logging.getLogger("ai")
 
-# DeepSeek JSON Output 偶发空 content；输出预算过小也会截断。给足上限。
-_AI_MAX_TOKENS = 8192
+# DeepSeek JSON Output 偶发空 content；输出预算过小也会截断。
+# 组合/批量大任务（多只 + ≥1000 字 HTML）在高思考级下易被 reasoning 烧光（finish=length）。
+# 实测 deepseek-v4-flash 接受 max_tokens=81920（5 倍余量，几十只持仓也够）；
+# 用户可在「🤖 AI」弹窗改 config 表 ai_max_tokens / ai_request_timeout（见 get_max_tokens）。
+_AI_MAX_TOKENS = 81920
+_AI_MAX_TOKENS_SAFE = 16384
 
 # 诊股 8 维度（固定，用于 prompt 与输出校验）
 DIMENSIONS = ["cyclicality", "moat", "fundamentals", "growth", "dividend", "valuation", "competition", "fundflow"]
@@ -218,8 +222,8 @@ def list_available_models(base_url: str, api_key: str) -> list[str]:
 
 # ---------- OpenAI 兼容调用 ----------
 
-# AI 调用超时（诊股生成长报告较慢，放宽）
-AI_REQUEST_TIMEOUT = 180
+# AI 调用超时（组合/批量深入 + 16384 输出预算生成更久，放宽到 300s）
+AI_REQUEST_TIMEOUT = 300
 
 
 def get_reasoning_effort() -> str:
@@ -236,6 +240,33 @@ def get_reasoning_effort() -> str:
         return ""
 
 
+def get_max_tokens() -> int:
+    """当前 AI 输出预算（config 表 ai_max_tokens，缺省 _AI_MAX_TOKENS=81920）。
+
+    组合/批量大任务（几十只持仓 + 整组合 HTML）需要大预算；用户可在「🤖 AI」弹窗调整。
+    """
+    try:
+        with get_conn() as c:
+            row = c.execute("SELECT value FROM config WHERE key='ai_max_tokens'").fetchone()
+        if row and str(row["value"] or "").strip().isdigit():
+            return max(2048, min(262144, int(row["value"])))
+    except Exception:  # noqa: BLE001 读配置失败不影响调用
+        pass
+    return _AI_MAX_TOKENS
+
+
+def get_request_timeout() -> int:
+    """当前 AI 请求超时秒数（config 表 ai_request_timeout，缺省 AI_REQUEST_TIMEOUT=300）。"""
+    try:
+        with get_conn() as c:
+            row = c.execute("SELECT value FROM config WHERE key='ai_request_timeout'").fetchone()
+        if row and str(row["value"] or "").strip().isdigit():
+            return max(30, min(1800, int(row["value"])))
+    except Exception:  # noqa: BLE001 读配置失败不影响调用
+        pass
+    return AI_REQUEST_TIMEOUT
+
+
 # 「分析强度」→ 追加进 system 的指令：快速=简要、深入=详尽；普通不加
 _INTENSITY_INSTRUCTIONS = {
     "fast": "请快速简要分析，突出核心结论即可，不必逐项展开细节。",
@@ -246,6 +277,23 @@ _INTENSITY_INSTRUCTIONS = {
 def _intensity_instruction(intensity: str | None) -> str:
     """分析强度指令；非法/缺省（普通）→ 空串（不改动默认指令）。"""
     return _INTENSITY_INSTRUCTIONS.get(str(intensity or "").lower().strip(), "")
+
+
+def _schema_user(label: str, ctx: dict, schema: dict) -> str:
+    """组装 AI user 消息：输出格式（schema）写在开头与结尾双端。
+
+    模型对 prompt 首尾信息权重更高（首因+近因效应），开头重申「只输出严格 JSON、结构完全遵循
+    schema」，中间夹输入数据，结尾再给权威 schema + 严格指令——双端强化可减少跑偏/乱答。
+    """
+    schema_txt = json.dumps(schema, ensure_ascii=False)
+    return (
+        f"{label}\n\n"
+        "【输出格式·开头重申】请只输出一个严格 JSON 对象，结构必须与下面完全一致，"
+        "不要 markdown 围栏、不要任何额外文字：\n" + schema_txt + "\n\n"
+        "【输入数据】\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
+        "【输出格式·结尾确认】请输出严格 JSON，结构如下（与开头完全一致，不要任何额外文字）：\n"
+        + schema_txt
+    )
 
 
 def _http_error_detail(resp) -> str:
@@ -286,8 +334,9 @@ def _post_chat_completion(url: str, headers: dict, payload: dict):
     """POST 一次 chat/completions，返回 (content, finish_reason)。失败抛 ValueError。"""
     import requests
 
+    timeout = get_request_timeout()
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=AI_REQUEST_TIMEOUT)
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
     except Exception as e:  # noqa: BLE001 网络/超时
         raise ValueError(f"AI 接口网络失败: {e}") from e
     if resp.status_code >= 400:
@@ -340,6 +389,44 @@ def _normalize_json_quotes(txt: str) -> str:
         txt.replace("\u201c", '"').replace("\u201d", '"')
         .replace("\u2018", "'").replace("\u2019", "'")
     )
+
+
+def _escape_raw_control_chars(txt: str) -> str:
+    """把字符串字面量里的原文控制字符（换行/回车/Tab）转义为 JSON 转义序列。
+
+    JSON 不允许字符串里有原文换行；模型写多行中文文本时常见，json.loads 会报
+    Invalid control character（实测复现：summary 字段含原文 \\n → 解析失败）。
+    只在「引号内且非转义序列」处替换，不误伤结构空白与已有转义（如 \\\\n 保留原样）。
+    """
+    out: list[str] = []
+    in_str = False
+    escaped = False
+    for ch in txt:
+        if in_str:
+            if escaped:
+                out.append(ch)   # 转义序列的延续字符（如 \\n 的 n），原样保留
+                escaped = False
+            elif ch == "\\":
+                out.append(ch)
+                escaped = True
+            elif ch == '"':
+                in_str = False
+                out.append(ch)
+            elif ch == "\n":
+                out.append("\\n")
+            elif ch == "\r":
+                out.append("\\r")
+            elif ch == "\t":
+                out.append("\\t")
+            elif ord(ch) < 0x20:
+                out.append("\\u{:04x}".format(ord(ch)))
+            else:
+                out.append(ch)
+        else:
+            if ch == '"':
+                in_str = True
+            out.append(ch)
+    return "".join(out)
 
 
 def _repair_brackets(txt: str) -> str:
@@ -453,6 +540,8 @@ def _loads_json_lenient(txt: str) -> dict:
             base,
             _fix_trailing_commas(base),
             _fix_trailing_commas(_normalize_json_quotes(base)),
+            _fix_trailing_commas(_escape_raw_control_chars(base)),
+            _fix_trailing_commas(_escape_raw_control_chars(_normalize_json_quotes(base))),
         ):
             if variant not in candidates:
                 candidates.append(variant)
@@ -460,16 +549,19 @@ def _loads_json_lenient(txt: str) -> dict:
             if got is not None:
                 return got
 
-    # 括号修补（漏 ]、截断等）——在逗号/引号修复之后再试
+    # 括号修补（漏 ]、截断等）——在逗号/引号/控制字符修复之后再试
     for base in list(candidates):
-        repaired = _fix_trailing_commas(
-            _repair_brackets(_normalize_json_quotes(base))
-        )
-        if repaired not in candidates:
-            candidates.append(repaired)
-        got = _try(repaired)
-        if got is not None:
-            return got
+        for repaired in (
+            _fix_trailing_commas(_repair_brackets(_normalize_json_quotes(base))),
+            _fix_trailing_commas(
+                _escape_raw_control_chars(_repair_brackets(_normalize_json_quotes(base)))
+            ),
+        ):
+            if repaired not in candidates:
+                candidates.append(repaired)
+            got = _try(repaired)
+            if got is not None:
+                return got
 
     for base in candidates:
         salvaged = _try_salvage_html_field(base)
@@ -507,15 +599,19 @@ def _parse_json_content(content: str) -> dict:
         raise ValueError(f"AI 输出解析失败: {e}") from e
 
 
-def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None) -> dict:
+def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None,
+              max_tokens: int | None = None) -> dict:
     """调 OpenAI 兼容接口并解析 JSON 输出。失败抛 ValueError。输入输出均打印日志。
 
     - 附带 reasoning_effort（思考级别，默认 high 最高）；provider 不支持会被忽略。
-    - effort 非 None 时覆盖全局思考级别（「分析强度」快速/深入用）；None 用全局配置。
-    - 首次失败（HTTP 错 / content 空）会去掉 response_format 与 reasoning_effort 再试一次。
+    - effort 非 None 时覆盖全局思考级别；None 用用户配置的全局思考级别（config ai_reasoning_effort）。
+    - max_tokens 输出预算，缺省 _AI_MAX_TOKENS（16384，组合/批量大任务给足空间）。
+    - 首次失败（HTTP 错 / content 空）会去掉 response_format 与 reasoning_effort 再试一次；
+      若大 max_tokens 被提供商拒绝，重试降回 _AI_MAX_TOKENS_SAFE。
     - JSON 解析失败时再请求模型重发一轮合法 JSON（不重复整段业务推理指令）。
     """
     url = _openai_compat_url(model_cfg["base_url"], "chat/completions")
+    limit = int(max_tokens or get_max_tokens())
     payload = {
         "model": model_cfg["model"],
         "messages": [
@@ -523,7 +619,7 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
             {"role": "user", "content": user},
         ],
         "temperature": 0.4,
-        "max_tokens": _AI_MAX_TOKENS,
+        "max_tokens": limit,
         "response_format": {"type": "json_object"},
     }
     if effort is None:
@@ -531,8 +627,8 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
     if effort:
         payload["reasoning_effort"] = effort
     # 打印输入日志（截断超长）
-    logger.info("[AI] 请求 %s model=%s | reasoning=%s | system=%s | user=%s",
-                url, model_cfg["model"], effort or "-", system[:300], user[:2000])
+    logger.info("[AI] 请求 %s model=%s | reasoning=%s | max_tokens=%s | system=%s | user=%s",
+                url, model_cfg["model"], effort or "-", limit, system[:300], user[:2000])
     headers = {**HTTP_HEADERS, "Authorization": f"Bearer {model_cfg['api_key']}"}
 
     content, finish = "", ""
@@ -549,6 +645,9 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
         logger.warning("[AI] json_object 调用失败或空内容，降级普通文本：%s", e)
         payload.pop("response_format", None)
         payload.pop("reasoning_effort", None)  # provider 不支持时一并移除
+        if limit > _AI_MAX_TOKENS_SAFE:
+            payload["max_tokens"] = _AI_MAX_TOKENS_SAFE   # 提供商拒绝大 max_tokens → 降级重试
+            logger.warning("[AI] max_tokens %s 可能不被接受，降级 %s 重试", limit, _AI_MAX_TOKENS_SAFE)
         try:
             content, finish = _post_chat_completion(url, headers, payload)
         except Exception as e2:  # noqa: BLE001
@@ -720,6 +819,67 @@ def build_stock_context(code: str) -> dict:
     return ctx
 
 
+# ---------- 时效机制（消息面/技术面共用） ----------
+
+def now_as_of_datetime() -> str:
+    """本地时区当前时间 ISO 串（带时区，如 2026-08-09T15:21:00+08:00）。
+
+    所有涉及「时效」的 AI 调用（消息面/技术面）都把它作为 as_of_datetime 注入 user JSON，
+    由 AI 自行判定相对该时刻哪些信息/结论仍成立。
+    """
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# 时效规则：注入所有基于公开知识/时点数据的 AI 调用。AI 必须相对 as_of_datetime 判定，
+# 不得拿训练截止时间当「现在」；过时/不确信宁可不返回。阶段二的诊股/组合打分复用同一片段。
+_ASOF_RULES = (
+    "[时效规则（强制）]\n"
+    "1. 请求里的 as_of_datetime 是当前时间，视为「现在」；不得以你的训练数据截止时间当「现在」。\n"
+    "2. 输出的每条信息必须相对 as_of_datetime 仍成立、仍有时效；已过时、已发生重大变化、"
+    "或无法确认是否仍成立的事件/结论一律不得输出。\n"
+    "3. 禁止编造标题/日期/数字/机构名凑内容；不确定时效宁可不提。\n"
+    "4. 无任何可用信息时：items 输出空数组 [] 并在 omit_reason 说明原因，不要硬凑结论。\n"
+    "5. 带日期的条目必须给 event_date（YYYY-MM-DD），缺日期的条目不输出。\n"
+)
+
+
+def _bar_dict(r) -> dict:
+    """日K缓存行 → AI 技术面点（统一字段，缺省 None 兜底）。"""
+    return {
+        "date": r["trade_date"],
+        "open": r["open"], "high": r["high"], "low": r["low"],
+        "close": r["close"], "volume": r["volume"],
+        "pct_change": r["pct_change"],
+    }
+
+
+def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> list[dict]:
+    """该股截至 as_of 的最近日K（升序，尾部 limit 根），供技术面 AI 分析。
+
+    end = resolve_trade_day(as_of)（非交易日自动截到最近交易日），start≈一年前；
+    无数据返回 []（调用方按「该维缺数」处理，不抛错）。读缓存零网络。
+    阶段二的打分 context 也会复用这个函数。
+    """
+    from app.data.cache import get_daily_prices
+    from app.market.calendar import resolve_trade_day
+
+    end = resolve_trade_day(as_of_datetime[:10])[0]
+    start = (date.fromisoformat(end) - timedelta(days=365)).isoformat()
+    rows = get_daily_prices(code, start, end)
+    return [_bar_dict(r) for r in rows[-limit:]]
+
+
+def build_technical_bars_many(codes: list[str], as_of_datetime: str, limit: int = 120) -> dict[str, list]:
+    """批量版：一次查多只的日K（get_daily_prices_many，避免逐只开连），返回 {code: bars}。"""
+    from app.data.cache import get_daily_prices_many
+    from app.market.calendar import resolve_trade_day
+
+    end = resolve_trade_day(as_of_datetime[:10])[0]
+    start = (date.fromisoformat(end) - timedelta(days=365)).isoformat()
+    rows_map = get_daily_prices_many(list(codes), start, end)
+    return {c: [_bar_dict(r) for r in (rows_map.get(c) or [])[-limit:]] for c in codes}
+
+
 # ---------- 诊股 ----------
 
 def _normalize_report(data: dict) -> dict:
@@ -815,10 +975,7 @@ def analyze_stock(code: str, system_prompt: str | None = None,
     ctx = build_stock_context(code)
     # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
     schema = {k: v for k, v in _OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = (
-        "个股结构化数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    user = _schema_user("个股结构化数据：", ctx, schema)
     system = _SYSTEM_PROMPT
     if intensity == "deep":
         system = f"{system}\n\n{_HTML_REQUIREMENT}"
@@ -1302,10 +1459,7 @@ def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | 
         raise ValueError("该时间窗资金流数据为空，请先刷新资金流")
     # 输出 schema：仅「深入」保留 html 字段（快速/普通快报式，不生成 HTML）
     schema = {k: v for k, v in _FUNDFLOW_ANALYSIS_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = (
-        "资金流与股价数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    user = _schema_user("资金流与股价数据：", ctx, schema)
     system = _FUNDFLOW_ANALYSIS_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_FUNDFLOW_HTML_REQUIREMENT}"
@@ -1545,10 +1699,7 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
         raise ValueError("该组合暂无有资金流数据的标的，请先全量刷新")
     # 输出 schema：仅「深入」保留 html 字段（快速/普通精简 JSON，不生成 HTML）
     schema = {k: v for k, v in _BATCH_FUNDFLOW_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = (
-        "组合标的资金流数据（列表）：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    user = _schema_user("组合标的资金流数据（列表）：", ctx, schema)
     system = _BATCH_FUNDFLOW_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_BATCH_FUNDFLOW_HTML_REQUIREMENT}"
@@ -1605,6 +1756,760 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
     }
 
 
+# ============================================================ 消息面 / 技术面 AI（专项深入层）
+
+# 消息面：系统无正文新闻库，只给 code/name/as_of，由 AI 按公开知识 + 时效规则补
+# （与诊股「同业竞争」维缺数时标 [AI补充] 同理）。
+_NEWS_SYSTEM = (
+    "你是资深财经消息分析师。系统给出待分析标的的代码、名称与当前时间（as_of_datetime）。\n"
+    "系统不提供实时新闻正文库：你只能依据自己的公开知识（公司公告、行业与政策事件、财报节点等）"
+    "判断该标的近期的消息面，并严格遵守时效规则，不拿训练期旧闻当「最新」。\n\n"
+    f"{_ASOF_RULES}\n"
+    "[输出]\n"
+    "1. stance 总立场：bullish（利多）/ neutral（中性）/ bearish（利空）。\n"
+    "2. summary 一句话概括近期消息面主线。\n"
+    "3. items 近期重要事件列表（按时间倒序）：每条 headline（标题）、event_date（YYYY-MM-DD）、"
+    "impact（利多/利空/中性）、summary（简述与对股价的可能影响）。\n"
+    "4. risks 消息面带来的风险点数组。\n"
+    "5. 无足够新信息时：items 为空数组 + omit_reason 说明原因，不要硬凑。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_NEWS_HTML_REQUIREMENT = (
+    "同时生成一份完整、独立、可读性强的 HTML 消息面报告（字段 html），供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。\n"
+    "2. 结构必须覆盖：核心结论 / 近期事件梳理（按时间，标注日期与影响）/ 行业与政策环境 / "
+    "财务节点与公告预期 / 风险与不确定性 / 操作提示。\n"
+    "3. 每个判断必须带具体信息与时效（事件、日期、影响方向）；禁止「有利好」「消息面平稳」这类无依据断言；"
+    "无法确认时效的信息一律不写。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；把篇幅全部用于深入分析与洞察，"
+    "不得原样罗列用户已可见的原始数据。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_NEWS_SCHEMA = {
+    "stance": "bullish(利多)|neutral(中性)|bearish(利空)",
+    "summary": "一句话概括消息面主线",
+    "items": [
+        {
+            "headline": "事件标题",
+            "event_date": "YYYY-MM-DD",
+            "impact": "利多/利空/中性",
+            "summary": "简述与对股价的可能影响",
+        }
+    ],
+    "risks": ["消息面风险点数组"],
+    "omit_reason": "无足够新信息时填说明，否则留空",
+    "html": "完整独立 HTML 消息面报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
+}
+
+# 技术面：bars 为日K（截至 as_of 交易日），prompt 白话表达、给关键位与证伪条件、不冒充盘中。
+_TECH_SYSTEM = (
+    "你是资深技术分析师。系统给出某标的最近日 K 数据（bars，按日期升序）与当前时间（as_of_datetime）。\n"
+    "[数据说明]\n"
+    "1. bars 每根：date（交易日）、open/high/low/close（元）、volume（成交量）、pct_change（当日涨跌幅%）。\n"
+    "2. 你解读的是「截至 as_of 对应交易日」的价格结构（K 线已截断到该交易日收盘），不要冒充盘中、"
+    "不要臆测 as_of 之后的数据。\n"
+    "3. 若 bars 为空（该股无日K数据），明确说无法分析技术面，不要硬下结论。\n"
+    "[输出要求]\n"
+    "1. 用白话表达，不堆指标缩写——用户不熟技术指标，解释要通俗（如「股价站稳10元上方」而非「MA10金叉」）。\n"
+    "2. 给出关键支撑位与压力位（key_levels，数值），以及什么情况会证伪当前判断（invalidation）。\n"
+    "3. 可结合资金面/估值给出潜在矛盾提示（凭合理推断即可，勿编造具体数字）。\n"
+    "4. trend_short / trend_mid 用 up（上行）/ down（下行）/ range（震荡）表达短/中期趋势。\n"
+    "5. signals 为白话信号数组（每条一句话，说人话）。\n"
+    "6. 无 bars 时：summary 明说无数据，signals 为空，trend 用 range。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_TECH_HTML_REQUIREMENT = (
+    "同时生成一份完整、独立、可读性强的 HTML 技术面报告（字段 html），供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。\n"
+    "2. 结构必须覆盖：核心结论 / 价格结构解读（趋势、关键支撑压力位、量能）/ 白话信号 / "
+    "证伪条件与风险 / 与资金面、估值的矛盾提示 / 操作提示。\n"
+    "3. 每个判断必须带具体价位与上下文（如「近 30 日股价在 10.2~10.8 区间震荡，放量突破 10.8 前难言走强」）；"
+    "禁止「趋势向好」「有支撑」这类无价位断言。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的数据表格。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_TECH_SCHEMA = {
+    "trend_short": "短期趋势 up(上行)|down(下行)|range(震荡)",
+    "trend_mid": "中期趋势 up|down|range",
+    "key_levels": {"support": ["支撑价位数组"], "resistance": ["压力价位数组"]},
+    "signals": ["白话信号数组（每条约一句话，说人话）"],
+    "invalidation": "证伪条件（出现什么情况说明当前判断错了）",
+    "summary": "一句话结论（无K线时明说无数据）",
+    "html": "完整独立 HTML 技术面报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
+}
+
+
+# 组合批量：整批共用同一个 as_of_datetime，逐只精简输出并落库 source='batch'（与批量资金流同构）。
+_BATCH_NEWS_SYSTEM = (
+    "你是资深财经消息分析师。系统给出组合内多只标的（列表 stocks，每只含 code/name）与当前时间（as_of_datetime）。\n"
+    "系统不提供实时新闻正文库：你只能依据自己的公开知识逐只判断近期消息面，并严格遵守时效规则。\n\n"
+    f"{_ASOF_RULES}\n"
+    "[输出要求]\n"
+    "1. 对 stocks 中每只 code 输出：stance（bullish/neutral/bearish）、summary（一句话结论）、"
+    "items（近期事件列表，缺 event_date 或已过时的不要）、risks（注意点，可选）、"
+    "omit_reason（无足够新信息时填说明，否则留空）。\n"
+    "2. 必须覆盖 stocks 中出现的每只 code，不要遗漏；不要新增 stocks 中没有的 code。\n"
+    "3. 每只精简到几句话，不展开；简体中文。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+# 批量「深入」强度要求整组合一份 HTML（落 ai_news_coherence_reports，scope+scope_key 按选中组合整体存）
+_BATCH_NEWS_HTML_REQUIREMENT = (
+    "4. 同时生成一份完整、独立、可读性强的 HTML 批量消息面报告（字段 html），"
+    "面向【整个组合整体】，不是逐只拼接。供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话。\n"
+    "2. 结构必须覆盖：组合消息面格局（哪些偏多/偏空/中性及其权重）、逐只事件梳理（标注日期与影响）、"
+    "行业与政策环境、风险点、组合层面操作建议分级。\n"
+    "3. 每个判断必须带具体信息与时效（事件、日期、影响方向）；无法确认时效的信息一律不写。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的逐只表格。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_BATCH_NEWS_SCHEMA = {
+    "summary": "组合整体消息面一句话（可选）",
+    "stocks": [
+        {
+            "code": "标的代码",
+            "stance": "bullish|neutral|bearish",
+            "summary": "一句话结论",
+            "items": [{"headline": "事件标题", "event_date": "YYYY-MM-DD", "impact": "利多/利空/中性", "summary": "简述"}],
+            "risks": ["注意点（可选）"],
+            "omit_reason": "无足够新信息时填说明，否则留空",
+        }
+    ],
+    "html": "完整独立 HTML 批量消息面报告源代码（面向整个组合整体，自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文）",
+}
+
+_BATCH_TECH_SYSTEM = (
+    "你是资深技术分析师。系统给出组合内多只标的的最近日 K 数据（列表 stocks，每只含 code/name/bars）"
+    "与当前时间（as_of_datetime）。\n"
+    "[数据说明]\n"
+    "1. 每只标的 bars 按日期升序：date（交易日）、open/high/low/close（元）、volume（成交量）、pct_change（当日涨跌幅%）。\n"
+    "2. 解读「截至 as_of 对应交易日」的价格结构，不要冒充盘中；bars 为空说明该标的无日K数据，"
+    "明说无法分析，不要硬下结论。\n"
+    "[输出要求]\n"
+    "1. 对 stocks 中每只 code 输出：trend_short / trend_mid（up/down/range）、summary（一句话结论）、"
+    "key_levels（支撑/压力价位）、signals（白话信号数组）、invalidation（证伪条件）。\n"
+    "2. 必须覆盖 stocks 中出现的每只 code，不要遗漏；不要新增 stocks 中没有的 code。\n"
+    "3. 每只精简到几句话；白话表达，不堆指标缩写；简体中文。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+# 批量「深入」强度要求整组合一份 HTML（落 ai_tech_coherence_reports，scope+scope_key 按选中组合整体存）
+_BATCH_TECH_HTML_REQUIREMENT = (
+    "4. 同时生成一份完整、独立、可读性强的 HTML 批量技术面报告（字段 html），"
+    "面向【整个组合整体】，不是逐只拼接。供用户新开页面查看。\n"
+    "[HTML 深度分析强制规范]\n"
+    "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话。\n"
+    "2. 结构必须覆盖：组合技术面格局 / 逐只趋势与关键价位 / 白话信号 / 风险与证伪条件 / 组合层面操作建议分级。\n"
+    "3. 每个判断必须带具体价位与上下文；禁止「趋势向好」「有支撑」这类无价位断言。\n"
+    "4. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的逐只表格。\n"
+    "5. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
+    "要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
+    "简体中文；结构清晰、排版美观、层次分明。\n"
+    "严格输出 JSON，不要输出任何额外文字。"
+)
+
+_BATCH_TECH_SCHEMA = {
+    "summary": "组合整体技术面一句话（可选）",
+    "stocks": [
+        {
+            "code": "标的代码",
+            "trend_short": "up|down|range",
+            "trend_mid": "up|down|range",
+            "key_levels": {"support": ["支撑价位"], "resistance": ["压力价位"]},
+            "signals": ["白话信号数组"],
+            "invalidation": "证伪条件",
+            "summary": "一句话结论",
+        }
+    ],
+    "html": "完整独立 HTML 批量技术面报告源代码（面向整个组合整体，自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文）",
+}
+
+
+def _normalize_news(data) -> dict:
+    """规整消息面输出：stance 限枚举（非法兜底 neutral）、剥离无 event_date 或 AI 标注过时的 item、
+    html 缺省空串。items 为空是合法结果（AI 因时效放弃），照常落库。"""
+    if not isinstance(data, dict):
+        data = {}
+    stance = str(data.get("stance", "neutral")).lower()
+    if stance not in ("bullish", "neutral", "bearish"):
+        stance = "neutral"
+
+    def _list(v):
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).strip()]
+        return [str(v)] if v and str(v).strip() else []
+
+    items = []
+    raw_items = data.get("items")
+    if isinstance(raw_items, list):
+        for it in raw_items:
+            if not isinstance(it, dict):
+                continue
+            if it.get("stale") or it.get("expired"):        # AI 自标过时 → 剔除
+                continue
+            event_date = str(it.get("event_date") or "").strip()
+            if not event_date:                              # 无日期 → 无法核对时效 → 剔除
+                continue
+            items.append({
+                "headline": str(it.get("headline") or ""),
+                "event_date": event_date,
+                "impact": str(it.get("impact") or ""),
+                "summary": str(it.get("summary") or ""),
+            })
+    return {
+        "stance": stance,
+        "summary": str(data.get("summary") or ""),
+        "items": items,
+        "risks": _list(data.get("risks")),
+        "omit_reason": str(data.get("omit_reason") or ""),
+        "html": str(data.get("html") or ""),
+    }
+
+
+def _normalize_technical(data) -> dict:
+    """规整技术面输出：趋势枚举兜底 range，数值容错。"""
+    if not isinstance(data, dict):
+        data = {}
+
+    def _trend(v):
+        s = str(v or "range").lower()
+        return s if s in ("up", "down", "range") else "range"
+
+    def _list(v):
+        if isinstance(v, list):
+            return [str(x) for x in v if str(x).strip()]
+        return [str(v)] if v and str(v).strip() else []
+
+    levels = data.get("key_levels")
+    support, resistance = [], []
+    if isinstance(levels, dict):
+        support = _list(levels.get("support"))
+        resistance = _list(levels.get("resistance"))
+    return {
+        "trend_short": _trend(data.get("trend_short")),
+        "trend_mid": _trend(data.get("trend_mid")),
+        "key_levels": {"support": support, "resistance": resistance},
+        "signals": _list(data.get("signals")),
+        "invalidation": str(data.get("invalidation") or ""),
+        "summary": str(data.get("summary") or ""),
+        "html": str(data.get("html") or ""),
+    }
+
+
+def _stock_display_name(code: str) -> str:
+    """取标的名（instruments 优先，stocks 表兜底；无则回退代码）。"""
+    try:
+        from app.instruments import get_instrument
+
+        inst = get_instrument(code)
+        if inst.name:
+            return inst.name
+    except Exception:  # noqa: BLE001
+        pass
+    with get_conn() as c:
+        row = c.execute("SELECT name FROM stocks WHERE code=?", (code,)).fetchone()
+        return row["name"] if row and row["name"] else code
+
+
+def _upsert_news_report(code: str, as_of: str, source: str, report: dict, model_name: str = "") -> None:
+    """个股消息面 AI 结果写入 ai_news_reports（主键 code+as_of+source，同刻重分析覆盖）。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO ai_news_reports
+                 (code, as_of, source, stance, summary, items_json, risks_json, omit_reason,
+                  html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(code, as_of, source) DO UPDATE SET
+                 stance=excluded.stance, summary=excluded.summary,
+                 items_json=excluded.items_json, risks_json=excluded.risks_json,
+                 omit_reason=excluded.omit_reason, html=excluded.html,
+                 model_name=excluded.model_name, updated_at=excluded.updated_at""",
+            (code, as_of, source, report.get("stance"), report.get("summary"),
+             json.dumps(report.get("items") or [], ensure_ascii=False),
+             json.dumps(report.get("risks") or [], ensure_ascii=False),
+             report.get("omit_reason"), report.get("html"), model_name, now, now),
+        )
+
+
+def _upsert_tech_report(code: str, as_of: str, source: str, report: dict, model_name: str = "") -> None:
+    """个股技术面 AI 结果写入 ai_tech_reports。"""
+    from datetime import datetime
+
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO ai_tech_reports
+                 (code, as_of, source, trend_short, trend_mid, summary, levels_json, signals_json,
+                  invalidation, html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(code, as_of, source) DO UPDATE SET
+                 trend_short=excluded.trend_short, trend_mid=excluded.trend_mid,
+                 summary=excluded.summary, levels_json=excluded.levels_json,
+                 signals_json=excluded.signals_json, invalidation=excluded.invalidation,
+                 html=excluded.html, model_name=excluded.model_name, updated_at=excluded.updated_at""",
+            (code, as_of, source, report.get("trend_short"), report.get("trend_mid"),
+             report.get("summary"),
+             json.dumps(report.get("key_levels") or {}, ensure_ascii=False),
+             json.dumps(report.get("signals") or [], ensure_ascii=False),
+             report.get("invalidation"), report.get("html"), model_name, now, now),
+        )
+
+
+def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
+    """个股 AI 消息面分析：基于模型公开知识 + 时效规则，落库 ai_news_reports。
+
+    无激活模型 → ValueError。items 为空（AI 因时效放弃）也是合法结果，照常落库。
+    system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
+    intensity 分析强度 fast/normal/deep → 思考级别 low/全局/max（弹窗可选）。
+    """
+    model_cfg = get_active_model()
+    if not model_cfg:
+        raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    as_of = now_as_of_datetime()
+    ctx = {"code": code, "name": _stock_display_name(code), "as_of_datetime": as_of}
+    # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
+    schema = {k: v for k, v in _NEWS_SCHEMA.items() if intensity == "deep" or k != "html"}
+    user = _schema_user(
+        "消息面分析对象（系统无正文新闻库，请仅依据你的公开知识与时效规则判断）：", ctx, schema)
+    system = _NEWS_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_NEWS_HTML_REQUIREMENT}"
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
+    try:
+        raw = chat_json(model_cfg, system, user)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(str(e))
+    report = _normalize_news(raw)
+    try:
+        _upsert_news_report(code, as_of, "single", report,
+                            model_cfg.get("model") or model_cfg.get("name", ""))
+    except Exception as e:  # noqa: BLE001 落库失败不阻断本次分析，但必须留痕便于排障
+        logger.warning("[AI消息面] %s 落库失败：%s", code, e)
+    logger.info("[AI消息面] %s 分析完成：%s", code, report["stance"])
+    return {
+        "code": code, "name": ctx["name"], "as_of": as_of, "source": "single",
+        "model_name": model_cfg.get("model") or model_cfg.get("name", ""),
+        "report": report,
+    }
+
+
+def analyze_technical(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
+    """个股 AI 技术面分析：基于截至 as_of 的日K结构，落库 ai_tech_reports。
+
+    无激活模型 → ValueError。无日K（bars 为空）时 AI 明说不下结论，照常落库。
+    """
+    model_cfg = get_active_model()
+    if not model_cfg:
+        raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    as_of = now_as_of_datetime()
+    ctx = {
+        "code": code, "name": _stock_display_name(code), "as_of_datetime": as_of,
+        "bars": build_technical_bars(code, as_of),
+    }
+    schema = {k: v for k, v in _TECH_SCHEMA.items() if intensity == "deep" or k != "html"}
+    user = _schema_user("技术面分析对象：", ctx, schema)
+    system = _TECH_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_TECH_HTML_REQUIREMENT}"
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
+    try:
+        raw = chat_json(model_cfg, system, user)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(str(e))
+    report = _normalize_technical(raw)
+    try:
+        _upsert_tech_report(code, as_of, "single", report,
+                            model_cfg.get("model") or model_cfg.get("name", ""))
+    except Exception as e:  # noqa: BLE001 落库失败不阻断本次分析，但必须留痕便于排障
+        logger.warning("[AI技术面] %s 落库失败：%s", code, e)
+    logger.info("[AI技术面] %s 分析完成：short=%s mid=%s", code,
+                report["trend_short"], report["trend_mid"])
+    return {
+        "code": code, "name": ctx["name"], "as_of": as_of, "source": "single",
+        "model_name": model_cfg.get("model") or model_cfg.get("name", ""),
+        "report": report,
+    }
+
+
+def _batch_members(tags: list[str] | None = None, codes: list[str] | None = None) -> list[dict]:
+    """批量分析成员：codes 直接指定（任意标的），否则按持仓组合（tags 筛选）。"""
+    if codes:
+        return [{"code": code, "name": _stock_display_name(code)} for code in codes]
+    from app.analysis.portfolio import compute_portfolio
+
+    holdings = compute_portfolio(tags=tags) or {}
+    stocks = holdings.get("stocks") or []
+    return [
+        {"code": s.get("code"), "name": s.get("name")}
+        for s in stocks if s.get("code")
+    ]
+
+
+def _coherence_key(tags: list[str] | None = None, codes: list[str] | None = None) -> tuple[str, str]:
+    """批量组合标识（与资金流批量同口径）：codes → (indices, 排序 codes)；tags → (portfolio, 排序 tags)；缺省 '全部'。"""
+    if codes:
+        return "indices", ",".join(sorted(codes))
+    if tags:
+        return "portfolio", ",".join(sorted(tags))
+    return "portfolio", "全部"
+
+
+def _upsert_news_coherence(scope: str, scope_key: str, as_of: str, summary: str, html: str,
+                           model_name: str = "") -> None:
+    """整组合批量消息面整体输出（summary + html）写入 ai_news_coherence_reports（同 scope+key+as_of 覆盖）。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO ai_news_coherence_reports
+                 (scope, scope_key, as_of, summary, html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(scope, scope_key, as_of) DO UPDATE SET
+                 summary=excluded.summary, html=excluded.html,
+                 model_name=excluded.model_name, updated_at=excluded.updated_at""",
+            (scope, scope_key, as_of, summary, html, model_name, now, now),
+        )
+
+
+def _upsert_tech_coherence(scope: str, scope_key: str, as_of: str, summary: str, html: str,
+                           model_name: str = "") -> None:
+    """整组合批量技术面整体输出（summary + html）写入 ai_tech_coherence_reports。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO ai_tech_coherence_reports
+                 (scope, scope_key, as_of, summary, html, model_name, created_at, updated_at)
+               VALUES(?,?,?,?,?,?,?,?)
+               ON CONFLICT(scope, scope_key, as_of) DO UPDATE SET
+                 summary=excluded.summary, html=excluded.html,
+                 model_name=excluded.model_name, updated_at=excluded.updated_at""",
+            (scope, scope_key, as_of, summary, html, model_name, now, now),
+        )
+
+
+def get_news_coherence(scope: str, scope_key: str | None = None) -> dict | None:
+    """读取该组合最近一次整组合批量消息面报告（ai_news_coherence_reports）。
+
+    scope_key 精确匹配（可空 → 按 scope 取最近，F5 后组合子集状态可能已变作兜底）。
+    """
+    where, params = "WHERE scope=?", [scope]
+    if scope_key:
+        where += " AND scope_key=?"
+        params.append(scope_key)
+    with get_conn() as c:
+        row = c.execute(
+            f"SELECT scope, scope_key, as_of, summary, html, model_name "
+            f"FROM ai_news_coherence_reports {where} "
+            f"ORDER BY as_of DESC, updated_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "scope": row["scope"], "scope_key": row["scope_key"], "as_of": row["as_of"],
+        "summary": row["summary"] or "", "html": row["html"] or "",
+        "model_name": row["model_name"],
+    }
+
+
+def get_tech_coherence(scope: str, scope_key: str | None = None) -> dict | None:
+    """读取该组合最近一次整组合批量技术面报告（ai_tech_coherence_reports）。"""
+    where, params = "WHERE scope=?", [scope]
+    if scope_key:
+        where += " AND scope_key=?"
+        params.append(scope_key)
+    with get_conn() as c:
+        row = c.execute(
+            f"SELECT scope, scope_key, as_of, summary, html, model_name "
+            f"FROM ai_tech_coherence_reports {where} "
+            f"ORDER BY as_of DESC, updated_at DESC LIMIT 1",
+            params,
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "scope": row["scope"], "scope_key": row["scope_key"], "as_of": row["as_of"],
+        "summary": row["summary"] or "", "html": row["html"] or "",
+        "model_name": row["model_name"],
+    }
+
+
+def analyze_batch_news(tags: list[str] | None = None, codes: list[str] | None = None,
+                       system_prompt: str | None = None, intensity: str = "normal") -> dict:
+    """组合批量消息面 AI：所有成员一次发给 AI（省 token），逐只精简输出并落库 source='batch'。
+
+    无激活模型/无成员 → ValueError。单只失败记日志继续不中断。
+    返回 {as_of, count, reports:[{code,name,stance,summary,omit_reason}]}。
+    """
+    model_cfg = get_active_model()
+    if not model_cfg:
+        raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    members = _batch_members(tags, codes)
+    if not members:
+        raise ValueError("该组合暂无持仓标的")
+    as_of = now_as_of_datetime()
+    ctx = {
+        "as_of_datetime": as_of,
+        "stocks": [{"code": m["code"], "name": m["name"]} for m in members],
+    }
+    # 输出 schema：仅「深入」保留 html 字段（整组合整体 HTML，落 coherence 表）
+    schema = {k: v for k, v in _BATCH_NEWS_SCHEMA.items() if intensity == "deep" or k != "html"}
+    user = _schema_user(
+        "组合内标的消息面分析（系统无正文新闻库，请仅依据你的公开知识与时效规则判断）：", ctx, schema)
+    system = _BATCH_NEWS_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_BATCH_NEWS_HTML_REQUIREMENT}"
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
+    try:
+        raw = chat_json(model_cfg, system, user)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(str(e))
+    name_map = {m["code"]: m["name"] for m in members}
+    model_tag = model_cfg.get("model") or model_cfg.get("name", "")
+    reports = []
+    for item in raw.get("stocks") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        if not code or code not in name_map:
+            continue  # 只落库本组合内的标的
+        try:
+            report = _normalize_news(item)
+            _upsert_news_report(code, as_of, "batch", report, model_tag)
+        except Exception:  # noqa: BLE001 单只失败记日志继续不中断
+            logger.warning("[AI消息面-批量] %s 落库失败，跳过", code)
+            continue
+        reports.append({
+            "code": code, "name": name_map[code], "stance": report["stance"],
+            "summary": report["summary"], "omit_reason": report["omit_reason"],
+            "source": "batch",
+        })
+    # 整组合整体输出（summary + html）落 ai_news_coherence_reports；每次批量都写最新一条，
+    # GET 按 as_of DESC 取最近——普通/深入均覆盖旧结果（用户要看最新，不保留旧深入 HTML）
+    batch_summary = str(raw.get("summary") or "")
+    batch_html = str(raw.get("html") or "")
+    scope, scope_key = _coherence_key(tags, codes)
+    try:
+        _upsert_news_coherence(scope, scope_key, as_of, batch_summary, batch_html, model_tag)
+    except Exception as e:  # noqa: BLE001 整组合落库失败不阻断批量
+        logger.warning("[AI消息面-批量] 整组合 coherence 落库失败：%s", e)
+    logger.info("[AI消息面-批量] %d/%d 只分析完成，整组合HTML=%d字",
+                len(reports), len(members), len(batch_html))
+    return {"as_of": as_of, "count": len(reports), "reports": reports,
+            "summary": batch_summary, "html": batch_html}
+
+
+def analyze_batch_technical(tags: list[str] | None = None, codes: list[str] | None = None,
+                            system_prompt: str | None = None, intensity: str = "normal") -> dict:
+    """组合批量技术面 AI：一次拉多只日K（get_daily_prices_many），逐只精简输出并落库 source='batch'。
+
+    无激活模型/无成员 → ValueError。单只失败记日志继续不中断。
+    返回 {as_of, count, reports:[{code,name,trend_short,trend_mid,summary}]}。
+    """
+    model_cfg = get_active_model()
+    if not model_cfg:
+        raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    members = _batch_members(tags, codes)
+    if not members:
+        raise ValueError("该组合暂无持仓标的")
+    as_of = now_as_of_datetime()
+    bar_map = build_technical_bars_many([m["code"] for m in members], as_of)
+    ctx = {
+        "as_of_datetime": as_of,
+        "stocks": [
+            {"code": m["code"], "name": m["name"], "bars": bar_map.get(m["code"], [])}
+            for m in members
+        ],
+    }
+    schema = {k: v for k, v in _BATCH_TECH_SCHEMA.items() if intensity == "deep" or k != "html"}
+    user = _schema_user("组合内标的技术面分析（日K已截断到 as_of 对应交易日）：", ctx, schema)
+    system = _BATCH_TECH_SYSTEM
+    if intensity == "deep":
+        system = f"{system}\n\n{_BATCH_TECH_HTML_REQUIREMENT}"
+    if system_prompt:
+        system = f"{system}\n\n[用户附加要求]\n{system_prompt}"
+    inst = _intensity_instruction(intensity)
+    if inst:
+        system = f"{system}\n\n[分析强度]\n{inst}"
+    try:
+        raw = chat_json(model_cfg, system, user)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(str(e))
+    name_map = {m["code"]: m["name"] for m in members}
+    model_tag = model_cfg.get("model") or model_cfg.get("name", "")
+    reports = []
+    for item in raw.get("stocks") or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip()
+        if not code or code not in name_map:
+            continue
+        try:
+            report = _normalize_technical(item)
+            _upsert_tech_report(code, as_of, "batch", report, model_tag)
+        except Exception:  # noqa: BLE001
+            logger.warning("[AI技术面-批量] %s 落库失败，跳过", code)
+            continue
+        reports.append({
+            "code": code, "name": name_map[code], "trend_short": report["trend_short"],
+            "trend_mid": report["trend_mid"], "summary": report["summary"],
+            "source": "batch",
+        })
+    # 整组合整体输出（summary + html）落 ai_tech_coherence_reports；每次批量都写最新一条，
+    # GET 按 as_of DESC 取最近——普通/深入均覆盖旧结果（用户要看最新，不保留旧深入 HTML）
+    batch_summary = str(raw.get("summary") or "")
+    batch_html = str(raw.get("html") or "")
+    scope, scope_key = _coherence_key(tags, codes)
+    try:
+        _upsert_tech_coherence(scope, scope_key, as_of, batch_summary, batch_html, model_tag)
+    except Exception as e:  # noqa: BLE001 整组合落库失败不阻断批量
+        logger.warning("[AI技术面-批量] 整组合 coherence 落库失败：%s", e)
+    logger.info("[AI技术面-批量] %d/%d 只分析完成，整组合HTML=%d字",
+                len(reports), len(members), len(batch_html))
+    return {"as_of": as_of, "count": len(reports), "reports": reports,
+            "summary": batch_summary, "html": batch_html}
+
+
+def get_stock_news_report(code: str) -> dict | None:
+    """该股最近落库消息面结果（跨 batch/single 取最新一条）。无则 None。"""
+    with get_conn() as c:
+        row = c.execute(
+            """SELECT code, as_of, source, stance, summary, items_json, risks_json, omit_reason,
+                      html, model_name
+               FROM ai_news_reports WHERE code=?
+               ORDER BY as_of DESC, updated_at DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+    if not row:
+        return None
+
+    def _loads(v):
+        if not v:
+            return []
+        try:
+            return json.loads(v)
+        except Exception:  # noqa: BLE001 非 JSON 兜底空列表
+            return []
+
+    return {
+        "code": row["code"], "as_of": row["as_of"], "source": row["source"],
+        "stance": row["stance"], "summary": row["summary"],
+        "items": _loads(row["items_json"]), "risks": _loads(row["risks_json"]),
+        "omit_reason": row["omit_reason"], "html": row["html"] or "",
+        "model_name": row["model_name"],
+    }
+
+
+def get_stock_tech_report(code: str) -> dict | None:
+    """该股最近落库技术面结果（跨 batch/single 取最新一条）。无则 None。"""
+    with get_conn() as c:
+        row = c.execute(
+            """SELECT code, as_of, source, trend_short, trend_mid, summary, levels_json, signals_json,
+                      invalidation, html, model_name
+               FROM ai_tech_reports WHERE code=?
+               ORDER BY as_of DESC, updated_at DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+    if not row:
+        return None
+    levels = {}
+    try:
+        levels = json.loads(row["levels_json"]) if row["levels_json"] else {}
+    except Exception:  # noqa: BLE001
+        levels = {}
+    signals = []
+    try:
+        signals = json.loads(row["signals_json"]) if row["signals_json"] else []
+    except Exception:  # noqa: BLE001
+        signals = []
+    return {
+        "code": row["code"], "as_of": row["as_of"], "source": row["source"],
+        "trend_short": row["trend_short"], "trend_mid": row["trend_mid"],
+        "summary": row["summary"], "key_levels": levels,
+        "signals": [str(x) for x in signals if str(x).strip()],
+        "invalidation": row["invalidation"], "html": row["html"] or "",
+        "model_name": row["model_name"],
+    }
+
+
+def list_news_reports(codes: list[str]) -> dict:
+    """按 codes 过滤，每只取最近一条消息面结果（供组合批量面板 F5 重建，一次拉取）。"""
+    out: dict[str, dict] = {}
+    if not codes:
+        return out
+    ph = ",".join("?" * len(codes))
+    with get_conn() as c:
+        rows = c.execute(
+            f"""SELECT code, as_of, source, stance, summary, omit_reason
+                FROM ai_news_reports WHERE code IN ({ph})
+                ORDER BY as_of DESC, updated_at DESC""",
+            list(codes),
+        ).fetchall()
+    for r in rows:
+        if r["code"] in out:
+            continue  # 已取到该 code 最新一条
+        out[r["code"]] = {
+            "stance": r["stance"], "summary": r["summary"], "as_of": r["as_of"],
+            "source": r["source"], "omit_reason": r["omit_reason"],
+        }
+    return out
+
+
+def list_tech_reports(codes: list[str]) -> dict:
+    """按 codes 过滤，每只取最近一条技术面结果（供组合批量面板 F5 重建，一次拉取）。"""
+    out: dict[str, dict] = {}
+    if not codes:
+        return out
+    ph = ",".join("?" * len(codes))
+    with get_conn() as c:
+        rows = c.execute(
+            f"""SELECT code, as_of, source, trend_short, trend_mid, summary
+                FROM ai_tech_reports WHERE code IN ({ph})
+                ORDER BY as_of DESC, updated_at DESC""",
+            list(codes),
+        ).fetchall()
+    for r in rows:
+        if r["code"] in out:
+            continue
+        out[r["code"]] = {
+            "trend_short": r["trend_short"], "trend_mid": r["trend_mid"],
+            "summary": r["summary"], "as_of": r["as_of"], "source": r["source"],
+        }
+    return out
+
+
 # 弹窗展示给用户的可编辑重点要求。完整 system（含 JSON schema）用户看不懂，
 # 只展示用户可能想改的「要求块」；用户改了才作为「用户附加要求」追加到完整指令后。
 _EDITABLE_PROMPTS = {
@@ -1627,6 +2532,22 @@ _EDITABLE_PROMPTS = {
     ),
     "daily": (
         "请逐笔评估当日每笔交易合理性，再汇总当日整体操作给出评分与改进建议。"
+    ),
+    "news": (
+        "请判断该股近期消息面（公司公告、行业与政策事件、财报节点等）与时效性，"
+        "给出利多/中性/利空立场与近期事件列表；无足够新信息时如实说明，不要编造。"
+    ),
+    "technical": (
+        "请用白话解读该股截至最近交易日的价格结构（趋势、支撑压力位、量能），"
+        "给出关键价位与证伪条件，指出与资金面/估值的潜在矛盾；无日K则明说不下结论。"
+    ),
+    "news_batch": (
+        "请对组合内每只标的逐一判断近期消息面与时效性，给出利多/中性/利空立场与一句话结论；"
+        "无足够新信息时如实说明，不要编造。"
+    ),
+    "tech_batch": (
+        "请对组合内每只标的用白话解读截至最近交易日的价格结构（趋势、支撑压力位、量能），"
+        "给出关键价位与证伪条件；无日K则明说不下结论。"
     ),
 }
 

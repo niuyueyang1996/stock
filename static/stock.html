@@ -109,6 +109,26 @@
       <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
     </div>
 
+    <div class="panel" id="newsAiPanel">
+      <div class="row">
+        <h2 style="margin:0">📰 消息面 AI <span class="sub">基于模型公开知识，非实时新闻源 · 时效由 AI 自行判定</span></h2>
+        <span class="grow"></span>
+        <span class="muted" id="newsAiMeta" style="font-size:12px"></span>
+        <button class="btn primary" id="newsAiBtn">🤖 分析消息面</button>
+      </div>
+      <div id="newsAiBody" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel" id="techAiPanel">
+      <div class="row">
+        <h2 style="margin:0">📈 技术面 AI <span class="sub">基于日 K 价格结构 · 白话解读，截至最近交易日</span></h2>
+        <span class="grow"></span>
+        <span class="muted" id="techAiMeta" style="font-size:12px"></span>
+        <button class="btn primary" id="techAiBtn">🤖 分析技术面</button>
+      </div>
+      <div id="techAiBody" style="margin-top:12px"></div>
+    </div>
+
     <div class="panel" id="flowTrendPanel">
       <h2 id="flowTitle">资金流趋势 <span class="sub" id="flowTitleSub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
       <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
@@ -178,6 +198,105 @@
       };
     })();
 
+    // 消息面 / 技术面 AI 按钮（个股模式，指数隐藏消息面）
+    (function () {
+      const newsBtn = document.getElementById('newsAiBtn');
+      const techBtn = document.getElementById('techAiBtn');
+      const newsBody = document.getElementById('newsAiBody');
+      const techBody = document.getElementById('techAiBody');
+      if (newsBtn && newsBody) {
+        newsBtn.onclick = () => {
+          if (!currentCode) return toast('请先选择股票');
+          runNewsAi({ code: currentCode, btn: newsBtn, panel: newsBody, metaEl: document.getElementById('newsAiMeta') });
+        };
+      }
+      if (techBtn && techBody) {
+        techBtn.onclick = () => {
+          if (!currentCode) return toast('请先选择股票');
+          runTechAi({ code: currentCode, btn: techBtn, panel: techBody, metaEl: document.getElementById('techAiMeta') });
+        };
+      }
+    })();
+
+    // 触发个股消息面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染（复用 openPromptEditor 流程）
+    async function runNewsAi({ code, btn, panel, metaEl }) {
+      openPromptEditor('news', async (systemPrompt, intensity) => {
+        btn.disabled = true;
+        panel.style.display = 'block';
+        panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
+        try {
+          const body = { code, intensity };
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const job = await startBackgroundJob('/ai/news-analysis', body, { toast: '消息面 AI 已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/ai/news-report/' + encodeURIComponent(code), { silent: true });
+          renderNewsPanel(panel, d);
+          if (metaEl) metaEl.textContent = d && d.as_of
+            ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+            : '';
+        } catch (e) {
+          panel.innerHTML = /AI 模型/.test(e.message)
+            ? aiNotConfiguredHtml()
+            : `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // 触发个股技术面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染
+    async function runTechAi({ code, btn, panel, metaEl }) {
+      openPromptEditor('technical', async (systemPrompt, intensity) => {
+        btn.disabled = true;
+        panel.style.display = 'block';
+        panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
+        try {
+          const body = { code, intensity };
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const job = await startBackgroundJob('/ai/tech-analysis', body, { toast: '技术面 AI 已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/ai/tech-report/' + encodeURIComponent(code), { silent: true });
+          renderTechPanel(panel, d);
+          if (metaEl) metaEl.textContent = d && d.as_of
+            ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+            : '';
+        } catch (e) {
+          panel.innerHTML = /AI 模型/.test(e.message)
+            ? aiNotConfiguredHtml()
+            : `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // 加载该股最近落库消息面/技术面结果（F5 恢复；指数模式隐藏消息面）
+    async function loadNewsPersisted() {
+      const body = document.getElementById('newsAiBody');
+      const metaEl = document.getElementById('newsAiMeta');
+      if (!currentCode || !body) return;
+      try {
+        const d = await api('/ai/news-report/' + encodeURIComponent(currentCode), { silent: true });
+        renderNewsPanel(body, d);
+        if (metaEl) metaEl.textContent = d && d.as_of
+          ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+          : '';
+      } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
+    }
+
+    async function loadTechPersisted() {
+      const body = document.getElementById('techAiBody');
+      const metaEl = document.getElementById('techAiMeta');
+      if (!currentCode || !body) return;
+      try {
+        const d = await api('/ai/tech-report/' + encodeURIComponent(currentCode), { silent: true });
+        renderTechPanel(body, d);
+        if (metaEl) metaEl.textContent = d && d.as_of
+          ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+          : '';
+      } catch (e) { /* 读取失败忽略 */ }
+    }
+
     // 搜索框：选择股票 → 先试打开；缓存缺失则弹窗询问下载
     const sb = stockSearchInput();
     const input = sb.querySelector('input');
@@ -241,6 +360,15 @@
       document.getElementById('aiReportPanel').style.display = 'none';
       const flowAi = document.getElementById('flowAiPanel');
       if (flowAi) { flowAi.style.display = 'none'; flowAi.innerHTML = ''; }
+      // 消息面/技术面 AI：切股先清空（避免残留上一只的旧报告；index 模式消息面隐藏）
+      const newsBody = document.getElementById('newsAiBody');
+      const techBody = document.getElementById('techAiBody');
+      const newsMeta = document.getElementById('newsAiMeta');
+      const techMeta = document.getElementById('techAiMeta');
+      if (newsBody) { newsBody.innerHTML = ''; }
+      if (techBody) { techBody.innerHTML = ''; }
+      if (newsMeta) { newsMeta.textContent = ''; }
+      if (techMeta) { techMeta.textContent = ''; }
     }
 
     // 仅切「按日期查看」：不清空整页（避免估值 ECharts 被 innerHTML 拆掉后挂死），只重拉并 render
@@ -715,7 +843,8 @@
     // 指数模式：隐藏个股专属面板（无五档/估值/财务/诊股），保留 点位卡 + 资金流趋势 + 刷新
     function toggleStockPanels(idxMode) {
       // 个股专属面板：指数模式隐藏；估值/分位面板由 render 按「是否有估值数据」单独控制（指数可拿到乐咕估值）
-      ['growthPanel', 'growthTablePanel', 'finPanel', 'flowBarsPanel', 'metaPanel']
+      // 消息面 AI 指数模式隐藏（不该编造公司新闻），技术面 AI 保留（指数有日K）
+      ['growthPanel', 'growthTablePanel', 'finPanel', 'flowBarsPanel', 'metaPanel', 'newsAiPanel']
         .forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = idxMode ? 'none' : ''; });
       // 非指数（个股/ETF）：估值/分位面板始终显示；指数由 render 分支按数据决定
       if (!idxMode) {
@@ -842,6 +971,7 @@
 
       if (idxMode) {
         renderFlow(d);   // 指数资金面：量价图（五档/财务面板已隐藏）
+        loadTechPersisted();   // 指数有日K：技术面 AI 保留并加载；消息面面板已隐藏
         // 指数估值：乐咕源有序列才展示估值历史；有分位数据才展示历史分位（拿不到就隐藏）
         const vh = d.valuation_history || {};
         const hasSeries = Object.values(vh.periods || {})
@@ -861,6 +991,8 @@
       renderFlow(d);
       renderFinancials(d.financials);
       loadAiReport();
+      loadNewsPersisted();
+      loadTechPersisted();
     }
 
     function renderGrowth(live, meta) {
@@ -1176,11 +1308,16 @@
       ['quantilePanel', false],
       ['valHistPanel', false],
       ['flowBarsPanel', false],
+      ['newsAiPanel', false],
+      ['techAiPanel', false],
       ['flowTrendPanel', false],
     ].forEach(([id, open]) => {
       const el = document.getElementById(id);
       if (el) makeFoldable(el, { id, defaultOpen: open });
     });
+    // 组合批量列表跳转 #newsAiPanel / #techAiPanel：展开折叠并滚入视野
+    openFoldableFromHash();
+    window.addEventListener('hashchange', openFoldableFromHash);
 
     openStock();
   </script>

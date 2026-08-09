@@ -113,6 +113,24 @@ def test_parse_json_repairs_truncated_object():
     assert out["advice"] == ["买"]
 
 
+def test_parse_json_escapes_raw_control_chars():
+    """字符串字段里的原文换行/制表符/控制字符 → 自动转义解析（真实 DeepSeek 常见坏形态）。"""
+    out = ai_svc._parse_json_content('{"summary": "第一行\n第二行", "correlation": "positive"}')
+    assert out["summary"] == "第一行\n第二行"          # 原文换行被还原为字符串值里的换行
+    assert out["correlation"] == "positive"
+    out2 = ai_svc._parse_json_content('{"summary": "a\tb"}')
+    assert out2["summary"] == "a\tb"
+    # 通用控制字符（如 \x0b）也转义
+    out3 = ai_svc._parse_json_content('{"summary": "a\x0bb"}')
+    assert out3["summary"] == "a\x0bb"
+    # 已有合法转义 \\n 不被双重转义
+    out4 = ai_svc._parse_json_content('{"summary": "a\\nb"}')
+    assert out4["summary"] == "a\nb"
+    # 结构空白（token 间换行）不受影响
+    out5 = ai_svc._parse_json_content('{\n"summary": "s"\n}')
+    assert out5["summary"] == "s"
+
+
 def test_chat_json_retries_on_empty_content(monkeypatch):
     """DeepSeek JSON 模式偶发空 content：首次空 → 去掉 json_object 重试成功。"""
     calls = []
@@ -429,15 +447,17 @@ def test_reasoning_api(client):
 
 
 def test_ai_prompts_api(client):
-    """GET /ai/prompts：返回 5 个入口的可编辑重点要求块（非完整 system，不含 JSON schema）。"""
+    """GET /ai/prompts：返回 9 个入口的可编辑重点要求块（非完整 system，不含 JSON schema）。"""
     r = client.get("/api/ai/prompts")
     assert r.status_code == 200
     d = r.json()["data"]
-    assert set(d) == {"stock", "fundflow", "batch", "portfolio", "daily"}
+    assert set(d) == {"stock", "fundflow", "batch", "portfolio", "daily",
+                      "news", "technical", "news_batch", "tech_batch"}
     for k, v in d.items():
         assert isinstance(v, str) and v
         assert "请输出严格 JSON" not in v      # 不含 schema 结构，用户只看可编辑要求
     assert "共振" in d["batch"]                # 批量块保留共振/虹吸/分化措辞
+    assert "消息面" in d["news"] and "证伪条件" in d["technical"]
 
 
 def test_ai_report_custom_prompt(client, monkeypatch):

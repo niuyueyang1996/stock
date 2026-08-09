@@ -52,12 +52,7 @@
         </div>
         <div class="panel" id="fundflowPanel">
           <h2>组合资金流 <span class="sub" id="pfFlowNote">按持仓汇总：A股个股五档/买卖盘求和 · 分钟=当日分时，天窗=多日聚合</span></h2>
-          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
-            <div id="pfFlowTabs"></div>
-            <div style="flex:1"></div>
-            <div id="pfFlowBatchBtn"></div>
-          </div>
-          <div id="pfFlowBatchPanel" style="display:none;margin:0 0 10px"></div>
+          <div id="pfFlowTabs"></div>
           <div class="row" style="align-items:stretch">
             <div class="chart sm" id="pfFlowPrice" style="flex:1;min-width:280px;height:280px"></div>
             <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:280px"></div>
@@ -67,6 +62,22 @@
             <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:280px"></div>
           </div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
+        </div>
+        <div class="panel" id="aiExtPanel">
+          <h2>AI 扩展分析 <span class="sub">消息面（模型公开知识） / 技术面（日K结构） / 资金流 · 批量分析跟随当前标签筛选</span></h2>
+          <div class="period-tabs" id="aiExtTabs"></div>
+          <div id="newsBatchWrap" style="display:none;margin-top:10px">
+            <button class="btn primary" id="newsBatchBtn">🤖 批量分析消息面</button>
+            <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="techBatchWrap" style="display:none;margin-top:10px">
+            <button class="btn primary" id="techBatchBtn">🤖 批量分析技术面</button>
+            <div id="techBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="flowBatchWrap" style="display:none;margin-top:10px">
+            <button class="btn primary" id="flowBatchBtn">⚡ 批量分析资金流</button>
+            <div id="flowBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
         </div>
         <div class="panel" id="chartRow">
           <h2>权重分布（按标签）</h2>
@@ -99,20 +110,60 @@
                                 '1d': '1天', '7d': '7天', '30d': '30天' };
     let pfFlowWindow = '15m';   // 当前选中窗口（绘图与 AI 分析共用）
 
-    // 批量分析持仓按钮：1m/5m 窗口过小拒绝（前端守卫 + 后端 400）；成功后刷新资金面列
+    // AI 扩展分析：消息面 / 技术面 / 资金流 三个 tab（沿用 .ptab），
+    // 按钮跟随当前标签筛选批量分析；资金流批量沿用组合资金流面板当前窗口
     (function () {
-      const wrap = document.getElementById('pfFlowBatchBtn');
-      const panel = document.getElementById('pfFlowBatchPanel');
-      if (!wrap || !panel) return;
-      wrap.innerHTML = '<button class="btn" data-fundflow-batch style="margin-bottom:8px">⚡ 批量分析持仓</button>';
-      wrap.querySelector('[data-fundflow-batch]').onclick = () => {
+      const tabsWrap = document.getElementById('aiExtTabs');
+      const wraps = {
+        news: document.getElementById('newsBatchWrap'),
+        tech: document.getElementById('techBatchWrap'),
+        flow: document.getElementById('flowBatchWrap'),
+      };
+      const btns = {
+        news: document.getElementById('newsBatchBtn'),
+        tech: document.getElementById('techBatchBtn'),
+        flow: document.getElementById('flowBatchBtn'),
+      };
+      const panels = {
+        news: document.getElementById('newsBatchPanel'),
+        tech: document.getElementById('techBatchPanel'),
+        flow: document.getElementById('flowBatchPanel'),
+      };
+      if (!tabsWrap || Object.values(wraps).some((x) => !x) || Object.values(btns).some((x) => !x)) return;
+      const TABS = [
+        ['news', '消息面'], ['tech', '技术面'], ['flow', '资金流'],
+      ];
+      function show(tab) {
+        Object.keys(wraps).forEach((k) => { wraps[k].style.display = k === tab ? '' : 'none'; });
+        tabsWrap.querySelectorAll('.ptab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+      }
+      TABS.forEach(([t, label], i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ptab' + (i === 0 ? ' active' : '');
+        b.dataset.tab = t;
+        b.textContent = label;
+        b.onclick = () => show(t);
+        tabsWrap.appendChild(b);
+      });
+      show('news');
+      const currentTags = () => {
+        const t = tagsQS();
+        return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      };
+      btns.news.onclick = () => {
+        runNewsBatch({ tags: currentTags(), btn: btns.news, panel: panels.news, onDone: loadAndRenderExt });
+      };
+      btns.tech.onclick = () => {
+        runTechBatch({ tags: currentTags(), btn: btns.tech, panel: panels.tech, onDone: loadAndRenderExt });
+      };
+      btns.flow.onclick = () => {
+        // 1m/5m 窗口过小拒绝（前端守卫 + 后端 400）；成功后刷新批量资金面面板
         if (/^(1|5)m$/.test(pfFlowWindow)) {
           toast('批量分析窗口过小，请选择 15 分钟及以上');
           return;
         }
-        const t = tagsQS();
-        const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
-        runFundflowBatch({ tags, window: pfFlowWindow, btn: wrap.querySelector('[data-fundflow-batch]'), panel, onDone: loadAndRender });
+        runFundflowBatch({ tags: currentTags(), window: pfFlowWindow, btn: btns.flow, panel: panels.flow, onDone: loadAndRender });
       };
     })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
@@ -252,6 +303,7 @@
         Promise.all([
           loadFlowReports((p.stocks || []).map((s) => s.code)).then((r) => { flowReports = r; }),
           renderPersistedBatchPanel(),
+          renderPersistedExtPanels(),
           renderPfFlow(),
           renderTagPrefList(),
         ]).catch(() => {});
@@ -624,9 +676,9 @@
       await renderPersistedBatchPanel();
     }
 
-    // 刷新后从落库报告重建「批量分析持仓」面板（只取 source=batch），F5 不丢
+    // 刷新后从落库报告重建「资金流批量分析」面板（只取 source=batch），F5 不丢
     async function renderPersistedBatchPanel() {
-      const panel = document.getElementById('pfFlowBatchPanel');
+      const panel = document.getElementById('flowBatchPanel');
       if (!panel) return;
       const nameMap = {};
       ((lastPortfolio && lastPortfolio.stocks) || []).forEach((s) => { nameMap[s.code] = s.name; });
@@ -654,6 +706,54 @@
       });
     }
 
+    // 重拉消息面/技术面批量报告（批量分析完成/标签筛选切换后复用）
+    async function loadAndRenderExt() {
+      if (!lastPortfolio) return;
+      await renderPersistedExtPanels();
+    }
+
+    // 刷新后从落库报告重建「AI 扩展分析」三个 tab 的批量面板（只取 source='batch'），F5 不丢；
+    // 整组合整体输出（深入 HTML）从 coherence 表取，按当前标签组合精确匹配
+    async function renderPersistedExtPanels() {
+      const newsPanel = document.getElementById('newsBatchPanel');
+      const techPanel = document.getElementById('techBatchPanel');
+      if (!newsPanel || !techPanel || !lastPortfolio) return;
+      const codes = (lastPortfolio.stocks || []).map((s) => s.code);
+      const nameMap = {};
+      (lastPortfolio.stocks || []).forEach((s) => { nameMap[s.code] = s.name; });
+      // 组合标识（与资金流批量同口径）：tags 排序归一同 key，空/全选='全部'
+      const t = tagsQS();
+      const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      const key = tags ? tags.split(',').filter(Boolean).sort().join(',') : '全部';
+      const newsCoh = await loadNewsCoherence('portfolio', key);
+      const techCoh = await loadTechCoherence('portfolio', key);
+      const newsReports = await loadNewsReports(codes);
+      const newsRows = Object.entries(newsReports)
+        .filter(([, r]) => r && r.source === 'batch')
+        .map(([code, r]) => ({ code, name: nameMap[code] || '',
+          stance: r.stance, summary: r.summary || r.omit_reason || '', as_of: r.as_of, source: r.source }));
+      if (newsRows.length) {
+        newsPanel.style.display = 'block';
+        renderBatchListPanel(newsPanel, '消息面批量分析', newsRows, (r) => newsStanceBadge(r), '#newsAiPanel', newsCoh);
+      } else {
+        newsPanel.style.display = 'none';
+        newsPanel.innerHTML = '';
+      }
+      const techReports = await loadTechReports(codes);
+      const techRows = Object.entries(techReports)
+        .filter(([, r]) => r && r.source === 'batch')
+        .map(([code, r]) => ({ code, name: nameMap[code] || '',
+          trend_short: r.trend_short, trend_mid: r.trend_mid, summary: r.summary,
+          as_of: r.as_of, source: r.source }));
+      if (techRows.length) {
+        techPanel.style.display = 'block';
+        renderBatchListPanel(techPanel, '技术面批量分析', techRows, (r) => techTrendBadge(r), '#techAiPanel', techCoh);
+      } else {
+        techPanel.style.display = 'none';
+        techPanel.innerHTML = '';
+      }
+    }
+
     // 长图/表默认折叠（保留全部功能，标题旁缩略）
     [
       ['pfGrowthPanel', false],
@@ -661,6 +761,7 @@
       ['gaugePanel', false],
       ['seriesPanel', false],
       ['fundflowPanel', false],
+      ['aiExtPanel', false],
       ['chartRow', false],
       ['peBarPanel', false],
     ].forEach(([id, open]) => {

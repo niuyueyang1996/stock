@@ -273,6 +273,57 @@ CREATE TABLE IF NOT EXISTS ai_fundflow_coherence_reports (
     UNIQUE (scope, scope_key, trade_date, window)
 );
 
+CREATE TABLE IF NOT EXISTS ai_news_reports (
+    code         TEXT NOT NULL,           -- 股票代码
+    as_of        TEXT NOT NULL,           -- 分析时的当前时间（带时区 ISO，如 2026-08-09T15:21:00+08:00）
+    source       TEXT NOT NULL DEFAULT 'single',  -- single=个股单独分析 / batch=组合批量
+    stance       TEXT,                    -- bullish(利多)/neutral(中性)/bearish(利空)
+    summary      TEXT,
+    items_json   TEXT,                    -- 事件数组 JSON（headline/event_date/impact/summary）
+    risks_json   TEXT,                    -- 风险数组 JSON
+    omit_reason  TEXT,                    -- AI 因时效放弃时的说明（items 为空时填）
+    html         TEXT,                    -- AI「深入」模式生成的 HTML 消息面报告（可空）
+    model_name   TEXT, created_at TEXT, updated_at TEXT,
+    PRIMARY KEY (code, as_of, source)
+);
+
+CREATE TABLE IF NOT EXISTS ai_tech_reports (
+    code          TEXT NOT NULL,          -- 股票代码
+    as_of         TEXT NOT NULL,          -- 分析时的当前时间（带时区 ISO）
+    source        TEXT NOT NULL DEFAULT 'single',  -- single=个股单独分析 / batch=组合批量
+    trend_short   TEXT,                   -- up(上行)/down(下行)/range(震荡)
+    trend_mid     TEXT,                   -- up/down/range
+    summary       TEXT,
+    levels_json   TEXT,                   -- {support:[], resistance:[]} JSON
+    signals_json  TEXT,                   -- 白话信号数组 JSON
+    invalidation  TEXT,                   -- 证伪条件
+    html          TEXT,                   -- AI「深入」模式生成的 HTML 技术面报告（可空）
+    model_name    TEXT, created_at TEXT, updated_at TEXT,
+    PRIMARY KEY (code, as_of, source)
+);
+
+CREATE TABLE IF NOT EXISTS ai_news_coherence_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL,           -- portfolio=持仓组合
+    scope_key   TEXT NOT NULL,           -- 组合标识：'全部' / 逗号 tags（排序归一同 key）
+    as_of       TEXT NOT NULL,           -- 分析时的当前时间（带时区 ISO）
+    summary     TEXT,                    -- 组合整体一句话（批量整体输出）
+    html        TEXT,                    -- AI「深入」模式生成的整组合 HTML 消息面报告（可空）
+    model_name  TEXT, created_at TEXT, updated_at TEXT,
+    UNIQUE (scope, scope_key, as_of)
+);
+
+CREATE TABLE IF NOT EXISTS ai_tech_coherence_reports (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope       TEXT NOT NULL,           -- portfolio=持仓组合
+    scope_key   TEXT NOT NULL,           -- 组合标识：'全部' / 逗号 tags（排序归一同 key）
+    as_of       TEXT NOT NULL,           -- 分析时的当前时间（带时区 ISO）
+    summary     TEXT,                    -- 组合整体一句话（批量整体输出）
+    html        TEXT,                    -- AI「深入」模式生成的整组合 HTML 技术面报告（可空）
+    model_name  TEXT, created_at TEXT, updated_at TEXT,
+    UNIQUE (scope, scope_key, as_of)
+);
+
 CREATE TABLE IF NOT EXISTS index_defs (
     code       TEXT PRIMARY KEY,          -- 指数代码（如 000300/399006/HSI）
     name       TEXT NOT NULL,             -- 指数名（如 沪深300）

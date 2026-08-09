@@ -342,10 +342,7 @@ def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = N
     ctx = build_portfolio_context(tags)
     # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
     schema = {k: v for k, v in _PORTFOLIO_OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = (
-        "组合聚合数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    user = ai._schema_user("组合聚合数据：", ctx, schema)
     system = _PORTFOLIO_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_PORTFOLIO_HTML_REQUIREMENT}"
@@ -724,10 +721,7 @@ def score_daily(score_date: str, system_prompt: str | None = None,
     ctx = build_daily_context(score_date)
     # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
     schema = {k: v for k, v in _DAILY_OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = (
-        "当日交易数据：\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
-        "请输出严格 JSON，结构如下：\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    user = ai._schema_user("当日交易数据：", ctx, schema)
     system = _DAILY_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_DAILY_HTML_REQUIREMENT}"

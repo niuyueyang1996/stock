@@ -27,6 +27,11 @@ class ReasoningBody(BaseModel):
     effort: str
 
 
+class RuntimeBody(BaseModel):
+    max_tokens: int | None = None        # AI 输出预算（大组合/批量需更大）
+    request_timeout: int | None = None   # AI 请求超时（秒）
+
+
 class ReportBody(BaseModel):
     system_prompt: str | None = None   # 覆盖默认诊股指令（前端弹窗可编辑后透传）
     intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
@@ -38,6 +43,14 @@ class FundflowAnalysisBody(BaseModel):
     tags: str | None = None     # 持仓组合：逗号分隔标签筛选（缺省=全部持仓）
     codes: str | None = None    # 指数组合：逗号分隔标的代码（指数页批量分析用）
     weights: str | None = None  # codes 模式对应权重（逗号分隔，缺省=等权）
+    system_prompt: str | None = None   # 覆盖默认指令（前端弹窗可编辑后透传）
+    intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
+
+
+class NewsTechAnalysisBody(BaseModel):
+    code: str = ""          # 个股模式必填（批量用 tags/codes，忽略 code）
+    tags: str | None = None     # 持仓组合：逗号分隔标签筛选（缺省=全部持仓）
+    codes: str | None = None    # 指数组合：逗号分隔标的代码
     system_prompt: str | None = None   # 覆盖默认指令（前端弹窗可编辑后透传）
     intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
 
@@ -122,6 +135,44 @@ def set_reasoning(body: ReasoningBody):
             (effort,),
         )
     return {"ok": True, "data": {"effort": effort}}
+
+
+@router.get("/ai/runtime")
+def get_runtime():
+    """当前 AI 输出预算 / 请求超时（config 表，缺省 81920 / 300）。"""
+    return {"ok": True, "data": {
+        "max_tokens": ai_svc.get_max_tokens(),
+        "request_timeout": ai_svc.get_request_timeout(),
+    }}
+
+
+@router.put("/ai/runtime")
+def set_runtime(body: RuntimeBody):
+    """设置 AI 输出预算 / 请求超时（大组合/批量深入任务需要更大预算与更长超时）。"""
+    from app.models.db import get_conn
+
+    if body.max_tokens is not None:
+        if not (2048 <= body.max_tokens <= 262144):
+            raise HTTPException(400, "max_tokens 需在 2048~262144 之间")
+        with get_conn() as c:
+            c.execute(
+                "INSERT INTO config(key, value) VALUES('ai_max_tokens', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(int(body.max_tokens)),),
+            )
+    if body.request_timeout is not None:
+        if not (30 <= body.request_timeout <= 1800):
+            raise HTTPException(400, "请求超时需在 30~1800 秒之间")
+        with get_conn() as c:
+            c.execute(
+                "INSERT INTO config(key, value) VALUES('ai_request_timeout', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(int(body.request_timeout)),),
+            )
+    return {"ok": True, "data": {
+        "max_tokens": ai_svc.get_max_tokens(),
+        "request_timeout": ai_svc.get_request_timeout(),
+    }}
 
 
 @router.get("/stocks/{code}/ai-report")
@@ -235,3 +286,142 @@ def fundflow_coherence(scope: str = "indices", scope_key: str = "", window: str 
         "ok": True,
         "data": ai_svc.get_coherence_report(scope, scope_key, window or None),
     }
+
+
+# ============ 消息面 / 技术面 AI（个股专项 + 组合批量，本阶段专项深入层） ============
+
+def _split_codes(txt: str | None) -> list[str] | None:
+    """逗号分隔字符串 → 去空白代码列表；空/缺省返回 None。"""
+    if not txt:
+        return None
+    out = [c.strip() for c in txt.split(",") if c.strip()]
+    return out or None
+
+
+def _news_tech_batch_body(body: NewsTechAnalysisBody) -> tuple[list[str] | None, list[str] | None]:
+    """解析批量请求 tags/codes，互斥校验。返回 (tags, codes)。"""
+    tags = _split_codes(body.tags)
+    codes = _split_codes(body.codes)
+    if codes and tags:
+        raise HTTPException(400, "codes（指数组合）与 tags（持仓组合）只能二选一")
+    return tags, codes
+
+
+@router.post("/ai/news-analysis")
+def news_analysis(body: NewsTechAnalysisBody):
+    """个股 AI 消息面分析：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+    code = (body.code or "").strip()
+    if not code:
+        raise HTTPException(400, "缺少 code")
+
+    def work():
+        ai_svc.analyze_news(code, body.system_prompt, body.intensity)
+        logger.info("[AI消息面] %s 完成", code)
+
+    job_id = start_simple("ai.news", f"消息面 AI {code}", work, step=f"消息面分析 {code}…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
+
+
+@router.get("/ai/news-report/{code}")
+def news_report(code: str):
+    """读取该股最近落库的消息面 AI 结果（batch/single 跨来源取最新；无则 null）。"""
+    return {"ok": True, "data": ai_svc.get_stock_news_report(code)}
+
+
+@router.get("/ai/news-reports")
+def news_reports(codes: str = ""):
+    """按代码列表批量读取最近落库消息面结果，返回 {code:{...}} map（批量面板 F5 重建用）。"""
+    return {"ok": True, "data": ai_svc.list_news_reports(_split_codes(codes) or [])}
+
+
+@router.get("/ai/news-coherence")
+def news_coherence(scope: str = "portfolio", scope_key: str = ""):
+    """读取最近一次整组合批量消息面报告（含整组合 HTML；F5 后 AI 扩展分析「消息面」tab 重建用）。
+
+    scope='portfolio'|'indices'；scope_key=逗号 tags 或逗号 codes 或 '全部'；缺省按 scope 取最近。
+    """
+    return {"ok": True, "data": ai_svc.get_news_coherence(scope, scope_key or None)}
+
+
+@router.post("/ai/news-batch")
+def news_batch(body: NewsTechAnalysisBody):
+    """组合批量消息面 AI：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+    tags, codes = _news_tech_batch_body(body)
+
+    def work():
+        result = ai_svc.analyze_batch_news(
+            tags, codes, system_prompt=body.system_prompt, intensity=body.intensity,
+        )
+        logger.info("[AI消息面] 批量分析完成 %s 只", result.get("count"))
+
+    job_id = start_simple("ai.news_batch", "批量消息面 AI",
+                          work, step="批量消息面分析中…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True}}
+
+
+@router.post("/ai/tech-analysis")
+def tech_analysis(body: NewsTechAnalysisBody):
+    """个股 AI 技术面分析：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+    code = (body.code or "").strip()
+    if not code:
+        raise HTTPException(400, "缺少 code")
+
+    def work():
+        ai_svc.analyze_technical(code, body.system_prompt, body.intensity)
+        logger.info("[AI技术面] %s 完成", code)
+
+    job_id = start_simple("ai.tech", f"技术面 AI {code}", work, step=f"技术面分析 {code}…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
+
+
+@router.get("/ai/tech-report/{code}")
+def tech_report(code: str):
+    """读取该股最近落库的技术面 AI 结果（batch/single 跨来源取最新；无则 null）。"""
+    return {"ok": True, "data": ai_svc.get_stock_tech_report(code)}
+
+
+@router.get("/ai/tech-reports")
+def tech_reports(codes: str = ""):
+    """按代码列表批量读取最近落库技术面结果，返回 {code:{...}} map（批量面板 F5 重建用）。"""
+    return {"ok": True, "data": ai_svc.list_tech_reports(_split_codes(codes) or [])}
+
+
+@router.get("/ai/tech-coherence")
+def tech_coherence(scope: str = "portfolio", scope_key: str = ""):
+    """读取最近一次整组合批量技术面报告（含整组合 HTML；F5 后 AI 扩展分析「技术面」tab 重建用）。
+
+    scope='portfolio'|'indices'；scope_key=逗号 tags 或逗号 codes 或 '全部'；缺省按 scope 取最近。
+    """
+    return {"ok": True, "data": ai_svc.get_tech_coherence(scope, scope_key or None)}
+
+
+@router.post("/ai/tech-batch")
+def tech_batch(body: NewsTechAnalysisBody):
+    """组合批量技术面 AI：后台异步，进度见 GET /status/jobs。"""
+    from app.services.job_runners import start_simple
+
+    if not ai_svc.get_active_model():
+        raise HTTPException(400, "未配置 AI 模型")
+    tags, codes = _news_tech_batch_body(body)
+
+    def work():
+        result = ai_svc.analyze_batch_technical(
+            tags, codes, system_prompt=body.system_prompt, intensity=body.intensity,
+        )
+        logger.info("[AI技术面] 批量分析完成 %s 只", result.get("count"))
+
+    job_id = start_simple("ai.tech_batch", "批量技术面 AI",
+                          work, step="批量技术面分析中…")
+    return {"ok": True, "data": {"job_id": job_id, "async": True}}

@@ -126,8 +126,11 @@ def test_adjust_qty_to_zero_rejected():
 def test_cost_adjust_dividend_flag_tracks_cumulative():
     """is_dividend=True 的调整计入累计分红，普通成本修正不计。"""
     holdings.record_trade("600000", "buy", 10, 100, name="浦发银行")
-    holdings.adjust_cost("600000", amount=-300, is_dividend=True, note="除权")   # 除权 300
-    holdings.adjust_cost("600000", amount=50, is_dividend=False, note="补记")    # 普通修正
+    # 显式传不同 trade_time：Windows 时钟 ~1ms 粒度，两条 adjust 同刻会撞 UNIQUE(code,trade_time,side,price,quantity)
+    holdings.adjust_cost("600000", amount=-300, is_dividend=True, note="除权",
+                         trade_time="2026-08-01 10:00:00.000")   # 除权 300
+    holdings.adjust_cost("600000", amount=50, is_dividend=False, note="补记",
+                         trade_time="2026-08-01 10:00:01.000")   # 普通修正
     hs = {h["code"]: h for h in holdings.get_holdings(active_only=True)}
     assert hs["600000"]["total_dividend"] == pytest.approx(300.0)
 
