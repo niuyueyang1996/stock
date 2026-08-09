@@ -418,12 +418,21 @@ def _intensity_instruction(intensity: str | None) -> str:
     return _INTENSITY_INSTRUCTIONS.get(str(intensity or "").lower().strip(), "")
 
 
+_DATA_RECEIVED_SCHEMA = "逐项列出系统实际传递给你的数据（维度名+数量；缺失/为空标注「无」），用于日志核对输入"
+_DATA_RECEIVED_REQ = (
+    "输出必须包含 data_received 字段：逐项列出系统实际传递给你的数据（如「日K 120根、周K 60根、月K 36根、"
+    "财务、估值分位、资金流、新闻 5条」），缺失/为空的数据也要如实标注「无」；用于日志核对输入完整性。"
+)
+
+
 def _schema_user(label: str, ctx: dict, schema: dict) -> str:
     """组装 AI user 消息：输出格式（schema）写在开头与结尾双端。
 
     模型对 prompt 首尾信息权重更高（首因+近因效应），开头重申「只输出严格 JSON、结构完全遵循
     schema」，中间夹输入数据，结尾再给权威 schema + 严格指令——双端强化可减少跑偏/乱答。
     """
+    schema = dict(schema)
+    schema["data_received"] = _DATA_RECEIVED_SCHEMA
     schema_txt = json.dumps(schema, ensure_ascii=False)
     return (
         f"{label}\n\n"
@@ -432,6 +441,7 @@ def _schema_user(label: str, ctx: dict, schema: dict) -> str:
         "【输入数据】\n" + json.dumps(ctx, ensure_ascii=False, default=str) + "\n\n"
         "【输出格式·结尾确认】请输出严格 JSON，结构如下（与开头完全一致，不要任何额外文字）：\n"
         + schema_txt
+        + f"\n\n{_DATA_RECEIVED_REQ}"
     )
 
 
@@ -795,7 +805,10 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
     logger.info("[AI] 响应 %s | finish=%s | content=%s",
                 url, finish or "-", str(content or "")[:2000])
     try:
-        return _parse_json_content(content)
+        parsed = _parse_json_content(content)
+        if isinstance(parsed, dict) and parsed.get("data_received"):
+            logger.info("[AI] data_received=%s", parsed["data_received"])
+        return parsed
     except ValueError as parse_err:
         # 解析失败：请模型只重发合法 JSON（带上坏输出片段便于对照）
         logger.warning("[AI] 解析失败，请求模型重发合法 JSON：%s", parse_err)
@@ -834,7 +847,10 @@ def chat_json(model_cfg: dict, system: str, user: str, effort: str | None = None
                 raise ValueError(f"{parse_err}；重发亦失败：{e_rep2}") from e_rep2
         logger.info("[AI] 重发响应 | finish=%s | content=%s",
                     finish2 or "-", str(content2 or "")[:2000])
-        return _parse_json_content(content2)
+        parsed2 = _parse_json_content(content2)
+        if isinstance(parsed2, dict) and parsed2.get("data_received"):
+            logger.info("[AI] data_received=%s", parsed2["data_received"])
+        return parsed2
 
 
 # ---------- 个股数据汇总（结构化输入） ----------
@@ -956,13 +972,13 @@ def build_stock_context(code: str) -> dict:
     except Exception:  # noqa: BLE001
         pass
 
-    # 时效 + 技术面日K + 专项报告摘要（阶段二 ScoreCard）
+    # 时效 + 技术面日/周/月K + 专项报告摘要（阶段二 ScoreCard）
     as_of = now_as_of_datetime()
     ctx["as_of_datetime"] = as_of
     try:
-        ctx["bars"] = build_technical_bars(code, as_of, limit=60)
+        ctx.update(build_technical_bars_multi(code, as_of))
     except Exception:  # noqa: BLE001
-        ctx["bars"] = []
+        ctx["bars"] = ctx["weekly_bars"] = ctx["monthly_bars"] = []
     try:
         nr = get_stock_news_report(code)
         if nr:
@@ -1024,7 +1040,7 @@ def _bar_dict(r) -> dict:
 def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> list[dict]:
     """该股截至 as_of 的最近日K（升序，尾部 limit 根），供技术面 AI 分析。
 
-    end = resolve_trade_day(as_of)（非交易日自动截到最近交易日），start≈一年前；
+    end = resolve_trade_day(as_of)（非交易日自动截到最近交易日），start≈800 自然日前；
     无数据返回 []（调用方按「该维缺数」处理，不抛错）。读缓存零网络。
     阶段二的打分 context 也会复用这个函数。
     """
@@ -1032,7 +1048,7 @@ def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> li
     from app.market.calendar import resolve_trade_day
 
     end = resolve_trade_day(as_of_datetime[:10])[0]
-    start = (date.fromisoformat(end) - timedelta(days=365)).isoformat()
+    start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     rows = get_daily_prices(code, start, end)
     return [_bar_dict(r) for r in rows[-limit:]]
 
@@ -1043,9 +1059,73 @@ def build_technical_bars_many(codes: list[str], as_of_datetime: str, limit: int 
     from app.market.calendar import resolve_trade_day
 
     end = resolve_trade_day(as_of_datetime[:10])[0]
-    start = (date.fromisoformat(end) - timedelta(days=365)).isoformat()
+    start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     rows_map = get_daily_prices_many(list(codes), start, end)
     return {c: [_bar_dict(r) for r in (rows_map.get(c) or [])[-limit:]] for c in codes}
+
+
+def build_technical_bars_multi(code: str, as_of_datetime: str,
+                               daily_limit: int = 120, weekly_limit: int = 60,
+                               monthly_limit: int = 36) -> dict:
+    """该股截至 as_of 的日/周/月三套K线（各升序、尾部 limit 根），供技术面 AI 分析。
+
+    日K读 daily_price_cache（约 800 自然日窗口），周/月K读腾讯增量缓存
+    （weekly/monthly_price_cache）；任一为空返回空列表，调用方按「该维缺数」处理。
+    读缓存零网络。诊股/评分复用本函数（缩小 limit 控 token）。
+    """
+    from app.data.cache import get_daily_prices, get_period_prices
+    from app.market.calendar import resolve_trade_day
+
+    end = resolve_trade_day(as_of_datetime[:10])[0]
+    start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
+    daily = [_bar_dict(r) for r in get_daily_prices(code, start, end)]
+    weekly = [_bar_dict(r) for r in get_period_prices("weekly_price_cache", code, "1970-01-01", end)]
+    monthly = [_bar_dict(r) for r in get_period_prices("monthly_price_cache", code, "1970-01-01", end)]
+    return {
+        "bars": daily[-daily_limit:],
+        "weekly_bars": weekly[-weekly_limit:],
+        "monthly_bars": monthly[-monthly_limit:],
+    }
+
+
+def build_technical_bars_many_multi(codes: list[str], as_of_datetime: str,
+                                    daily_limit: int = 120, weekly_limit: int = 60,
+                                    monthly_limit: int = 36) -> dict[str, dict]:
+    """批量版：一次查多只日/周/月K，返回 {code: {bars, weekly_bars, monthly_bars}}。"""
+    from app.data.cache import get_daily_prices_many, get_period_prices_many
+    from app.market.calendar import resolve_trade_day
+
+    end = resolve_trade_day(as_of_datetime[:10])[0]
+    start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
+    daily_map = get_daily_prices_many(list(codes), start, end)
+    weekly_map = get_period_prices_many("weekly_price_cache", list(codes), "1970-01-01", end)
+    monthly_map = get_period_prices_many("monthly_price_cache", list(codes), "1970-01-01", end)
+    return {
+        c: {
+            "bars": [_bar_dict(r) for r in (daily_map.get(c) or [])[-daily_limit:]],
+            "weekly_bars": [_bar_dict(r) for r in (weekly_map.get(c) or [])[-weekly_limit:]],
+            "monthly_bars": [_bar_dict(r) for r in (monthly_map.get(c) or [])[-monthly_limit:]],
+        }
+        for c in codes
+    }
+
+
+def _ensure_tech_kline(code: str) -> None:
+    """技术面分析前兜底：周/月K缓存任一为空时增量同步一次（腾讯，约 1 秒）。
+
+    失败不抛错——分析照常进行，AI 会按提示词明确说出缺哪个周期。
+    """
+    from app.data.cache import get_latest_period_price
+
+    if (get_latest_period_price("weekly_price_cache", code) is not None
+            and get_latest_period_price("monthly_price_cache", code) is not None):
+        return
+    try:
+        from app.services.refresh import sync_kline_bars
+
+        sync_kline_bars(code, datetime.now())
+    except Exception:  # noqa: BLE001 同步失败不阻断分析
+        pass
 
 
 # ---------- 诊股 ----------
@@ -2003,12 +2083,57 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
 
 # ============================================================ 消息面 / 技术面 AI（专项深入层）
 
-# 消息面：系统无正文新闻库，只给 code/name/as_of，由 AI 按公开知识 + 时效规则补
-# （与诊股「同业竞争」维缺数时标 [AI补充] 同理）。
+# 个股新闻抓取（akshare stock_news_em，东财聚合源；本机实测可用，失败自动降级为无新闻）
+_NEWS_TTL_HOURS = 6          # 新闻缓存有效期：6 小时内不重复抓取
+_NEWS_SINGLE_LIMIT = 15      # 单股消息面注入条数（控 token）
+_NEWS_BATCH_LIMIT = 6        # 批量消息面每只注入条数（组合多只，更省 token）
+_NEWS_CONTENT_MAX = 150      # 单条正文截断字数（控 token，库中存全文）
+
+
+def _ensure_stock_news(code: str, limit: int = _NEWS_SINGLE_LIMIT,
+                       content_max: int = _NEWS_CONTENT_MAX,
+                       force: bool = False) -> list[dict]:
+    """个股近期新闻：缓存新鲜直接读库，过期/缺失用 akshare 抓取后入库。
+
+    返回 [{time, title, content(已截断), source, url}]（按发布时间倒序）；抓取失败返回
+    缓存旧数据（宁可旧闻也不空手），完全没有则 []——调用方按「该股无新闻」处理。
+    """
+    from app.data.cache import (
+        get_latest_news_fetched_at,
+        get_stock_news,
+        upsert_stock_news,
+    )
+    from app.data.raw import raw_news
+
+    last = get_latest_news_fetched_at(code)
+    fresh = False
+    if last and not force:
+        try:
+            fresh = (datetime.now() - datetime.fromisoformat(last)).total_seconds() < _NEWS_TTL_HOURS * 3600
+        except ValueError:
+            fresh = False
+    if not fresh:
+        items = raw_news.stock_news(code, limit=30)
+        if items:
+            upsert_stock_news(code, items)
+    rows = get_stock_news(code, limit=limit)
+    return [
+        {
+            "time": r["news_time"], "title": r["title"],
+            "content": (r["content"] or "")[:content_max],
+            "source": r["source"], "url": r["url"],
+        }
+        for r in rows
+    ]
+
+# 消息面：akshare 抓该股近期新闻（stock_news_cache）注入；抓取失败时退化为
+# 只给 code/name/as_of，由 AI 按公开知识 + 时效规则补（与诊股「同业竞争」维缺数同理）。
 _NEWS_SYSTEM = (
-    "你是资深财经消息分析师。系统给出待分析标的的代码、名称与当前时间（as_of_datetime）。\n"
-    "系统不提供实时新闻正文库：你只能依据自己的公开知识（公司公告、行业与政策事件、财报节点等）"
-    "判断该标的近期的消息面，并严格遵守时效规则，不拿训练期旧闻当「最新」。\n\n"
+    "你是资深财经消息分析师。系统给出待分析标的的代码、名称、当前时间（as_of_datetime）"
+    "与系统抓取的近期新闻（news 数组，按时间倒序，含 title/content/time/source/url）。\n"
+    "请优先依据 news 中的新闻正文判断消息面：引用时注明日期与来源；news 为空或明显过时时，"
+    "再结合你的公开知识（公司公告、行业与政策事件、财报节点等）补充，并严格遵守时效规则，"
+    "不拿训练期旧闻当「最新」。\n\n"
     f"{_ASOF_RULES}\n"
     "[输出]\n"
     "1. stance 总立场：bullish（利多）/ neutral（中性）/ bearish（利空）。\n"
@@ -2052,21 +2177,27 @@ _NEWS_SCHEMA = {
     "html": "完整独立 HTML 消息面报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
 }
 
-# 技术面：bars 为日K（截至 as_of 交易日），prompt 白话表达、给关键位与证伪条件、不冒充盘中。
+# 技术面：bars=日K、weekly_bars=周K、monthly_bars=月K（截至 as_of 交易日），
+# prompt 白话表达、给关键位与证伪条件、不冒充盘中。
 _TECH_SYSTEM = (
-    "你是资深技术分析师。系统给出某标的最近日 K 数据（bars，按日期升序）与当前时间（as_of_datetime）。\n"
+    "你是资深技术分析师。系统给出某标的最近日/周/月 K 数据（bars=日K、weekly_bars=周K、"
+    "monthly_bars=月K，均按日期升序）与当前时间（as_of_datetime）。\n"
     "[数据说明]\n"
-    "1. bars 每根：date（交易日）、open/high/low/close（元）、volume（成交量）、pct_change（当日涨跌幅%）。\n"
-    "2. 你解读的是「截至 as_of 对应交易日」的价格结构（K 线已截断到该交易日收盘），不要冒充盘中、"
+    "1. 每根 K 线：date（段末交易日）、open/high/low/close（元）、volume（成交量）、"
+    "pct_change（涨跌幅%，周/月K为段末当日涨跌幅，可能为 null）。\n"
+    "2. bars=最近约 120 个交易日、weekly_bars=最近约 60 周、monthly_bars=最近约 36 个月——"
+    "日K看短线、周K看中期、月K看长期，必须结合三个级别判断趋势与关键位。\n"
+    "3. 你解读的是「截至 as_of 对应交易日」的价格结构（K 线已截断到该交易日收盘），不要冒充盘中、"
     "不要臆测 as_of 之后的数据。\n"
-    "3. 若 bars 为空（该股无日K数据），明确说无法分析技术面，不要硬下结论。\n"
+    "4. 若日/周/月任一周期为空（该股无该周期K线数据），summary 必须明确写出缺少哪个周期"
+    "（如「缺少周K/月K数据」），不得假装有该周期数据；三套全空时明确说无法分析技术面，不要硬下结论。\n"
     "[输出要求]\n"
     "1. 用白话表达，不堆指标缩写——用户不熟技术指标，解释要通俗（如「股价站稳10元上方」而非「MA10金叉」）。\n"
     "2. 给出关键支撑位与压力位（key_levels，数值），以及什么情况会证伪当前判断（invalidation）。\n"
     "3. 可结合资金面/估值给出潜在矛盾提示（凭合理推断即可，勿编造具体数字）。\n"
     "4. trend_short / trend_mid 用 up（上行）/ down（下行）/ range（震荡）表达短/中期趋势。\n"
     "5. signals 为白话信号数组（每条一句话，说人话）。\n"
-    "6. 无 bars 时：summary 明说无数据，signals 为空，trend 用 range。\n"
+    "6. 无 K 线时：summary 明说无数据，signals 为空，trend 用 range。\n"
     "严格输出 JSON，不要输出任何额外文字。"
 )
 
@@ -2074,7 +2205,7 @@ _TECH_HTML_REQUIREMENT = (
     "同时生成一份完整、独立、可读性强的 HTML 技术面报告（字段 html），供用户新开页面查看。\n"
     "[HTML 深度分析强制规范]\n"
     "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。\n"
-    "2. 结构必须覆盖：核心结论 / 价格结构解读（趋势、关键支撑压力位、量能）/ 白话信号 / "
+    "2. 结构必须覆盖：核心结论 / 价格结构解读（结合日/周/月K看趋势、关键支撑压力位、量能）/ 白话信号 / "
     "证伪条件与风险 / 与资金面、估值的矛盾提示 / 操作提示。\n"
     "3. 每个判断必须带具体价位与上下文（如「近 30 日股价在 10.2~10.8 区间震荡，放量突破 10.8 前难言走强」）；"
     "禁止「趋势向好」「有支撑」这类无价位断言。\n"
@@ -2098,8 +2229,10 @@ _TECH_SCHEMA = {
 
 # 组合批量：整批共用同一个 as_of_datetime，逐只精简输出并落库 source='batch'（与批量资金流同构）。
 _BATCH_NEWS_SYSTEM = (
-    "你是资深财经消息分析师。系统给出组合内多只标的（列表 stocks，每只含 code/name）与当前时间（as_of_datetime）。\n"
-    "系统不提供实时新闻正文库：你只能依据自己的公开知识逐只判断近期消息面，并严格遵守时效规则。\n\n"
+    "你是资深财经消息分析师。系统给出组合内多只标的（列表 stocks，每只含 code/name 与该股近期新闻 news 数组，"
+    "按时间倒序，含 title/content/time/source/url）与当前时间（as_of_datetime）。\n"
+    "请优先依据每只的 news 新闻正文判断消息面：引用时注明日期与来源；news 为空或明显过时时，"
+    "再结合你的公开知识逐只补充，并严格遵守时效规则。\n\n"
     f"{_ASOF_RULES}\n"
     "[输出要求]\n"
     "1. 对 stocks 中每只 code 输出：stance（bullish/neutral/bearish）、summary（一句话结论）、"
@@ -2142,11 +2275,14 @@ _BATCH_NEWS_SCHEMA = {
 }
 
 _BATCH_TECH_SYSTEM = (
-    "你是资深技术分析师。系统给出组合内多只标的的最近日 K 数据（列表 stocks，每只含 code/name/bars）"
+    "你是资深技术分析师。系统给出组合内多只标的的最近日/周/月 K 数据（列表 stocks，每只含 code/name/"
+    "bars=日K、weekly_bars=周K、monthly_bars=月K）"
     "与当前时间（as_of_datetime）。\n"
     "[数据说明]\n"
-    "1. 每只标的 bars 按日期升序：date（交易日）、open/high/low/close（元）、volume（成交量）、pct_change（当日涨跌幅%）。\n"
-    "2. 解读「截至 as_of 对应交易日」的价格结构，不要冒充盘中；bars 为空说明该标的无日K数据，"
+    "1. 每只标的 K 线按日期升序：date（段末交易日）、open/high/low/close（元）、volume（成交量）、"
+    "pct_change（涨跌幅%，周/月K为段末当日涨跌幅，可能为 null）。组合内每只根数较少："
+    "日K约 60、周K约 36、月K约 24——日K看短线、周K看中期、月K看长期，结合判断。\n"
+    "2. 解读「截至 as_of 对应交易日」的价格结构，不要冒充盘中；三套 K 线均为空说明该标的无K线数据，"
     "明说无法分析，不要硬下结论。\n"
     "[输出要求]\n"
     "1. 对 stocks 中每只 code 输出：trend_short / trend_mid（up/down/range）、summary（一句话结论）、"
@@ -2322,7 +2458,7 @@ def _upsert_tech_report(code: str, as_of: str, source: str, report: dict, model_
 
 
 def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
-    """个股 AI 消息面分析：基于模型公开知识 + 时效规则，落库 ai_news_reports。
+    """个股 AI 消息面分析：akshare 抓取近期新闻注入 + 公开知识 + 时效规则，落库 ai_news_reports。
 
     无激活模型 → ValueError。items 为空（AI 因时效放弃）也是合法结果，照常落库。
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
@@ -2332,11 +2468,15 @@ def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
     as_of = now_as_of_datetime()
-    ctx = {"code": code, "name": _stock_display_name(code), "as_of_datetime": as_of}
+    ctx = {
+        "code": code, "name": _stock_display_name(code), "as_of_datetime": as_of,
+        "news": _ensure_stock_news(code),
+    }
     # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
     schema = {k: v for k, v in _NEWS_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = _schema_user(
-        "消息面分析对象（系统无正文新闻库，请仅依据你的公开知识与时效规则判断）：", ctx, schema)
+        "消息面分析对象（news=系统抓取的该股近期新闻，按时间倒序；优先依据新闻正文判断，"
+        "引用注明日期与来源；不足/过时再结合公开知识）：", ctx, schema)
     system = _NEWS_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_NEWS_HTML_REQUIREMENT}"
@@ -2364,7 +2504,7 @@ def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "
 
 
 def analyze_technical(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
-    """个股 AI 技术面分析：基于截至 as_of 的日K结构，落库 ai_tech_reports。
+    """个股 AI 技术面分析：基于截至 as_of 的日/周/月K结构，落库 ai_tech_reports。
 
     无激活模型 → ValueError。无日K（bars 为空）时 AI 明说不下结论，照常落库。
     """
@@ -2372,9 +2512,10 @@ def analyze_technical(code: str, system_prompt: str | None = None, intensity: st
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
     as_of = now_as_of_datetime()
+    _ensure_tech_kline(code)
     ctx = {
         "code": code, "name": _stock_display_name(code), "as_of_datetime": as_of,
-        "bars": build_technical_bars(code, as_of),
+        **build_technical_bars_multi(code, as_of),
     }
     schema = {k: v for k, v in _TECH_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = _schema_user("技术面分析对象：", ctx, schema)
@@ -2523,12 +2664,19 @@ def analyze_batch_news(tags: list[str] | None = None, codes: list[str] | None = 
     as_of = now_as_of_datetime()
     ctx = {
         "as_of_datetime": as_of,
-        "stocks": [{"code": m["code"], "name": m["name"]} for m in members],
+        "stocks": [
+            {
+                "code": m["code"], "name": m["name"],
+                "news": _ensure_stock_news(m["code"], limit=_NEWS_BATCH_LIMIT, content_max=100),
+            }
+            for m in members
+        ],
     }
     # 输出 schema：仅「深入」保留 html 字段（整组合整体 HTML，落 coherence 表）
     schema = {k: v for k, v in _BATCH_NEWS_SCHEMA.items() if intensity == "deep" or k != "html"}
     user = _schema_user(
-        "组合内标的消息面分析（系统无正文新闻库，请仅依据你的公开知识与时效规则判断）：", ctx, schema)
+        "组合内标的消息面分析（每只 news=系统抓取的近期新闻，按时间倒序；优先依据新闻正文判断，"
+        "引用注明日期与来源；不足/过时再结合公开知识）：", ctx, schema)
     system = _BATCH_NEWS_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_BATCH_NEWS_HTML_REQUIREMENT}"
@@ -2578,7 +2726,7 @@ def analyze_batch_news(tags: list[str] | None = None, codes: list[str] | None = 
 
 def analyze_batch_technical(tags: list[str] | None = None, codes: list[str] | None = None,
                             system_prompt: str | None = None, intensity: str = "normal") -> dict:
-    """组合批量技术面 AI：一次拉多只日K（get_daily_prices_many），逐只精简输出并落库 source='batch'。
+    """组合批量技术面 AI：一次拉多只日/周/月K（组合每只少传控 token），逐只精简输出并落库 source='batch'。
 
     无激活模型/无成员 → ValueError。单只失败记日志继续不中断。
     返回 {as_of, count, reports:[{code,name,trend_short,trend_mid,summary}]}。
@@ -2590,16 +2738,17 @@ def analyze_batch_technical(tags: list[str] | None = None, codes: list[str] | No
     if not members:
         raise ValueError("该组合暂无持仓标的")
     as_of = now_as_of_datetime()
-    bar_map = build_technical_bars_many([m["code"] for m in members], as_of)
+    multi_map = build_technical_bars_many_multi(
+        [m["code"] for m in members], as_of, daily_limit=60, weekly_limit=36, monthly_limit=24)
     ctx = {
         "as_of_datetime": as_of,
         "stocks": [
-            {"code": m["code"], "name": m["name"], "bars": bar_map.get(m["code"], [])}
+            {"code": m["code"], "name": m["name"], **multi_map.get(m["code"], {})}
             for m in members
         ],
     }
     schema = {k: v for k, v in _BATCH_TECH_SCHEMA.items() if intensity == "deep" or k != "html"}
-    user = _schema_user("组合内标的技术面分析（日K已截断到 as_of 对应交易日）：", ctx, schema)
+    user = _schema_user("组合内标的技术面分析（K线已截断到 as_of 对应交易日）：", ctx, schema)
     system = _BATCH_TECH_SYSTEM
     if intensity == "deep":
         system = f"{system}\n\n{_BATCH_TECH_HTML_REQUIREMENT}"

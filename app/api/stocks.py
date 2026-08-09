@@ -29,6 +29,47 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+@router.get("/stocks/{code}/kline")
+def get_kline(code: str, period: str = "day"):
+    """日/周/月K线（腾讯源缓存）：period=day|week|month，返回升序数组。
+
+    读本地缓存零网络；周/月K从未同步时兜底增量拉一次（腾讯，约 1 秒）。
+    """
+    from datetime import datetime, timedelta
+
+    from app.data.cache import get_daily_prices, get_period_prices
+
+    period = (period or "day").lower().strip()
+    if period not in ("day", "week", "month"):
+        raise HTTPException(400, "period 仅支持 day/week/month")
+    today = date.today().isoformat()
+    if period == "day":
+        table = None
+        start = (date.today() - timedelta(days=800)).isoformat()
+        rows = get_daily_prices(code, start, today)
+    else:
+        table = "weekly_price_cache" if period == "week" else "monthly_price_cache"
+        rows = get_period_prices(table, code, "1970-01-01", today)
+    if period != "day" and not rows:
+        # 周/月K尚未同步：兜底增量拉一次（无缓存即全量），再读本地
+        try:
+            from app.services.refresh import sync_kline_bars
+
+            sync_kline_bars(code, datetime.now())
+            rows = get_period_prices(table, code, "1970-01-01", today)
+        except Exception:  # noqa: BLE001 拉取失败返回空，前端提示先刷新
+            rows = []
+    bars = [
+        {
+            "date": r["trade_date"], "open": r["open"], "high": r["high"],
+            "low": r["low"], "close": r["close"], "volume": r["volume"],
+            "pct_change": r["pct_change"],
+        }
+        for r in rows
+    ]
+    return {"ok": True, "data": {"code": code, "period": period, "bars": bars}}
+
+
 def _cache_status(code: str) -> dict:
     """检查个股缓存状态（行情/财务/估值历史是否齐全）。纯读零网络。
 

@@ -47,6 +47,26 @@ CREATE TABLE IF NOT EXISTS daily_price_cache (
     PRIMARY KEY (code, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS weekly_price_cache (
+    code        TEXT NOT NULL,
+    trade_date  TEXT NOT NULL,          -- 该周最后一个交易日 'YYYY-MM-DD'
+    open        REAL, high REAL, low REAL, close REAL,
+    volume      REAL, pct_change REAL,
+    source      TEXT,
+    updated_at  TEXT,
+    PRIMARY KEY (code, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS monthly_price_cache (
+    code        TEXT NOT NULL,
+    trade_date  TEXT NOT NULL,          -- 该月最后一个交易日 'YYYY-MM-DD'
+    open        REAL, high REAL, low REAL, close REAL,
+    volume      REAL, pct_change REAL,
+    source      TEXT,
+    updated_at  TEXT,
+    PRIMARY KEY (code, trade_date)
+);
+
 CREATE TABLE IF NOT EXISTS daily_valuation_cache (
     code       TEXT NOT NULL,
     trade_date TEXT NOT NULL,
@@ -300,6 +320,17 @@ CREATE TABLE IF NOT EXISTS ai_tech_reports (
     html          TEXT,                   -- AI「深入」模式生成的 HTML 技术面报告（可空）
     model_name    TEXT, created_at TEXT, updated_at TEXT,
     PRIMARY KEY (code, as_of, source)
+);
+
+CREATE TABLE IF NOT EXISTS stock_news_cache (
+    code       TEXT NOT NULL,            -- 股票代码（裸代码）
+    news_time  TEXT NOT NULL,            -- 发布时间 'YYYY-MM-DD HH:MM:SS'
+    title      TEXT NOT NULL,
+    content    TEXT,
+    source     TEXT,                     -- 文章来源
+    url        TEXT,
+    fetched_at TEXT,                     -- 抓取时间（TTL 判断）
+    PRIMARY KEY (code, news_time, title)
 );
 
 CREATE TABLE IF NOT EXISTS ai_news_coherence_reports (

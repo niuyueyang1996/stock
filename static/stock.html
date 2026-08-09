@@ -111,7 +111,7 @@
 
     <div class="panel" id="newsAiPanel">
       <div class="row">
-        <h2 style="margin:0">📰 消息面 AI <span class="sub">基于模型公开知识，非实时新闻源 · 时效由 AI 自行判定</span></h2>
+        <h2 style="margin:0">📰 消息面 AI <span class="sub">自动抓取该股近期新闻（akshare）供 AI 分析 · 时效由 AI 判定</span></h2>
         <span class="grow"></span>
         <span class="muted" id="newsAiMeta" style="font-size:12px"></span>
         <button class="btn primary" id="newsAiBtn">🤖 分析消息面</button>
@@ -121,11 +121,17 @@
 
     <div class="panel" id="techAiPanel">
       <div class="row">
-        <h2 style="margin:0">📈 技术面 AI <span class="sub">基于日 K 价格结构 · 白话解读，截至最近交易日</span></h2>
+        <h2 style="margin:0">📈 技术面 <span class="sub">日/周/月K 走势 · 腾讯行情 · 红涨绿跌，AI 解读截至最近交易日</span></h2>
         <span class="grow"></span>
         <span class="muted" id="techAiMeta" style="font-size:12px"></span>
         <button class="btn primary" id="techAiBtn">🤖 分析技术面</button>
       </div>
+      <div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
+        <div id="klineTabs" class="period-tabs"></div>
+        <span class="grow"></span>
+        <span class="muted" id="klineMeta" style="font-size:12px"></span>
+      </div>
+      <div class="chart lg" id="klineChart" style="height:420px"></div>
       <div id="techAiBody" style="margin-top:12px"></div>
     </div>
 
@@ -297,6 +303,55 @@
       } catch (e) { /* 读取失败忽略 */ }
     }
 
+    // ============ K线图（日/周/月，腾讯源缓存） ============
+    let klinePeriod = 'day';
+
+    async function loadKline() {
+      const el = document.getElementById('klineChart');
+      const meta = document.getElementById('klineMeta');
+      if (!currentCode || !el) return;
+      try {
+        const d = await api('/stocks/' + encodeURIComponent(currentCode) + '/kline?period=' + klinePeriod, { silent: true });
+        const bars = (d && d.bars) || [];
+        klineChart(el, bars, { defaultShow: 60 });   // 日/周/月K统一默认展示 60 根，可缩放看全部
+        if (meta) meta.textContent = bars.length ? bars.length + ' 根' : '';
+        if (bars.length) {
+          const b = bars[bars.length - 1];
+          const chg = b.pct_change != null && b.pct_change !== ''
+            ? (Number(b.pct_change) >= 0 ? '+' : '') + Number(b.pct_change).toFixed(2) + '%'
+            : '';
+          const tone = chg && Number(b.pct_change) >= 0 ? 'up' : chg ? 'down' : 'hi';
+          setPanelSummary('techAiPanel', '最新 ' + (b.date || '').slice(5) + ' 收 ' + fmtNum(b.close)
+            + (chg ? sumSep() + sumV(chg, tone) : ''));
+        } else {
+          setPanelSummary('techAiPanel', '暂无K线数据');
+        }
+      } catch (e) {
+        el.innerHTML = '<div class="empty" style="padding:24px">K线加载失败：' + e.message + '</div>';
+        if (meta) meta.textContent = '';
+        setPanelSummary('techAiPanel', 'K线加载失败');
+      }
+    }
+
+    function initKlineTabs() {
+      const tabs = document.getElementById('klineTabs');
+      if (!tabs) return;
+      tabs.innerHTML = '';
+      [['day', '日K'], ['week', '周K'], ['month', '月K']].forEach(([p, label]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ptab' + (p === klinePeriod ? ' active' : '');
+        b.textContent = label;
+        b.onclick = () => {
+          klinePeriod = p;
+          tabs.querySelectorAll('.ptab').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          loadKline();
+        };
+        tabs.appendChild(b);
+      });
+    }
+
     // 搜索框：选择股票 → 先试打开；缓存缺失则弹窗询问下载
     const sb = stockSearchInput();
     const input = sb.querySelector('input');
@@ -356,6 +411,11 @@
       clearChart(document.getElementById('flowPrice'));
       clearChart(document.getElementById('flowIntraday'));
       clearChart(document.getElementById('flowBuySell'));
+      clearChart(document.getElementById('klineChart'));
+      document.getElementById('klineTabs').innerHTML = '';
+      const kmEl = document.getElementById('klineMeta');
+      if (kmEl) kmEl.textContent = '';
+      setPanelSummary('techAiPanel', '');
       document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
       const flowAi = document.getElementById('flowAiPanel');
@@ -936,6 +996,8 @@
       if (idxMode) {
         renderFlow(d);   // 指数资金面：量价图（五档/财务面板已隐藏）
         loadTechPersisted();   // 指数有日K：技术面 AI 保留并加载；消息面面板已隐藏
+        initKlineTabs();
+        loadKline();           // 指数同样展示日/周/月K（腾讯源，口径一致）
         // 指数估值：乐咕源有序列才展示估值历史；有分位数据才展示历史分位（拿不到就隐藏）
         const vh = d.valuation_history || {};
         const hasSeries = Object.values(vh.periods || {})
@@ -957,6 +1019,8 @@
       loadAiReport();
       loadNewsPersisted();
       loadTechPersisted();
+      initKlineTabs();
+      loadKline();
     }
 
     function renderGrowth(live, meta) {
@@ -1273,7 +1337,7 @@
       ['valHistPanel', false],
       ['flowBarsPanel', false],
       ['newsAiPanel', false],
-      ['techAiPanel', false],
+      ['techAiPanel', true],
       ['flowTrendPanel', false],
     ].forEach(([id, open]) => {
       const el = document.getElementById(id);

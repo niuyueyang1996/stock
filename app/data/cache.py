@@ -95,6 +95,120 @@ def get_latest_daily_price(code: str):
         ).fetchone()
 
 
+# ---------- 周/月K缓存（腾讯 fqkline，非东财） ----------
+
+_PERIOD_TABLES = {"week": "weekly_price_cache", "month": "monthly_price_cache"}
+
+
+def _check_period_table(table: str) -> None:
+    """表名白名单校验（SQL 拼接防注入：table 只允许内部常量）。"""
+    if table not in _PERIOD_TABLES.values():
+        raise ValueError(f"非法周期缓存表: {table}")
+
+
+def upsert_period_prices(table: str, code: str, bars: list, source: str,
+                         pct_changes: list | None = None) -> None:
+    """批量 UPSERT 周/月K（主键 code+trade_date 覆盖，天然处理未收盘周期更新）。
+
+    pct_changes 与 bars 等长时逐根写入，否则存 None。
+    """
+    _check_period_table(table)
+    now = datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        for i, b in enumerate(bars):
+            pct = pct_changes[i] if pct_changes and i < len(pct_changes) else None
+            c.execute(
+                f"""INSERT INTO {table}
+                    (code, trade_date, open, high, low, close, volume, pct_change, source, updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(code, trade_date) DO UPDATE SET
+                      open=excluded.open, high=excluded.high, low=excluded.low,
+                      close=excluded.close, volume=excluded.volume, pct_change=excluded.pct_change,
+                      source=excluded.source, updated_at=excluded.updated_at""",
+                (code, b.date, b.open, b.high, b.low, b.close, b.volume, pct, source, now),
+            )
+
+
+def get_period_prices(table: str, code: str, start: str, end: str) -> list:
+    """查询周/月K [start,end] 区间缓存行（升序）。"""
+    _check_period_table(table)
+    with get_conn() as c:
+        return c.execute(
+            f"SELECT * FROM {table} WHERE code=? AND trade_date BETWEEN ? AND ? ORDER BY trade_date",
+            (code, start, end),
+        ).fetchall()
+
+
+def get_period_prices_many(table: str, codes: list[str], start: str, end: str) -> dict[str, list]:
+    """批量查多只周/月K [start,end]（一次开连）；返回 {code: [rows升序]}。"""
+    _check_period_table(table)
+    if not codes:
+        return {}
+    out: dict[str, list] = {c: [] for c in codes}
+    placeholders = ",".join("?" * len(codes))
+    with get_conn() as c:
+        rows = c.execute(
+            f"SELECT * FROM {table} WHERE code IN ({placeholders}) "
+            "AND trade_date BETWEEN ? AND ? ORDER BY code, trade_date",
+            (*codes, start, end),
+        ).fetchall()
+    for r in rows:
+        out.setdefault(r["code"], []).append(r)
+    return out
+
+
+def get_latest_period_price(table: str, code: str):
+    """最近一条周/月K（可能为未收盘的当周/当月）。"""
+    _check_period_table(table)
+    with get_conn() as c:
+        return c.execute(
+            f"SELECT * FROM {table} WHERE code=? ORDER BY trade_date DESC LIMIT 1", (code,)
+        ).fetchone()
+
+
+# ---------- 个股新闻缓存（akshare stock_news_em，东财聚合源） ----------
+
+def upsert_stock_news(code: str, items: list, fetched_at: str | None = None) -> None:
+    """批量 UPSERT 个股新闻（主键 code+news_time+title 覆盖）。"""
+    now = fetched_at or datetime.now().isoformat(timespec="seconds")
+    with get_conn() as c:
+        for it in items:
+            c.execute(
+                """INSERT INTO stock_news_cache
+                   (code, news_time, title, content, source, url, fetched_at)
+                   VALUES(?,?,?,?,?,?,?)
+                   ON CONFLICT(code, news_time, title) DO UPDATE SET
+                     content=excluded.content, source=excluded.source, url=excluded.url,
+                     fetched_at=excluded.fetched_at""",
+                (code, it.get("time", ""), it.get("title", ""), it.get("content"),
+                 it.get("source"), it.get("url"), now),
+            )
+
+
+def get_stock_news(code: str, limit: int = 20, since: str | None = None) -> list:
+    """查询个股新闻缓存（按发布时间倒序，取 limit 条）。"""
+    with get_conn() as c:
+        if since:
+            return c.execute(
+                "SELECT * FROM stock_news_cache WHERE code=? AND news_time >= ? "
+                "ORDER BY news_time DESC LIMIT ?",
+                (code, since, limit),
+            ).fetchall()
+        return c.execute(
+            "SELECT * FROM stock_news_cache WHERE code=? ORDER BY news_time DESC LIMIT ?",
+            (code, limit),
+        ).fetchall()
+
+
+def get_latest_news_fetched_at(code: str) -> str | None:
+    """该股最近一次新闻抓取时间（TTL 判断用）。"""
+    with get_conn() as c:
+        r = c.execute(
+            "SELECT MAX(fetched_at) AS t FROM stock_news_cache WHERE code=?", (code,)
+        ).fetchone()
+    return r["t"] if r else None
+
+
 def get_prev_close(code: str, before_date: str | None = None) -> float | None:
     """取 before_date 之前的最近收盘价（默认取最新一条）。"""
     with get_conn() as c:

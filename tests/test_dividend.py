@@ -99,12 +99,13 @@ def test_fetch_dividend_all_sources_down(monkeypatch):
     assert div_svc.fetch_latest_dividend("600000") is None
 
 
-def test_etf_daily_bars_em_fallback_sina(monkeypatch):
-    """东财 ETF 日K不可用 → 降级新浪（英文列解析）。"""
+def test_etf_daily_bars_tencent_fallback_sina(monkeypatch):
+    """腾讯 ETF 日K不可用 → 降级新浪（英文列解析）。"""
     import akshare as ak
     import pandas as pd
 
-    monkeypatch.setattr(ak, "fund_etf_hist_em", lambda **k: (_ for _ in ()).throw(RuntimeError("em down")))
+    monkeypatch.setattr("app.data.raw.raw_tencent.kline",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("tencent down")))
     df = pd.DataFrame({
         "date": ["2026-08-04", "2026-08-05"],
         "open": [4.0, 4.1], "high": [4.1, 4.2], "low": [3.9, 4.0], "close": [4.05, 4.15],

@@ -195,6 +195,7 @@ def test_analyze_technical_success(monkeypatch):
     r = ai_svc.analyze_technical("600000")
     assert r["report"]["trend_short"] == "up"
     assert "bars" in captured["user"] and "as_of_datetime" in captured["user"]
+    assert "weekly_bars" in captured["user"] and "monthly_bars" in captured["user"]
     got = ai_svc.get_stock_tech_report("600000")
     assert got and got["key_levels"]["resistance"] == ["11.0"]
     assert got["signals"] == ["放量站上10.5"] and got["invalidation"] == "跌破10"
@@ -333,6 +334,7 @@ def test_analyze_batch_technical_persists(monkeypatch):
     r = ai_svc.analyze_batch_technical(tags=["红利"])
     assert r["count"] == 2
     assert "as_of_datetime" in captured["user"] and "bars" in captured["user"]
+    assert "weekly_bars" in captured["user"] and "monthly_bars" in captured["user"]
     got = ai_svc.get_stock_tech_report("600001")
     assert got["source"] == "batch" and got["trend_short"] == "down"
     m = ai_svc.list_tech_reports(["600000", "600001"])
@@ -547,3 +549,117 @@ def test_api_news_tech_coherence(client, monkeypatch):
     assert r2.status_code == 200 and r2.json()["data"] is None
     r3 = client.get("/api/ai/tech-coherence?scope=portfolio")
     assert r3.status_code == 200
+
+
+# ============================================================ 消息面新闻抓取（akshare → 缓存 → AI 注入）
+
+def _fake_news_ak(monkeypatch, content="内容A" * 100):
+    """打桩 raw_news.ak：stock_news_em 返回新闻 DataFrame。"""
+    import pandas as pd
+
+    rows = [
+        {"发布时间": "2026-08-08 15:53:07", "新闻标题": "茅台又涨价了",
+         "新闻内容": content, "文章来源": "红星资本局", "新闻链接": "http://example.com/1"},
+        {"发布时间": "2026-08-07 09:00:00", "新闻标题": "公司公告分红",
+         "新闻内容": "内容B", "文章来源": "公司公告", "新闻链接": "http://example.com/2"},
+    ]
+
+    class _Ak:
+        def stock_news_em(self, symbol=""):
+            return pd.DataFrame(rows)
+
+    monkeypatch.setattr("app.data.raw.raw_news.ak", _Ak())
+    return rows
+
+
+def test_ensure_stock_news_fetch_and_cache(monkeypatch):
+    """首次调用：akshare 抓取 → 入库全文；返回截断正文、按时间倒序。"""
+    _fake_news_ak(monkeypatch)
+    news = ai_svc._ensure_stock_news("600519")
+    assert len(news) == 2
+    assert news[0]["time"] == "2026-08-08 15:53:07" and news[0]["title"] == "茅台又涨价了"
+    assert len(news[0]["content"]) <= ai_svc._NEWS_CONTENT_MAX          # 返回正文已截断
+    from app.data.cache import get_stock_news
+
+    cached = get_stock_news("600519", limit=10)
+    assert len(cached) == 2 and len(cached[0]["content"]) == 300        # 库中存全文
+
+
+def test_ensure_stock_news_ttl(monkeypatch):
+    """TTL 内不重复抓取（零网络）；过期后重抓。"""
+    from datetime import timedelta
+
+    _fake_news_ak(monkeypatch)
+    ai_svc._ensure_stock_news("600519")
+    # 新鲜：把 ak 换成会抛错的桩，验证不再触发抓取
+    monkeypatch.setattr(
+        "app.data.raw.raw_news.ak",
+        type("_FailAk", (), {"stock_news_em": lambda *a, **k: (_ for _ in ()).throw(RuntimeError("不应抓取"))})(),
+    )
+    news = ai_svc._ensure_stock_news("600519")
+    assert len(news) == 2
+    # 过期：fetched_at 改为 7 小时前 → 重新抓取
+    _fake_news_ak(monkeypatch)
+    with get_conn() as c:
+        c.execute(
+            "UPDATE stock_news_cache SET fetched_at=? WHERE code=?",
+            ((datetime.now() - timedelta(hours=7)).isoformat(timespec="seconds"), "600519"),
+        )
+    news2 = ai_svc._ensure_stock_news("600519")
+    assert len(news2) == 2
+
+
+def test_ensure_stock_news_fetch_fail_fallback(monkeypatch):
+    """抓取失败：有旧缓存 → 返回旧数据兜底；无缓存 → []。"""
+    from datetime import timedelta
+
+    from app.data.cache import upsert_stock_news
+
+    upsert_stock_news("600000", [
+        {"time": "2026-08-01 10:00:00", "title": "旧闻", "content": "旧内容",
+         "source": "x", "url": "u"},
+    ])
+    with get_conn() as c:
+        c.execute(
+            "UPDATE stock_news_cache SET fetched_at=? WHERE code=?",
+            ((datetime.now() - timedelta(hours=7)).isoformat(timespec="seconds"), "600000"),
+        )
+    monkeypatch.setattr(
+        "app.data.raw.raw_news.ak",
+        type("_FailAk", (), {"stock_news_em": lambda *a, **k: None})(),
+    )
+    news = ai_svc._ensure_stock_news("600000")
+    assert len(news) == 1 and news[0]["title"] == "旧闻"                # 旧缓存兜底
+    assert ai_svc._ensure_stock_news("600001") == []                    # 无缓存 → 空
+
+
+def test_analyze_news_injects_news(monkeypatch):
+    """消息面分析：user JSON 注入 news（含标题/时间/来源），AI 可基于新闻正文。"""
+    _activate_mock_model()
+    _fake_news_ak(monkeypatch)
+    captured = {}
+    payload = {"stance": "bullish", "summary": "近期利好", "items": [], "risks": []}
+    monkeypatch.setattr(ai_mod, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(user=user) or payload)
+    r = ai_svc.analyze_news("600519")
+    assert r["report"]["stance"] == "bullish"
+    assert "news" in captured["user"] and "茅台又涨价了" in captured["user"]
+    assert "2026-08-08" in captured["user"]
+
+
+def test_analyze_batch_news_injects_news(monkeypatch):
+    """批量消息面：每只标的 user JSON 注入 news。"""
+    _activate_mock_model()
+    _seed_trade("600000", tag="红利")
+    _seed_trade("600001", tag="红利")
+    _fake_news_ak(monkeypatch)
+    captured = {}
+    payload = {"summary": "整体平稳", "stocks": [
+        {"code": "600000", "stance": "bullish", "summary": "s1", "items": [], "risks": []},
+        {"code": "600001", "stance": "neutral", "summary": "s2", "items": [], "risks": []},
+    ]}
+    monkeypatch.setattr(ai_mod, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(user=user) or payload)
+    r = ai_svc.analyze_batch_news(tags=["红利"])
+    assert r["count"] == 2
+    assert "news" in captured["user"] and "茅台又涨价了" in captured["user"]

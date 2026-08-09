@@ -75,6 +75,22 @@ class Instrument:
     def daily_bars(self, start: str, end: str) -> list[Bar]:
         raise NotImplementedError
 
+    def weekly_bars(self, start: str = "", end: str = "", count: int = 800) -> list[Bar]:
+        """周K（腾讯 fqkline qfq，与日/月K同源同口径）。start/end 空拉全量（至多 count 根）。"""
+        from app.data.normalizers import normalize_bars
+        from app.data.raw import raw_tencent
+
+        df = raw_tencent.kline(self.symbol(), "week", start, end, count)
+        return normalize_bars(df, self.code, start or "1970-01-01", end or "9999-12-31")
+
+    def monthly_bars(self, start: str = "", end: str = "", count: int = 800) -> list[Bar]:
+        """月K（腾讯 fqkline qfq，与日/周K同源同口径）。start/end 空拉全量（至多 count 根）。"""
+        from app.data.normalizers import normalize_bars
+        from app.data.raw import raw_tencent
+
+        df = raw_tencent.kline(self.symbol(), "month", start, end, count)
+        return normalize_bars(df, self.code, start or "1970-01-01", end or "9999-12-31")
+
     def financials(self) -> Financials | None:
         """默认无财务（指数）。有财务类型覆写。"""
         return None

@@ -132,7 +132,10 @@ _TAG_PREF_SYSTEM = (
     "供 AI 给该标签下的股票/交易打分时作为准则。要求覆盖：估值态度、质量/成长、股息、风险偏好、"
     "加分项与回避项。全简体中文；输出严格 JSON。"
 )
-_TAG_PREF_OUTPUT = {"prompt": "完整评分指引（简体中文，≤800字）"}
+_TAG_PREF_OUTPUT = {
+    "prompt": "完整评分指引（简体中文，≤800字）",
+    "data_received": "逐项列出系统实际传递给你的数据（标签、用户原始偏好），用于日志核对输入",
+}
 
 
 def expand_tag_prompt(tag: str, raw_pref: str) -> dict:
@@ -143,7 +146,12 @@ def expand_tag_prompt(tag: str, raw_pref: str) -> dict:
     raw_pref = (raw_pref or "").strip()
     if not raw_pref:
         raise ValueError("偏好描述不能为空")
-    user = f"标签：{tag}\n用户原始偏好：{raw_pref}\n\n请输出：\n" + json.dumps(_TAG_PREF_OUTPUT, ensure_ascii=False)
+    user = (
+        f"标签：{tag}\n用户原始偏好：{raw_pref}\n\n请输出：\n"
+        + json.dumps(_TAG_PREF_OUTPUT, ensure_ascii=False)
+        + "\n\n输出必须包含 data_received 字段：逐项列出系统实际传递给你的数据（标签、用户原始偏好），"
+          "用于日志核对输入完整性。"
+    )
     raw = ai.chat_json(model, _TAG_PREF_SYSTEM, user)
     prompt = str(raw.get("prompt") or raw_pref).strip()
     if not prompt:
@@ -259,16 +267,17 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
         reverse=True,
     )[:15]
     top_codes = [s["code"] for s in ranked]
-    bar_map: dict = {}
+    multi_map: dict = {}
     try:
         if top_codes:
-            bar_map = ai.build_technical_bars_many(top_codes, as_of, limit=40)
+            multi_map = ai.build_technical_bars_many_multi(
+                top_codes, as_of, daily_limit=40, weekly_limit=16, monthly_limit=12)
     except Exception:  # noqa: BLE001
-        bar_map = {}
+        multi_map = {}
     technical = [
         {
             "code": s["code"], "name": s.get("name") or s["code"],
-            "weight": s.get("weight"), "bars": bar_map.get(s["code"], []),
+            "weight": s.get("weight"), **multi_map.get(s["code"], {}),
         }
         for s in ranked
     ]
@@ -306,7 +315,7 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
 
 _PORTFOLIO_SYSTEM = (
     "你是资深个人投资组合分析师。系统提供当前组合的聚合数据（人民币口径）、单股与标签板块全量指标、"
-    "组合资金流穿透（fundflow）、技术面日K（technical）、消息面元数据（news_meta）及可选专项报告摘要"
+    "组合资金流穿透（fundflow）、技术面日/周/月K（technical）、消息面元数据（news_meta）及可选专项报告摘要"
     "（news_reports/tech_reports），以及各标签的「评分指引」。"
     "请综合打分：优先依据提供的结构化数据；已有 news_reports/tech_reports 摘要时优先采信；"
     "各持仓所属标签的「评分指引」是评分的核心准则，不同标签的持仓按各自指引分别衡量后形成整体判断。"
@@ -327,7 +336,7 @@ _PORTFOLIO_SYSTEM = (
     "netamount/main_net/各档净额/buy_amount/sell_amount）、累计速览 history_30d_net/history_5d_net、"
     "covered/total）必须纳入分析：评估组合整体资金面（净流入/流出、各档主力态度、全天节奏与跨日趋势），"
     "识别资金驱动的高权重板块。covered/total 表示有资金流数据的持仓占比，低于全部时按可用部分判断。"
-    "\n5. technical 为按权重裁剪的持仓日K；news_meta 仅含 as_of 与 code/name——"
+    "\n5. technical 为按权重裁剪的持仓日/周/月K；news_meta 仅含 as_of 与 code/name——"
     "消息面/技术面须与资金面并列纳入；过时或不确信的不写进结论。"
     "\n6. missing_fx=该股缺汇率、已从人民币汇总剔除；字段为 null 表示系统无此数据，不得臆造数值；"
     "用领域知识补充时须标 [AI补充] 并注明时效。"
@@ -646,9 +655,10 @@ def _stock_factors(code: str, as_of: str | None = None) -> dict:
         as_of_dt = f"{as_of}T15:00:00"
     f["as_of_datetime"] = as_of_dt if as_of else ai.now_as_of_datetime()
     try:
-        f["bars"] = ai.build_technical_bars(code, f["as_of_datetime"], limit=40)
+        f.update(ai.build_technical_bars_multi(
+            code, f["as_of_datetime"], daily_limit=120, weekly_limit=60, monthly_limit=36))
     except Exception:  # noqa: BLE001
-        f["bars"] = []
+        f["bars"] = f["weekly_bars"] = f["monthly_bars"] = []
     return f
 
 
@@ -709,7 +719,7 @@ def build_daily_context(score_date: str) -> dict:
 
 
 _DAILY_SYSTEM = (
-    "你是资深交易复盘分析师。系统提供某交易日的每笔买卖交易、该股当日 asof 因子（含 bars 日K）与持仓位置、"
+    "你是资深交易复盘分析师。系统提供某交易日的每笔买卖交易、该股当日 asof 因子（含日/周/月K bars）与持仓位置、"
     "当日/近30日资金流，以及各标签的「评分指引」。"
     "请按每笔交易所属标签的「评分指引」逐笔评分并给出质量评级与操作建议，再综合当日多笔交易的节奏/集中度/方向"
     "给出当日总分与评级。评分准则：不同标签的交易按各自指引分别衡量。"
@@ -718,8 +728,8 @@ _DAILY_SYSTEM = (
     "每笔交易也给出分数、grade、action 与一句话点评。"
     f"\n\n{ai._SCORE_RULES}\n{ai._ASOF_RULES}"
     "\n[数据使用规范]"
-    "\n1. 系统提供的所有结构化字段都必须纳入分析（交易明细/估值/分位/资金流/日K bars/持仓位置），不得只挑少数指标——漏用数据视为不合格。"
-    "\n2. 每股 factors 为该笔交易「当日」的 asof 快照（当日收盘价口径的估值/分位/资金流/bars）——"
+    "\n1. 系统提供的所有结构化字段都必须纳入分析（交易明细/估值/分位/资金流/日周月K bars/持仓位置），不得只挑少数指标——漏用数据视为不合格。"
+    "\n2. 每股 factors 为该笔交易「当日」的 asof 快照（当日收盘价口径的估值/分位/资金流/日周月K）——"
     "不要用当前时点的数据评价历史交易；字段含 asof_fallback=true 表示当日数据缺失、已回退当前值，须保守解读。"
     "\n3. holding 字段是该股在你组合中的当前位置（权重/成本/盈亏/今日盈亏/累计分红，不在仓为 null）——"
     "评估每笔买卖对组合的意义（加仓集中度、摊薄成本、兑现盈亏）时必须结合。"
@@ -727,7 +737,7 @@ _DAILY_SYSTEM = (
     "main=主力（超大+大单）。fundflow_intraday_15m（当日 15 分钟五档序列，每窗口含各档净额与累计主力）"
     "反映交易当日各档资金节奏，fundflow_daily（完整逐日五档/买卖盘升序序列）与累计速览 "
     "fundflow_30d_net / 5d_net 反映资金中期趋势——用于判断交易当日/近期的资金环境。"
-    "\n5. factors.bars 与 as_of_datetime 用于技术面/消息面环境判断；过时不写。"
+    "\n5. factors 的 bars/weekly_bars/monthly_bars 与 as_of_datetime 用于技术面/消息面环境判断；过时不写。"
     "\n6. 字段为 null 表示系统无此数据，不得臆造数值；用领域知识补充时须标 [AI补充] 并注明时效。"
     "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )

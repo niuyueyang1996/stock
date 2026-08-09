@@ -186,3 +186,30 @@ def index_daily(symbol: str, start: str = "", end: str = "") -> pd.DataFrame | N
     if not rows:
         return None
     return pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume"])
+
+
+def kline(symbol: str, period: str = "day", start: str = "", end: str = "",
+          count: int = 800) -> pd.DataFrame | None:
+    """腾讯 fqkline K线（qfq 前复权），period ∈ day/week/month，非东财源。
+
+    支持日期范围增量：start/end 传 'YYYY-MM-DD'，为空拉全量（至多 count 根）。
+    A股/ETF/指数/港股代码均可用（如 sh600000 / sh510300 / sh000001 / hk00700）。
+    返回 DataFrame（date/open/close/high/low/volume，行序为腾讯原始顺序），
+    与 normalize_bars 英文列兼容；失败/空返回 None。
+    """
+    period = (period or "day").lower()
+    param = f"{symbol},{period},{start},{end},{count},qfq"
+    resp = requests.get(
+        "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
+        params={"param": param},
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    data = (resp.json().get("data") or {}).get(symbol) or {}
+    rows = data.get("qfq" + period) or data.get(period) or []
+    if not rows:
+        return None
+    # 部分行会多带第 7 列（成交额等扩展字段），统一截取前 6 列
+    rows = [r[:6] for r in rows]
+    return pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume"])

@@ -19,6 +19,8 @@ from app.data.cache import (
     get_daily_price,
     get_financials,
     get_latest_daily_price,
+    get_latest_period_price,
+    get_period_prices,
     get_prev_close,
     get_quantile,
     get_valuation,
@@ -28,6 +30,7 @@ from app.data.cache import (
     upsert_financials,
     upsert_fundflow_min,
     upsert_index_intraday,
+    upsert_period_prices,
     upsert_quantile,
 )
 from app.market.calendar import is_market_closed, is_trade_day
@@ -82,6 +85,7 @@ def refresh_index(code: str, now: datetime | None = None) -> dict:
     out = {"code": code}
     try:
         out["daily"] = sync_daily_bars(code, now)
+        out["kline"] = sync_kline_bars(code, now)
         q = _sync_realtime_quote(code, now)
         out["quote"] = bool(q)
         # 指数估值：乐咕源才拉（index_defs pe/pb_source 判定）；none 源跳过
@@ -142,12 +146,72 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     return {"code": code, "fetched": fetched, "reason": "ok"}
 
 
+def _period_pct_changes(table: str, code: str, bars: list) -> list:
+    """周/月K相邻段末涨跌幅（%）：首根用缓存中更早一条收盘衔接，缺则 None。"""
+    prev = None
+    try:
+        first = bars[0].date
+        earlier = get_period_prices(
+            table, code, "0000-01-01",
+            (date.fromisoformat(first) - timedelta(days=1)).isoformat(),
+        )
+        if earlier and earlier[-1]["close"] is not None:
+            prev = float(earlier[-1]["close"])
+    except Exception:  # noqa: BLE001 衔接失败不阻断
+        pass
+    pcts = []
+    for b in bars:
+        pcts.append(round((b.close / prev - 1) * 100, 2) if prev else None)
+        prev = b.close
+    return pcts
+
+
+def sync_kline_bars(code: str, now: datetime, force: bool = False) -> dict:
+    """增量同步周/月K（腾讯 fqkline，非东财），与日K同源同口径。
+
+    force=True（全量刷新）重拉全量（各 800 根）覆盖；增量从缓存末条日期往前一个
+    周期重拉（覆盖可能仍在变动/未收盘的当周当月），无缓存则全量。UPSERT 主键
+    code+trade_date 天然覆盖；pct_change 按相邻段末收盘计算（跨请求用缓存衔接）。
+    """
+    inst = get_instrument(code)
+    today = now.date().isoformat()
+    out = {"code": code, "week": 0, "month": 0, "reason": "ok"}
+    for period, table, method, lookback in (
+        ("week", "weekly_price_cache", "weekly_bars", 21),
+        ("month", "monthly_price_cache", "monthly_bars", 62),
+    ):
+        try:
+            if force:
+                start, count = "", 800
+            else:
+                last = get_latest_period_price(table, code)
+                if last is None:
+                    start, count = "", 800
+                else:
+                    start = (date.fromisoformat(last["trade_date"]) - timedelta(days=lookback)).isoformat()
+                    count = 60
+            bars = getattr(inst, method)(start, today, count=count)
+        except Exception as e:  # noqa: BLE001 单周期失败不中断另一周期
+            logger.warning("[K线] %s %sK 拉取失败：%s", code, period, e)
+            out["reason"] = "source_fail"
+            continue
+        if not bars:
+            continue
+        pcts = _period_pct_changes(table, code, bars)
+        upsert_period_prices(table, code, bars, inst.source_name, pcts)
+        out[period] = len(bars)
+    return out
+
+
 def _sync_realtime_quote(code: str, now: datetime):
     """拉分钟级实时行情并覆盖当日日K行；失败返回 None。
 
     指数实时行情即当日权威快照（含真实成交额，腾讯三元组），即便已收盘也强制覆盖当日行，
     供指数资金面 scale 派生成交额；其余类型维持原行为：已收盘定格不被实时行情覆盖。
+    非交易日（周末/节假日）直接跳过：源会返回昨收当现价（涨跌幅 0%），写库会产生假K线。
     """
+    if not is_trade_day(now.date()):
+        return None
     try:
         inst = get_instrument(code)
         q = inst.quote()
@@ -280,19 +344,21 @@ def sync_fundflow(code: str, now: datetime) -> dict:
 
 
 def sync_stock_full(code: str) -> dict:
-    """一站式同步单股全部数据（开仓新股用）：日K + 财务 + 百度序列/分位 + 实时估值。"""
+    """一站式同步单股全部数据（开仓新股用）：日/周/月K + 财务 + 百度序列/分位 + 实时估值。"""
     from app.models.db import init_db
 
     init_db()
     now = datetime.now()
     r1 = sync_daily_bars(code, now)         # 日K历史
+    rk = sync_kline_bars(code, now)         # 周/月K（腾讯，无缓存则全量）
     r3 = sync_financials(code)              # 财务（含支付率）
     q = _sync_realtime_quote(code, now)     # 分钟级实时价
     price = q.price if q else _today_price(code, now)
     r2 = sync_valuation(code, now, price)   # 序列 + 分位 + 实时估值
-    logger.info("[新股同步] %s %s：日K=%s 财务=%s 估值=%s",
-                code, _stock_name(code), r1["reason"], r3["reason"], r2["reason"])
-    return {"code": code, "daily": r1, "financials": r3, "valuation": r2}
+    logger.info("[新股同步] %s %s：日K=%s 周K=%s 月K=%s 财务=%s 估值=%s",
+                code, _stock_name(code), r1["reason"], rk["week"], rk["month"],
+                r3["reason"], r2["reason"])
+    return {"code": code, "daily": r1, "kline": rk, "financials": r3, "valuation": r2}
 
 
 def _today_price(code: str, now: datetime) -> float | None:
@@ -351,17 +417,21 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
     """
     try:
         if full:
-            # 日K 与财务互不依赖 → 并行
-            r1, r3 = _skip(code), _skip(code)
+            # 日K 与财务互不依赖 → 并行；周/月K（腾讯）跟随日K同步
+            r1, r3, rk = _skip(code), _skip(code), _skip(code)
             need_bars = "bars" in items
             need_fin = "financials" in items
             if need_bars and need_fin:
-                with ThreadPoolExecutor(max_workers=2) as ex:
+                with ThreadPoolExecutor(max_workers=3) as ex:
                     fb = ex.submit(sync_daily_bars, code, now, True)
                     ff = ex.submit(sync_financials, code, True)
-                    r1, r3 = fb.result(), ff.result()
+                    fk = ex.submit(sync_kline_bars, code, now, True)
+                    r1, r3, rk = fb.result(), ff.result(), fk.result()
             elif need_bars:
-                r1 = sync_daily_bars(code, now, force=True)
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fd = ex.submit(sync_daily_bars, code, now, True)
+                    fk = ex.submit(sync_kline_bars, code, now, True)
+                    r1, rk = fd.result(), fk.result()
             elif need_fin:
                 r3 = sync_financials(code, force=True)
             q = _sync_realtime_quote(code, now) if need_bars else None
@@ -379,7 +449,8 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
                 r2 = sync_valuation(code, now, price, force=True)
             elif need_flow:
                 rf = sync_fundflow(code, now)
-            entry = {"code": code, "daily": r1, "valuation": r2, "financials": r3, "fundflow": rf}
+            entry = {"code": code, "daily": r1, "valuation": r2, "financials": r3,
+                     "fundflow": rf, "kline": rk}
         else:
             r1 = sync_daily_bars(code, now) if "price" in items else _skip(code)
             q = _sync_realtime_quote(code, now) if "price" in items else None
@@ -398,7 +469,8 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
                 rf = sync_fundflow(code, now)
             entry = {"code": code, "daily": r1, "valuation": r2, "fundflow": rf}
         entry["fetched"] = entry["daily"]["fetched"] + entry["valuation"]["fetched"] + entry["fundflow"]["fetched"] \
-            + (entry["financials"]["fetched"] if "financials" in entry else 0)
+            + (entry["financials"]["fetched"] if "financials" in entry else 0) \
+            + (entry["kline"].get("week", 0) + entry["kline"].get("month", 0) if "kline" in entry else 0)
         return entry
     except Exception as e:  # noqa: BLE001 单只失败不中断整体
         return {"code": code, "error": f"{type(e).__name__}: {e}", "fetched": 0}

@@ -59,6 +59,13 @@ def temp_db(monkeypatch, tmp_path):
     monkeypatch.setattr(smod, "_read_stock_list_cache", lambda: [])
     monkeypatch.setattr(smod, "_read_etf_stock_list_cache", lambda: [])
     monkeypatch.setattr(smod, "_read_hk_stock_list_cache", lambda: [])
+    # 消息面新闻抓取：测试打桩为空（akshare 不可用），避免联网；需要新闻的测试单独覆盖
+    import app.data.raw.raw_news as rn_mod
+
+    monkeypatch.setattr(
+        rn_mod, "ak",
+        type("_NoNewsAk", (), {"stock_news_em": lambda *a, **k: None})(),
+    )
     # AI 自动打分后台线程在测试环境会逃逸：monkeypatch 还原后可能打到真实库/真实网络。
     # 测试里 maybe_auto_score_daily 退化为「只失效、不后台打分」，打分一律由测试显式调用。
     import app.services.ai_scoring as aisc

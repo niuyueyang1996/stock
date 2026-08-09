@@ -1144,8 +1144,36 @@ function openAiHtmlReport(html) {
   const w = window.open('', '_blank');
   if (!w) return toast('浏览器拦截了弹窗，请允许本站弹窗', 3500);
   w.document.open();
-  w.document.write(html);
+  w.document.write(wrapAiReportForPdf(html));
   w.document.close();
+}
+
+// 给 AI 报告套「导出 PDF」外壳：sticky 工具条 + 打印样式。
+// 工具条/样式属于包装层自身代码（AI HTML 禁 script 约束不受影响）；
+// 点击后调起浏览器打印，用户选「另存为 PDF」即可。
+function wrapAiReportForPdf(html) {
+  const style = `<style>
+    #pdf-toolbar{position:sticky;top:0;z-index:99999;display:flex;align-items:center;gap:10px;
+      padding:10px 16px;background:#1f2937;color:#fff;
+      font:13px/1.5 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+      box-shadow:0 2px 6px rgba(0,0,0,.3)}
+    #pdf-toolbar button{margin:0;padding:7px 14px;border:0;border-radius:6px;background:#2f6fed;color:#fff;font-size:13px;cursor:pointer}
+    #pdf-toolbar button:hover{background:#1f56cf}
+    #pdf-toolbar .hint{margin:0;font-size:12px;color:#c7d0db}
+    @media print{#pdf-toolbar{display:none!important}}
+  </style>`;
+  const toolbar = `<div id="pdf-toolbar">
+    <button type="button" onclick="window.print()">🖨️ 导出 PDF</button>
+    <span class="hint">点击后选择「另存为 PDF」即可下载（也可直接按 Ctrl/Cmd+P）</span>
+  </div>`;
+  const hasHead = /<\/head>/i.test(html);
+  const hasBody = /<body[^>]*>/i.test(html);
+  let out = html;
+  if (hasHead) out = out.replace(/<\/head>/i, style + '</head>');
+  if (hasBody) out = out.replace(/<body[^>]*>/i, (m) => m + toolbar);
+  if (!hasHead) out = style + out;
+  if (!hasBody) out = out + toolbar;
+  return out;
 }
 
 function wireAiHtmlButton(container, report) {

@@ -50,6 +50,13 @@ class AshareInstrument(Instrument):
         return normalize_a_quote(minute, self.code, prev_close)
 
     def daily_bars(self, start: str, end: str):
+        """日K：腾讯 fqkline 优先（qfq，与周/月K同源同口径），失败降级新浪。"""
+        try:
+            df = raw_tencent.kline(self.symbol(), "day", start, end, 800)
+            if df is not None and not df.empty:
+                return normalize_bars(df, self.code, start, end)
+        except Exception:  # noqa: BLE001 腾讯失败 → 降级新浪
+            pass
         return normalize_bars(raw_sina.daily_a(self.symbol(), start, end), self.code, start, end)
 
     def financials(self):

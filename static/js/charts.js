@@ -863,3 +863,84 @@ function bucketIndexVolume(daily, bucket) {
   }
   return out;
 }
+
+// ============================================================
+// K线蜡烛图（日/周/月）：candlestick + 成交量双 grid，dataZoom 联动缩放
+// bars: [{date, open, high, low, close, volume, pct_change}]（升序）
+// opts: { defaultShow } 默认显示最近 N 根（缺省 250），可缩放看全部
+// ============================================================
+function klineChart(el, bars, opts) {
+  if (!el) return null;
+  clearChart(el);
+  const chart = initChart(el);
+  if (!chart) return null;
+  const o = opts || {};
+  const n = bars.length;
+  if (!n) {
+    el.innerHTML = '<div class="empty" style="padding:24px">暂无K线数据 — 点右上角「⚡ 刷新此股」拉取行情。</div>';
+    return null;
+  }
+  const dates = bars.map((b) => b.date);
+  const kdata = bars.map((b) => [b.open, b.close, b.low, b.high]);   // candlestick: [open, close, lowest, highest]
+  const volumes = bars.map((b) => b.volume || 0);
+  const defaultShow = Math.max(1, Math.min(n, o.defaultShow || 250));
+  const startPct = ((n - defaultShow) / n) * 100;
+  const fmt = (v) => (v == null || v === '' ? '—' : Number(v).toFixed(2));
+  chart.setOption({
+    animation: false,
+    axisPointer: { link: [{ xAxisIndex: 'all' }] },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (ps) => {
+        const p = (ps || []).find((x) => x.seriesName === 'K线') || (ps || [])[0];
+        if (!p || !bars[p.dataIndex]) return '';
+        const b = bars[p.dataIndex];
+        const chg = b.pct_change != null && b.pct_change !== ''
+          ? `　${Number(b.pct_change) >= 0 ? '+' : ''}${Number(b.pct_change).toFixed(2)}%`
+          : '';
+        return `${b.date}<br>开 ${fmt(b.open)}　高 ${fmt(b.high)}<br>低 ${fmt(b.low)}　收 ${fmt(b.close)}${chg}<br>量 ${fmtNum(b.volume)}`;
+      },
+    },
+    grid: [
+      { left: 64, right: 16, top: 20, height: '56%' },
+      { left: 64, right: 16, top: '72%', height: '16%' },
+    ],
+    xAxis: [
+      {
+        type: 'category', data: dates, boundaryGap: true,
+        axisLine: { lineStyle: { color: CHART_COLORS.axis } },
+        axisLabel: { color: CHART_COLORS.muted },
+      },
+      {
+        type: 'category', gridIndex: 1, data: dates,
+        axisLabel: { show: false }, axisLine: { lineStyle: { color: CHART_COLORS.axis } },
+      },
+    ],
+    yAxis: [
+      { scale: true, splitLine: { lineStyle: { color: CHART_COLORS.grid } }, axisLabel: { color: CHART_COLORS.muted } },
+      { gridIndex: 1, splitLine: { show: false }, axisLabel: { show: false } },
+    ],
+    dataZoom: [
+      { type: 'inside', xAxisIndex: [0, 1], start: startPct, end: 100 },
+      { type: 'slider', xAxisIndex: [0, 1], start: startPct, end: 100, bottom: 2, height: 14 },
+    ],
+    series: [
+      {
+        name: 'K线', type: 'candlestick', data: kdata,
+        itemStyle: {
+          color: CHART_COLORS.up, color0: CHART_COLORS.down,
+          borderColor: CHART_COLORS.up, borderColor0: CHART_COLORS.down,
+        },
+      },
+      {
+        name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes,
+        barWidth: '60%',
+        itemStyle: { color: (p) => {
+          const b = bars[p.dataIndex];
+          return b && b.close >= b.open ? CHART_COLORS.up : CHART_COLORS.down;
+        } },
+      },
+    ],
+  });
+  return chart;
+}

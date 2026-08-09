@@ -5,7 +5,7 @@ fundflow 等腾讯分笔逻辑与 A 股相同（场内 ETF 按股票拉分笔）
 """
 from app.data.base import index_legu_code, index_valuation_source
 from app.data.normalizers import normalize_bars
-from app.data.raw import raw_sina
+from app.data.raw import raw_sina, raw_tencent
 from app.instruments.ashares import AshareInstrument
 from app.instruments.transform import apply_rules, index_valuation_history
 
@@ -18,17 +18,17 @@ class EtfInstrument(AshareInstrument):
         apply_rules(self)
 
     def daily_bars(self, start: str, end: str):
-        """场内 ETF 日K：东财优先，网络不可用时降级到新浪（把 ETF 当股票拉日K）。"""
-        df = None
+        """场内 ETF 日K：腾讯 fqkline 优先（非东财，与周/月K同源），失败降级新浪。"""
         try:
-            df = raw_sina.etf_daily_em(self.code, start, end)
-        except Exception:  # noqa: BLE001 东财不可用 → 降级
-            df = None
-        if df is None or df.empty:
-            try:
-                df = raw_sina.daily_a(self.symbol(), start, end)
-            except Exception:  # noqa: BLE001 新浪也失败 → 空
-                return []
+            df = raw_tencent.kline(self.symbol(), "day", start, end, 800)
+            if df is not None and not df.empty:
+                return normalize_bars(df, self.code, start, end)
+        except Exception:  # noqa: BLE001 腾讯失败 → 降级新浪
+            pass
+        try:
+            df = raw_sina.daily_a(self.symbol(), start, end)
+        except Exception:  # noqa: BLE001 新浪也失败 → 空
+            return []
         return normalize_bars(df, self.code, start, end)
 
     def tracked_index(self) -> str | None:
