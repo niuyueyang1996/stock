@@ -19,6 +19,14 @@ from app.instruments.base import Instrument
 from app.instruments.transform import apply_rules
 
 
+def _to_float(v):
+    """原始字段 → float；空/非法返回 None。"""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 class AshareInstrument(Instrument):
     kind = "ashare"
 
@@ -53,11 +61,23 @@ class AshareInstrument(Instrument):
         return normalize_ashare_financials(df, total_shares, dv_per_share, dv_report)
 
     def total_shares(self):
-        """总股本(股)：雪球 reg_asset（注册资本，A 股面值1元=股数）。
+        """总股本(股)：优先腾讯实时「总市值÷现价」，其次雪球 reg_asset。
 
-        雪球接口需带交易所前缀（SH600036），裸 code 取不到 reg_asset 会返回 None，
-        导致归母净资产（每股净资产×总股本）退化为含少数股东权益的总净资产、PB 失真。
+        送转/拆股后，季报 EPS 与雪球 reg_asset（注册资本）都是旧股本基准，
+        net_profit/EPS 兜底只会还原旧股数 → 市值/PE/PB 全错。腾讯实时行情自带当天
+        总市值与现价，市值÷现价即当日股本，送转次日就正确。雪球 reg_asset 仍需带
+        交易所前缀（SH600036），裸 code 返回 None 时归母净资产退化为含少数股东权益
+        的总净资产、PB 失真。
         """
+        try:
+            parts = raw_tencent.tencent_quote_raw(self.symbol())
+            if parts and len(parts) > 45:
+                mcap = _to_float(parts[45])   # 总市值（亿元）
+                price = _to_float(parts[3])   # 现价（元）
+                if mcap and price:
+                    return round(mcap * 1e8 / price, 2)
+        except Exception:  # noqa: BLE001 腾讯失败降级雪球
+            pass
         try:
             return normalize_total_shares(raw_sina.xueqiu_basic_info(self.symbol()))
         except Exception:  # noqa: BLE001 单源失败不阻塞财务同步

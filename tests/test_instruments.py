@@ -2,11 +2,15 @@
 资金流组合求和 / 批量 AI 共振落库。全程 conftest mock（MockInstrument + 固定行情），离线。"""
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from app.analysis.instrument_fundflow import combo_fundflow
 from app.data.base import load_index_registry
+from app.data.normalizers import normalize_ashare_financials
+from app.data.raw import raw_sina, raw_tencent
 from app.instruments import get_instrument, type_of
+from app.instruments.ashares import AshareInstrument
 from app.instruments.base import Instrument
 from app.instruments.detail import build_detail
 from app.market.calendar import last_trade_date
@@ -201,6 +205,67 @@ def test_search_and_resolve_etf_name(client, monkeypatch):
     assert any(x["code"] == "515080" and x["market"] == "etf" for x in hits)
     # 名称回填：未在 stocks 表的 ETF 代码 → 从 ETF 列表解析名称
     assert stocks_api._resolve_stock_name("510300") == "沪深300ETF"
+
+
+# ---------- A 股总股本（送转/拆股后须取当天股数） ----------
+
+def _tencent_parts(price="26.64", mcap="239.13"):
+    """腾讯实时行情原始字段最小集：现价 parts[3]、总市值(亿元) parts[45]。"""
+    parts = [""] * 50
+    parts[3] = price
+    parts[45] = mcap
+    return parts
+
+
+def test_ashare_total_shares_tencent_realtime(monkeypatch):
+    """送转后：总股本取腾讯实时「总市值÷现价」（当天股数），不落季报/注册资本旧股本。"""
+    monkeypatch.setattr(raw_tencent, "tencent_quote_raw", lambda s: _tencent_parts())
+    # 雪球即便可调也不该优先（reg_asset 是旧股本）
+    monkeypatch.setattr(raw_sina, "xueqiu_basic_info", lambda s: (_ for _ in ()).throw(AssertionError("不应走雪球")))
+    inst = AshareInstrument("603596")
+    assert inst.total_shares() == pytest.approx(239.13e8 / 26.64, rel=1e-9)
+
+
+def test_ashare_total_shares_xueqiu_fallback(monkeypatch):
+    """腾讯不可用时降级雪球 reg_asset（注册资本）。"""
+    monkeypatch.setattr(raw_tencent, "tencent_quote_raw", lambda s: None)
+    xq = pd.DataFrame([{"item": "reg_asset", "value": 606221348.6},
+                       {"item": "company_name", "value": "伯特利"}])
+    monkeypatch.setattr(raw_sina, "xueqiu_basic_info", lambda s: xq)
+    inst = AshareInstrument("603596")
+    assert inst.total_shares() == pytest.approx(606221348.6)
+
+
+def test_ashare_total_shares_both_fail_none(monkeypatch):
+    """腾讯/雪球都失败 → None，由 normalizer 用净利/EPS 兜底。"""
+    monkeypatch.setattr(raw_tencent, "tencent_quote_raw", lambda s: None)
+    monkeypatch.setattr(raw_sina, "xueqiu_basic_info", lambda s: None)
+    inst = AshareInstrument("603596")
+    assert inst.total_shares() is None
+
+
+def test_normalize_ashare_financials_uses_current_share_bps_after_split():
+    """送转后：净资产/上年末净资产用「每股净资产_最新股数×当前股本」，市值与 PB 才一致。
+
+    若误用报告期口径的「每股净资产」×当前股本，上年末净资产会虚高（伯特利 115亿 vs 真实 78亿）。
+    """
+    df = pd.DataFrame({
+        "选项": ["", "", "", "", "", ""],
+        "指标": ["归母净利润", "营业总收入", "基本每股收益", "每股净资产",
+                 "每股净资产_最新股数", "股东权益合计(净资产)"],
+        "20260331": [2.686416e8, 2.6743925e9, 0.44, 13.29098, 8.980358, 8.669823e9],
+        "20251231": [1.309438e9, 1.201408e10, 2.16, 12.86853, 8.694898, 8.414718e9],
+        "20250930": [8.914924e8, 8.357283e9, 1.47, 12.06327, 8.150805, 7.936679e9],
+    })
+    current_shares = 897_635_135.14            # 送转后当前股本
+    fin = normalize_ashare_financials(df, current_shares, dv_per_share=0.38, dv_report="2025年报")
+    assert fin.total_shares == pytest.approx(current_shares)
+    # 净资产 = 每股净资产_最新股数 × 当前股本（最新股数口径，非报告期股本口径）
+    assert fin.net_assets == pytest.approx(8.980358 * current_shares, rel=1e-6)
+    # 上年末净资产 = 上年年报「每股净资产_最新股数」× 当前股本（≠ 12.86853×当前股本 的虚高值）
+    assert fin.last_year_net_assets == pytest.approx(8.694898 * current_shares, rel=1e-6)
+    assert fin.net_profit == pytest.approx(1.309438e9)   # 去年年报归母净利
+    assert fin.eps == pytest.approx(2.16)
 
 
 # ---------- 资金流组合求和（combo_fundflow） ----------

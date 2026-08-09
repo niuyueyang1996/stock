@@ -499,20 +499,21 @@ def normalize_ashare_financials(df, total_shares: float | None,
     if total_shares is None and net_profit is not None and eps and eps > 0:
         total_shares = net_profit / eps
     payout_ratio = round(dv_per_share / eps * 100, 2) if (dv_per_share and eps and eps > 0) else None
-    bps = cell("每股净资产_最新股数")
+    bps = cell("每股净资产_最新股数")          # 当前股本口径（送转/拆股后即最新），×当前股本=归母净资产
     if bps is None:
         bps = cell("每股净资产")
     net_assets = round(bps * total_shares, 2) if (bps is not None and total_shares) else cell("股东权益合计(净资产)")
     # 上年末归母净资产：新浪摘要无「归母净资产」指标，须用「上年年报每股净资产 × 总股本」推算
-    # （每股净资产为归母口径）。「股东权益合计(净资产)」含少数股东权益，仅作最后兜底——
-    # 少数股东占比大的公司（平安/招商港口/招行）取它会虚高净资产、压低前瞻 PB。
+    # （每股净资产为归母口径）。送转/拆股后 total_shares 已是当前股本，必须配「每股净资产_最新股数」
+    # （当前股本口径），否则用报告期口径的「每股净资产」×当前股本会虚高净资产、压低前瞻 PB。
+    # 「股东权益合计(净资产)」含少数股东权益，仅作最后兜底（平安/招商港口/招行取它虚高）。
     last_year_net_assets = None
     if last_annual:
         last_year_net_assets = cell("归母净资产", last_annual)
         if last_year_net_assets is None:
-            ly_bps = cell("每股净资产", last_annual)
+            ly_bps = cell("每股净资产_最新股数", last_annual)
             if ly_bps is None:
-                ly_bps = cell("每股净资产_最新股数", last_annual)
+                ly_bps = cell("每股净资产", last_annual)
             if ly_bps is not None and total_shares:
                 last_year_net_assets = round(ly_bps * total_shares, 2)
         if last_year_net_assets is None:

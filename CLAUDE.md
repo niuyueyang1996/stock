@@ -145,8 +145,9 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - 全市场列表（A股 `stock_info_a_code_name` + 场内 ETF `fund_etf_spot_em` 存 `etf_list.json` + 港股）只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
 - Windows 跑 pytest 需 `--basetemp`（默认临时目录权限失败）。
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
+- **送转/拆股后总股本会变（公司玩送转），季报 EPS 与雪球 reg_asset 都是旧股本基准**：`net_profit/EPS` 兜底只会还原旧股数 → 市值/PE/PB 全错（伯特利 603596 6.06亿→8.97亿，市值 161亿 vs 真实 239亿）。A 股总股本一律优先取腾讯实时「总市值÷现价」（`AshareInstrument.total_shares`，当天股数），雪球降级；净利/每股净资产折算时须用「每股净资产_最新股数」（当前股本口径）×当前股本，禁止报告期口径「每股净资产」×当前股本（虚高）。改完需全量刷新才更新 `financial_cache.total_shares`。
 
 ## 测试
-- 363 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发/ScoreCard dimensions·action·risk，mock chat_json 离线）、ai（诊股 10 维含消息/技术 + score/grade/action/stale/upgrade_legacy、分析强度 HTML 门控含资金流）、ai_news_tech（消息面/技术面：as_of 注入、时效空态、剥离规则、技术面 bars as-of 锚点截断、批量落库/单只失败/tags-codes 400、迁移建表、HTML 门控）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v8 资金流 html 列 + v9 分时 price 列）、api（409 CACHE_MISS/GET 零写入/AI 评分端点/指数代码返回 is_index）、instruments（判型/ETF 名称搜索/指数刷新补估值）、indices（估值列 add* 整体法）、fundflow（分时点带 price）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
+- 367 用例。重点：ai_scoring（标签偏好/组合画像哈希与 stale/每日偏好去重与 trade_id 对齐/自动触发/ScoreCard dimensions·action·risk，mock chat_json 离线）、ai（诊股 10 维含消息/技术 + score/grade/action/stale/upgrade_legacy、分析强度 HTML 门控含资金流）、ai_news_tech（消息面/技术面：as_of 注入、时效空态、剥离规则、技术面 bars as-of 锚点截断、批量落库/单只失败/tags-codes 400、迁移建表、HTML 门控）、portfolio（穿透式/分段分位/覆盖门槛/今日盈亏）、fx（港股折算/汇率）、dividend（除权幂等/累计分红/东财降级）、migration（旧库升级 + v8 资金流 html 列 + v9 分时 price 列）、api（409 CACHE_MISS/GET 零写入/AI 评分端点/指数代码返回 is_index）、instruments（判型/ETF 名称搜索/指数刷新补估值）、indices（估值列 add* 整体法）、fundflow（分时点带 price）、Windows 打包路径/健康检查/单实例复用/本地 ECharts。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。测试灌数据一律用 as-of 锚点（`resolve_trade_day(None)[0]`），不用 `date.today()`，否则周末必红。
 - conftest：每测试独立临时 DB，mock build_manager 为 MockProvider、quote 固定、列表为空。
