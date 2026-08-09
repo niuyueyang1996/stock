@@ -1,4 +1,5 @@
 """按天缓存 DAO：每日价格（含收盘定格）、估值分位、财务指标。"""
+import sqlite3
 from datetime import datetime
 
 from app.models.db import get_conn
@@ -36,6 +37,32 @@ def upsert_daily_prices(code: str, bars: list, source: str, pct_changes: list | 
                    """,
                 (code, b.date, b.open, b.high, b.low, b.close, b.volume, b.amount, pct, source, now),
             )
+
+
+def purge_weekend_bars(code: str | None = None) -> int:
+    """清理非交易日（周末）误入库的假K行，返回删除行数。
+
+    旧版实时行情在非交易日会把昨收当现价（涨跌幅 0%）写库，形成假K线；
+    写入层与读取层已加过滤，这里负责清掉存量。真实交易只发生在工作日
+    （A股/ETF/港股/指数周末均不交易）。
+    """
+    total = 0
+    with get_conn() as c:
+        for table in ("daily_price_cache", "weekly_price_cache", "monthly_price_cache"):
+            try:
+                if code:
+                    cur = c.execute(
+                        f"DELETE FROM {table} WHERE code=? AND strftime('%w', trade_date) IN ('0','6')",
+                        (code,),
+                    )
+                else:
+                    cur = c.execute(
+                        f"DELETE FROM {table} WHERE strftime('%w', trade_date) IN ('0','6')"
+                    )
+            except sqlite3.OperationalError:  # 旧库可能尚未建周/月表
+                continue
+            total += cur.rowcount
+    return total
 
 
 def mark_closed(code: str, trade_date: str) -> None:

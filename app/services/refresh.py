@@ -25,6 +25,7 @@ from app.data.cache import (
     get_quantile,
     get_valuation,
     mark_closed,
+    purge_weekend_bars,
     upsert_daily_fundflow,
     upsert_daily_prices,
     upsert_financials,
@@ -129,6 +130,8 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
         bars = inst.daily_bars(start, today)
     except Exception:
         return {"code": code, "fetched": 0, "reason": "source_fail"}
+    bars = [b for b in bars if is_trade_day(b.date)]
+    purge_weekend_bars(code)
     if bars:
         # 计算涨跌幅：每根相对前一收盘（首根用缓存中更早的收盘）
         prev = get_prev_close(code, bars[0].date)
@@ -200,6 +203,7 @@ def sync_kline_bars(code: str, now: datetime, force: bool = False) -> dict:
         pcts = _period_pct_changes(table, code, bars)
         upsert_period_prices(table, code, bars, inst.source_name, pcts)
         out[period] = len(bars)
+    purge_weekend_bars(code)
     return out
 
 

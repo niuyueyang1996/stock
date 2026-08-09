@@ -102,7 +102,7 @@ def test_sync_kline_bars_full_when_empty(monkeypatch):
         if period == "week":
             return _mock_kline_df([("2026-01-30", 10.0), ("2026-02-06", 10.5), ("2026-02-13", 11.0)])
         if period == "month":
-            return _mock_kline_df([("2026-01-31", 20.0), ("2026-02-28", 21.0)])
+            return _mock_kline_df([("2026-01-30", 20.0), ("2026-02-27", 21.0)])
         return None
     monkeypatch.setattr("app.data.raw.raw_tencent.kline", fake_kline)
     out = refresh.sync_kline_bars("600000", datetime.now())
@@ -215,7 +215,7 @@ def test_kline_api_periods(client, monkeypatch):
         if period == "week":
             return _mock_kline_df([("2026-01-30", 10.0)])
         if period == "month":
-            return _mock_kline_df([("2026-01-31", 20.0)])
+            return _mock_kline_df([("2026-01-30", 20.0)])
         return None
     monkeypatch.setattr("app.data.raw.raw_tencent.kline", fake_kline)
 
@@ -232,7 +232,7 @@ def test_kline_api_periods(client, monkeypatch):
     r = client.get("/api/stocks/600000/kline?period=month")
     assert r.status_code == 200, r.text
     d = r.json()["data"]
-    assert d["period"] == "month" and d["bars"][-1]["date"] == "2026-01-31"
+    assert d["period"] == "month" and d["bars"][-1]["date"] == "2026-01-30"
 
     r = client.get("/api/stocks/600000/kline?period=bad")
     assert r.status_code == 400
@@ -283,3 +283,74 @@ def test_sync_realtime_quote_skips_non_trade_day():
     assert q2 is not None
     rows = get_daily_prices("600000", "2026-08-07", "2026-08-07")
     assert len(rows) == 1 and rows[0]["trade_date"] == "2026-08-07"
+
+
+# ============================================================ 非交易日假K：读取过滤 / 存量清理 / 写入兜底
+
+def _recent_weekend() -> tuple:
+    """返回最近一个周六及其前后（周五/周日）的 date。"""
+    from datetime import date
+
+    wd = date.today().weekday()          # Mon=0..Sun=6
+    sat = date.today() - timedelta(days=(wd - 5) % 7)
+    return sat - timedelta(days=1), sat, sat + timedelta(days=1)
+
+
+def test_kline_api_filters_weekend_bars(client):
+    """日K API 过滤非交易日（周末）假K行：库里即使有周末行也不上图表。"""
+    fri, sat, sun = _recent_weekend()
+    _seed_daily("601111", fri.isoformat(), 10.0)
+    _seed_daily("601111", sat.isoformat(), 10.0)   # 周六假K（涨跌幅 0%）
+    _seed_daily("601111", sun.isoformat(), 10.0)   # 周日假K
+    r = client.get("/api/stocks/601111/kline?period=day")
+    assert r.status_code == 200, r.text
+    dates = [b["date"] for b in r.json()["data"]["bars"]]
+    assert fri.isoformat() in dates
+    assert sat.isoformat() not in dates and sun.isoformat() not in dates
+
+
+def test_purge_weekend_bars():
+    """purge_weekend_bars：删周末假K行，保留工作日行；按 code 定向清理。"""
+    from app.data.cache import get_daily_prices, purge_weekend_bars
+
+    fri, sat, sun = _recent_weekend()
+    _seed_daily("601111", fri.isoformat(), 10.0)
+    _seed_daily("601111", sat.isoformat(), 10.0)
+    _seed_daily("601111", sun.isoformat(), 10.0)
+    n = purge_weekend_bars("601111")
+    assert n >= 2
+    dates = [r["trade_date"] for r in get_daily_prices("601111", "2000-01-01", "2999-12-31")]
+    assert dates == [fri.isoformat()]
+
+
+def test_sync_daily_bars_filters_weekend_source_bars(monkeypatch):
+    """数据源异常返回周末行时，sync_daily_bars 只写交易日，并清掉该股存量假K。"""
+    from app.data.cache import get_daily_prices
+    from app.services.refresh import sync_daily_bars
+
+    fri, sat, _ = _recent_weekend()
+
+    class _FakeInst:
+        source_name = "mock"
+
+        def daily_bars(self, start, end):
+            return _bars((fri.isoformat(), 10.0), (sat.isoformat(), 10.0))
+
+    monkeypatch.setattr(refresh, "get_instrument", lambda code: _FakeInst())
+    out = sync_daily_bars("601111", datetime(sat.year, sat.month, sat.day, 10, 0))
+    assert out["reason"] == "ok"
+    dates = [r["trade_date"] for r in get_daily_prices("601111", "2000-01-01", "2999-12-31")]
+    assert fri.isoformat() in dates
+    assert sat.isoformat() not in dates
+
+
+def test_build_technical_bars_multi_filters_weekend():
+    """AI 技术面 K线构造也过滤周末假K（as_of 取周末后的交易日，覆盖到周末行）。"""
+    fri, sat, _ = _recent_weekend()
+    mon = sat + timedelta(days=2)                  # 周一（若遇节假日仍按工作日近似）
+    _seed_daily("601111", fri.isoformat(), 10.0)
+    _seed_daily("601111", sat.isoformat(), 10.0)
+    m = ai_svc.build_technical_bars_multi("601111", f"{mon.isoformat()}T15:00:00+08:00",
+                                          daily_limit=10)
+    assert [b["date"] for b in m["bars"]] == [fri.isoformat()]
+

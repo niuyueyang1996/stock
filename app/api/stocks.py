@@ -21,6 +21,7 @@ from app.data.cache import (
     upsert_expected_revenue_growth,
 )
 from app.instruments import get_instrument
+from app.market.calendar import is_trade_day
 from app.instruments.detail import build_detail
 from app.services.quote import get_quote
 from app.services.holdings import set_tag
@@ -59,6 +60,8 @@ def get_kline(code: str, period: str = "day"):
             rows = get_period_prices(table, code, "1970-01-01", today)
         except Exception:  # noqa: BLE001 拉取失败返回空，前端提示先刷新
             rows = []
+    # 过滤非交易日（周末）行：旧版可能把周末假K写入缓存，读取层兜底不上图
+    rows = [r for r in rows if is_trade_day(r["trade_date"])]
     bars = [
         {
             "date": r["trade_date"], "open": r["open"], "high": r["high"],

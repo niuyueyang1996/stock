@@ -1037,6 +1037,13 @@ def _bar_dict(r) -> dict:
     }
 
 
+def _trade_day_rows(rows: list) -> list:
+    """过滤非交易日（周末）行：旧版可能把周末假K写入缓存，AI 输入兜底。"""
+    from app.market.calendar import is_trade_day
+
+    return [r for r in rows if is_trade_day(r["trade_date"])]
+
+
 def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> list[dict]:
     """该股截至 as_of 的最近日K（升序，尾部 limit 根），供技术面 AI 分析。
 
@@ -1049,7 +1056,7 @@ def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> li
 
     end = resolve_trade_day(as_of_datetime[:10])[0]
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
-    rows = get_daily_prices(code, start, end)
+    rows = _trade_day_rows(get_daily_prices(code, start, end))
     return [_bar_dict(r) for r in rows[-limit:]]
 
 
@@ -1061,7 +1068,7 @@ def build_technical_bars_many(codes: list[str], as_of_datetime: str, limit: int 
     end = resolve_trade_day(as_of_datetime[:10])[0]
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     rows_map = get_daily_prices_many(list(codes), start, end)
-    return {c: [_bar_dict(r) for r in (rows_map.get(c) or [])[-limit:]] for c in codes}
+    return {c: [_bar_dict(r) for r in _trade_day_rows(rows_map.get(c) or [])[-limit:]] for c in codes}
 
 
 def build_technical_bars_multi(code: str, as_of_datetime: str,
@@ -1078,9 +1085,9 @@ def build_technical_bars_multi(code: str, as_of_datetime: str,
 
     end = resolve_trade_day(as_of_datetime[:10])[0]
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
-    daily = [_bar_dict(r) for r in get_daily_prices(code, start, end)]
-    weekly = [_bar_dict(r) for r in get_period_prices("weekly_price_cache", code, "1970-01-01", end)]
-    monthly = [_bar_dict(r) for r in get_period_prices("monthly_price_cache", code, "1970-01-01", end)]
+    daily = [_bar_dict(r) for r in _trade_day_rows(get_daily_prices(code, start, end))]
+    weekly = [_bar_dict(r) for r in _trade_day_rows(get_period_prices("weekly_price_cache", code, "1970-01-01", end))]
+    monthly = [_bar_dict(r) for r in _trade_day_rows(get_period_prices("monthly_price_cache", code, "1970-01-01", end))]
     return {
         "bars": daily[-daily_limit:],
         "weekly_bars": weekly[-weekly_limit:],
@@ -1102,9 +1109,9 @@ def build_technical_bars_many_multi(codes: list[str], as_of_datetime: str,
     monthly_map = get_period_prices_many("monthly_price_cache", list(codes), "1970-01-01", end)
     return {
         c: {
-            "bars": [_bar_dict(r) for r in (daily_map.get(c) or [])[-daily_limit:]],
-            "weekly_bars": [_bar_dict(r) for r in (weekly_map.get(c) or [])[-weekly_limit:]],
-            "monthly_bars": [_bar_dict(r) for r in (monthly_map.get(c) or [])[-monthly_limit:]],
+            "bars": [_bar_dict(r) for r in _trade_day_rows(daily_map.get(c) or [])[-daily_limit:]],
+            "weekly_bars": [_bar_dict(r) for r in _trade_day_rows(weekly_map.get(c) or [])[-weekly_limit:]],
+            "monthly_bars": [_bar_dict(r) for r in _trade_day_rows(monthly_map.get(c) or [])[-monthly_limit:]],
         }
         for c in codes
     }
