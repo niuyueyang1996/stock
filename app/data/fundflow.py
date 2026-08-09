@@ -32,6 +32,10 @@ class FundflowPoint:
 # 前端可切换的分钟窗口（1 分钟为基础存储粒度，5/15/30 由 resample_points 派生）
 FUNDFLOW_WINDOWS = [1, 5, 15, 30]
 
+# 日级资金流历史读取窗口（自然日）：覆盖新浪 500 条 ≈ 2 年交易日。
+# 展示层 / AI context / 组合穿透共用，确保「日/周/月」窗口都能拉到足够历史。
+FUNDFLOW_HISTORY_DAYS = 760
+
 # 自适应分档切分点
 _BAND_POINTS = (0.15, 0.40, 0.75, 0.95)
 
@@ -271,3 +275,32 @@ def ticks_to_day(ticks: list[tuple[str, float, int, float]], trade_date: str) ->
         buy_amount=round(buy, 2),
         sell_amount=round(sell, 2),
     )
+def minute_bars_to_ticks(rows: list[tuple[str, float, float, float]],
+                         prev_price: float | None = None) -> list[tuple[str, float, int, float]]:
+    """分时分钟「累计量额」→ 逐分钟成交 (time, delta_amount, sign, price)，供港股资金流派生。
+
+    rows: [(time 'HH:MM', price, cum_vol, cum_amount)]（升序，腾讯港股分时累计口径）。
+    逐分钟量额 = 相邻累计额差；买卖方向用 tick rule：价升=买盘(+1)、价跌=卖盘(-1)、
+    持平沿用最近一次非平方向（首笔无参照记 0 中性）。返回与 fetch_ticks 同构，
+    可直接喂 aggregate_ticks / ticks_to_day / tick_bands（分档按分钟成交额自适应）。
+    腾讯分时偶发「累计量额不增」的重复行 → 跳过（不产生零额分笔）。
+    """
+    out: list[tuple[str, float, int, float]] = []
+    last_price = float(prev_price) if prev_price else None
+    last_dir = 0
+    prev_cum = 0.0
+    for time_str, price, _vol, cum_amt in rows:
+        delta = float(cum_amt) - prev_cum
+        prev_cum = float(cum_amt)
+        if delta <= 0:
+            continue
+        price_f = float(price)
+        if last_price is not None and abs(price_f - last_price) > 1e-9:
+            last_dir = 1 if price_f > last_price else -1
+        last_price = price_f
+        # 腾讯港股分时为 4 位 'HHMM'，统一成 'HH:MM'（聚合层按 5 位解析分钟）
+        ts = str(time_str)
+        if len(ts) == 4 and ts.isdigit():
+            ts = f"{ts[0:2]}:{ts[2:4]}"
+        out.append((ts, delta, last_dir, price_f))
+    return out

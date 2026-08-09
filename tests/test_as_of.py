@@ -1,5 +1,5 @@
-"""as_of / 有效交易日：非交易日回退、估值分位截断、分时按日读取。"""
-from datetime import date, timedelta
+"""as_of / 有效交易日：非交易日回退、交易日未开盘回退、估值分位截断、分时按日读取。"""
+from datetime import date, datetime, timedelta
 
 from app.analysis.instrument_fundflow import combo_fundflow
 from app.analysis.valuation import compute_live, get_quantiles
@@ -35,11 +35,33 @@ def test_resolve_trade_day_weekday_unchanged():
     assert resolved == d.isoformat()
 
 
-def test_resolve_trade_day_none_uses_today_or_last():
+def test_resolve_trade_day_none_uses_live_trade_day():
+    """缺省 as_of → 当前时刻有效交易日：非交易日回退最近交易日、交易日未开盘回退上一交易日。"""
+    from app.market.calendar import resolve_live_trade_date
+
     resolved, adjusted = resolve_trade_day(None)
-    expected = last_trade_date(date.today()).isoformat()
-    assert resolved == expected
-    assert adjusted == (date.today().weekday() >= 5)
+    assert resolved == resolve_live_trade_date().isoformat()
+    assert adjusted == (resolved != date.today().isoformat())
+
+
+def test_resolve_live_trade_date_pre_open_falls_back():
+    """交易日未开盘（<09:15 集合竞价）→ 上一交易日；09:15 起视为当日；非交易日 → 最近交易日。"""
+    from app.market.calendar import has_market_opened, market_status, resolve_live_trade_date
+
+    monday_0830 = datetime(2026, 8, 10, 8, 30)      # 2026-08-10 周一 08:30 未开盘
+    monday_0915 = datetime(2026, 8, 10, 9, 15)      # 09:15 集合竞价开始
+    saturday = datetime(2026, 8, 8, 10, 0)          # 2026-08-08 周六
+
+    assert resolve_live_trade_date(monday_0830) == date(2026, 8, 7)
+    assert has_market_opened(monday_0830) is False
+    assert market_status(monday_0830) == "pre_open"
+
+    assert resolve_live_trade_date(monday_0915) == date(2026, 8, 10)
+    assert has_market_opened(monday_0915) is True
+    assert market_status(monday_0915) == "open"
+
+    assert resolve_live_trade_date(saturday) == date(2026, 8, 7)
+    assert market_status(saturday) == "not_trade_day"
 
 
 def test_build_detail_fundflow_uses_resolved_trade_day(monkeypatch):

@@ -13,9 +13,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
-from app.data.base import Bar
+from app.data.base import Bar, FundflowDay
+from app.data.fundflow import FUNDFLOW_HISTORY_DAYS
 from app.instruments import get_instrument
 from app.data.cache import (
+    get_daily_fundflow,
     get_daily_price,
     get_financials,
     get_latest_daily_price,
@@ -34,13 +36,23 @@ from app.data.cache import (
     upsert_period_prices,
     upsert_quantile,
 )
-from app.market.calendar import is_market_closed, is_trade_day
+from app.market.calendar import (
+    has_market_opened,
+    is_market_closed,
+    is_trade_day,
+    last_trade_date,
+    resolve_live_trade_date,
+)
 from app.models.db import get_conn
 
 logger = logging.getLogger("refresh")
 
 # 波动率计算所需历史窗口（交易日）
 HISTORY_DAYS = 250
+
+# 新浪日级资金流回填：窗口内缓存 ≥30 天（覆盖 AI 30日累计 + 前端45日历史）且已覆盖
+# 最近交易日视为回填完成（增量跳过）；不足则每次刷新重试自愈
+FUNDFLOW_HISTORY_MIN_DAYS = 30
 
 # 刷新互斥（与 Excel 导入同口径：防双点搅进度）
 _refresh_lock = threading.Lock()
@@ -109,8 +121,8 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     last_date = latest["trade_date"] if latest else None
 
     if force:
-        # 全量覆盖：重拉最近约 400 自然天（覆盖 250+ 交易日波动率窗口），无视缓存/定格
-        start = (date.fromisoformat(today) - timedelta(days=400)).isoformat()
+        # 全量覆盖：重拉最近约 760 自然天（覆盖资金流历史窗口，约 2 年），无视缓存/定格
+        start = (date.fromisoformat(today) - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
     elif last_date == today:
         if latest["is_closed"]:
             return {"code": code, "fetched": 0, "reason": "today_closed"}
@@ -131,6 +143,9 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     except Exception:
         return {"code": code, "fetched": 0, "reason": "source_fail"}
     bars = [b for b in bars if is_trade_day(b.date)]
+    if not has_market_opened(now):
+        # 交易日未开盘（<09:15 集合竞价）/非交易日：源可能返回当日占位行（昨收当现价），一律不写当日
+        bars = [b for b in bars if b.date < today]
     purge_weekend_bars(code)
     if bars:
         # 计算涨跌幅：每根相对前一收盘（首根用缓存中更早的收盘）
@@ -178,6 +193,9 @@ def sync_kline_bars(code: str, now: datetime, force: bool = False) -> dict:
     """
     inst = get_instrument(code)
     today = now.date().isoformat()
+    if not has_market_opened(now):
+        # 开盘前：源不产生当日周期行，用有效交易日（上一交易日）收口，避免拉到占位假K
+        today = resolve_live_trade_date(now).isoformat()
     out = {"code": code, "week": 0, "month": 0, "reason": "ok"}
     for period, table, method, lookback in (
         ("week", "weekly_price_cache", "weekly_bars", 21),
@@ -210,12 +228,13 @@ def sync_kline_bars(code: str, now: datetime, force: bool = False) -> dict:
 def _sync_realtime_quote(code: str, now: datetime):
     """拉分钟级实时行情并覆盖当日日K行；失败返回 None。
 
+    用「行情自带日期」判断当日是否已产生行情（比时钟判断更准，节假日/港股休市也自动
+    识别）：q.ts 的日期≠今天 → 今日未开盘/非交易日/节假日，源返回的是上一交易日数据
+    （昨收当现价，涨跌幅 0%），写库会产生假K线，直接跳过。q.ts 缺失时才退回时钟判断
+    （交易日 <09:15 集合竞价视为未开盘）。
     指数实时行情即当日权威快照（含真实成交额，腾讯三元组），即便已收盘也强制覆盖当日行，
     供指数资金面 scale 派生成交额；其余类型维持原行为：已收盘定格不被实时行情覆盖。
-    非交易日（周末/节假日）直接跳过：源会返回昨收当现价（涨跌幅 0%），写库会产生假K线。
     """
-    if not is_trade_day(now.date()):
-        return None
     try:
         inst = get_instrument(code)
         q = inst.quote()
@@ -224,6 +243,11 @@ def _sync_realtime_quote(code: str, now: datetime):
     if not q or not q.price:
         return None
     today = now.date().isoformat()
+    quote_day = (q.ts or "")[:10]
+    if quote_day and quote_day != today:
+        return None
+    if not quote_day and not has_market_opened(now):
+        return None
     # 涨跌幅以本地缓存中的真实昨日收盘为基准，避免源（新浪）盘中用日K倒数第二根而跳日
     prev_close = get_prev_close(code, today)
     pct_chg = round((q.price / prev_close - 1) * 100, 2) if prev_close else q.pct_chg
@@ -304,35 +328,49 @@ def sync_current_valuation(code: str, now: datetime, price: float | None = None)
 
 
 def sync_fundflow(code: str, now: datetime) -> dict:
-    """当日资金流：个股/ETF 腾讯分笔派生五档，指数腾讯分时量价（东财已弃用）。
+    """当日资金流：个股/ETF 腾讯分笔派生五档，港股腾讯分时派生五档（近5日），指数腾讯分时量价。
 
-    落库 daily_fundflow_cache + fundflow_15m_cache（个股/ETF 五档）或
-    index_intraday_cache（指数分时量价）。无资金流类型（港股）与非交易日跳过。
+    落库 daily_fundflow_cache + fundflow_15m_cache（个股/ETF/港股五档）或
+    index_intraday_cache（指数分时量价）。无资金流类型跳过；非交易日仅港股近5日窗口继续补刷。
     """
     inst = get_instrument(code)
-    if not (inst.has_fundflow or inst.has_intraday_quote) or not is_trade_day(now.date()):
+    if not (inst.has_fundflow or inst.has_intraday_quote):
         return {"code": code, "fetched": 0, "reason": "skipped"}
+    if not is_trade_day(now.date()) and not getattr(inst, "has_multi_day_fundflow", False):
+        return {"code": code, "fetched": 0, "reason": "skipped"}
+    today = now.date().isoformat()
+    day_flow_by_date: dict[str, FundflowDay] = {}
+    intraday_by_date: dict[str, list] = {}
     try:
-        day_flow = inst.daily_fundflow() if inst.has_fundflow else []
-        # 指数：一次 mkline 含跨日分钟，按日落库（今+昨），供同时段成交额真实对比
         if inst.has_intraday_quote and getattr(inst, "kind", None) == "index":
-            by_day = inst.intraday_by_date()
-            intraday = by_day.get(now.date().isoformat()) or []
-            for d, pts in by_day.items():
+            # 指数：一次 mkline 含跨日分钟，按日落库（今+昨），供同时段成交额真实对比
+            intraday_by_date = inst.intraday_by_date()
+            for d, pts in intraday_by_date.items():
                 if pts:
                     upsert_index_intraday(code, d, pts)
-        else:
-            intraday = inst.intraday_quote() if inst.has_intraday_quote else inst.fundflow_intraday()
+        elif getattr(inst, "has_multi_day_fundflow", False):
+            # 港股：分时分钟派生近5日五档（覆盖漏刷日）；今日为首日
+            for f in inst.fundflow_days():
+                day_flow_by_date[f.date] = f
+            intraday_by_date = inst.fundflow_intraday_by_date()
+        elif inst.has_fundflow:
+            day_flow = inst.daily_fundflow()
+            if day_flow:
+                day_flow_by_date[today] = day_flow[0]
+            intraday = inst.fundflow_intraday()
+            if intraday:
+                intraday_by_date[today] = intraday
     except Exception as e:  # noqa: BLE001 资金流失败不中断整体刷新
         logger.warning("[资金流] %s 获取失败：%s", code, e)
         return {"code": code, "fetched": 0, "reason": "source_fail"}
-    today = now.date().isoformat()
-    # 当日自适应分档阈值（P50/P80/P95），前端展示各档组成条件；拿不到不影响落库
+    # 当日自适应分档阈值（P15/P40/P75/P95），前端展示各档组成条件；拿不到不影响落库
     bands = None
     try:
         bands = inst.fundflow_bands()
     except Exception:  # noqa: BLE001
         pass
+    day_flow = [day_flow_by_date[today]] if today in day_flow_by_date else []
+    intraday = intraday_by_date.get(today) or []
     if day_flow:
         upsert_daily_fundflow(code, today, day_flow[0], bands)
     if inst.has_intraday_quote:
@@ -340,11 +378,56 @@ def sync_fundflow(code: str, now: datetime) -> dict:
             upsert_index_intraday(code, today, intraday)
     elif intraday:
         upsert_fundflow_min(code, today, intraday)
+    # 多日窗口：今日之外的历史日一并落库（港股近5日，避免覆盖当日 bands）
+    for d, f in day_flow_by_date.items():
+        if d != today:
+            upsert_daily_fundflow(code, d, f, None)
+    for d, pts in intraday_by_date.items():
+        if d != today and pts:
+            upsert_fundflow_min(code, d, pts)
     fetched = len(intraday)
     logger.info("[资金流] %s %s：当日分时 %d 个分钟点，总净流入=%s",
                 code, _stock_name(code), fetched,
                 day_flow[0].netamount if day_flow else "—")
     return {"code": code, "fetched": fetched, "reason": "ok"}
+
+
+def sync_fundflow_history(code: str, now: datetime, force: bool = False) -> dict:
+    """A股/ETF 新浪日级五档资金流回填（增量，非东财）。
+
+    目标窗口 = 新浪单次返回的最近约 300 个交易日；只补 daily_fundflow_cache 缺失日，
+    不覆盖腾讯分笔派生的当日/已有实时值。缓存已覆盖最近交易日且窗口内 ≥60 天则跳过。
+    返回回填天数。
+    """
+    inst = get_instrument(code)
+    if inst.kind not in ("ashare", "etf") or not inst.has_fundflow:
+        return {"code": code, "fetched": 0, "reason": "skipped"}
+    target = last_trade_date(now.date()).isoformat()
+    window_start = (date.fromisoformat(target) - timedelta(days=400)).isoformat()
+    with get_conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n, MAX(trade_date) AS mx FROM daily_fundflow_cache "
+            "WHERE code=? AND trade_date>=?", (code, window_start),
+        ).fetchone()
+    if not force and row["mx"] == target and (row["n"] or 0) >= FUNDFLOW_HISTORY_MIN_DAYS:
+        return {"code": code, "fetched": 0, "reason": "cached"}
+    try:
+        days = inst.fundflow_history("0000-01-01", target)
+    except Exception as e:  # noqa: BLE001 回填失败不中断整体刷新
+        logger.warning("[资金流回填] %s 新浪历史拉取失败：%s", code, e)
+        return {"code": code, "fetched": 0, "reason": "source_fail"}
+    if not days:
+        return {"code": code, "fetched": 0, "reason": "no_data"}
+    with get_conn() as c:
+        have = {r["trade_date"] for r in c.execute(
+            "SELECT trade_date FROM daily_fundflow_cache WHERE code=?", (code,)).fetchall()}
+    n = 0
+    for f in days:
+        if f.date in have:
+            continue
+        upsert_daily_fundflow(code, f.date, f, None)
+        n += 1
+    return {"code": code, "fetched": n, "reason": "ok"}
 
 
 def sync_stock_full(code: str) -> dict:
@@ -453,6 +536,10 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
                 r2 = sync_valuation(code, now, price, force=True)
             elif need_flow:
                 rf = sync_fundflow(code, now)
+            if need_flow:
+                rh = sync_fundflow_history(code, now)
+                if rh.get("fetched"):
+                    rf = {**rf, "fetched": (rf.get("fetched") or 0) + rh["fetched"]}
             entry = {"code": code, "daily": r1, "valuation": r2, "financials": r3,
                      "fundflow": rf, "kline": rk}
         else:
@@ -471,6 +558,10 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
                 r2 = sync_current_valuation(code, now, price)
             elif need_flow:
                 rf = sync_fundflow(code, now)
+            if need_flow:
+                rh = sync_fundflow_history(code, now)
+                if rh.get("fetched"):
+                    rf = {**rf, "fetched": (rf.get("fetched") or 0) + rh["fetched"]}
             entry = {"code": code, "daily": r1, "valuation": r2, "fundflow": rf}
         entry["fetched"] = entry["daily"]["fetched"] + entry["valuation"]["fetched"] + entry["fundflow"]["fetched"] \
             + (entry["financials"]["fetched"] if "financials" in entry else 0) \

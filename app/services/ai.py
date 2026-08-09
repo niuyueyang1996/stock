@@ -861,7 +861,7 @@ def build_stock_context(code: str) -> dict:
     from app.analysis.portfolio import compute_portfolio
     from app.analysis.valuation import compute_live, get_quantiles
     from app.data.cache import get_daily_fundflow, get_daily_fundflows, get_financials, get_fundflow_min
-    from app.data.fundflow import intraday_window_series
+    from app.data.fundflow import FUNDFLOW_HISTORY_DAYS, intraday_window_series
     from app.services.quote import get_quote
 
     quote = {}
@@ -921,7 +921,7 @@ def build_stock_context(code: str) -> dict:
             ff = ctx["fundflow"]
             try:
                 end = flow["trade_date"]
-                start = (date.fromisoformat(end) - timedelta(days=45)).isoformat()
+                start = (date.fromisoformat(end) - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
                 rows = get_daily_fundflows(code, start, end)
                 nets = [float(r["netamount"]) for r in rows if r["netamount"] is not None]
                 if nets:
@@ -1043,6 +1043,21 @@ def _trade_day_rows(rows: list) -> list:
 
     return [r for r in rows if is_trade_day(r["trade_date"])]
 
+def _tech_end_day(as_of_datetime: str) -> str:
+    """as_of 时刻对应的「有效交易日」（所有技术面 bars 的终点）。
+
+    非交易日回退最近交易日；交易日未开盘（<09:30）回退上一交易日——当日尚无K线数据，
+    避免把「昨收当现价」的占位行当当日K喂给 AI。
+    """
+    from app.market.calendar import has_market_opened, is_trade_day, last_trade_date
+
+    dt = datetime.fromisoformat(as_of_datetime)
+    d = dt.date()
+    if is_trade_day(d) and not has_market_opened(dt):
+        return last_trade_date(d - timedelta(days=1)).isoformat()
+    return last_trade_date(d).isoformat()
+
+
 
 def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> list[dict]:
     """该股截至 as_of 的最近日K（升序，尾部 limit 根），供技术面 AI 分析。
@@ -1052,9 +1067,8 @@ def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> li
     阶段二的打分 context 也会复用这个函数。
     """
     from app.data.cache import get_daily_prices
-    from app.market.calendar import resolve_trade_day
 
-    end = resolve_trade_day(as_of_datetime[:10])[0]
+    end = _tech_end_day(as_of_datetime)
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     rows = _trade_day_rows(get_daily_prices(code, start, end))
     return [_bar_dict(r) for r in rows[-limit:]]
@@ -1063,9 +1077,8 @@ def build_technical_bars(code: str, as_of_datetime: str, limit: int = 120) -> li
 def build_technical_bars_many(codes: list[str], as_of_datetime: str, limit: int = 120) -> dict[str, list]:
     """批量版：一次查多只的日K（get_daily_prices_many，避免逐只开连），返回 {code: bars}。"""
     from app.data.cache import get_daily_prices_many
-    from app.market.calendar import resolve_trade_day
 
-    end = resolve_trade_day(as_of_datetime[:10])[0]
+    end = _tech_end_day(as_of_datetime)
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     rows_map = get_daily_prices_many(list(codes), start, end)
     return {c: [_bar_dict(r) for r in _trade_day_rows(rows_map.get(c) or [])[-limit:]] for c in codes}
@@ -1081,9 +1094,8 @@ def build_technical_bars_multi(code: str, as_of_datetime: str,
     读缓存零网络。诊股/评分复用本函数（缩小 limit 控 token）。
     """
     from app.data.cache import get_daily_prices, get_period_prices
-    from app.market.calendar import resolve_trade_day
 
-    end = resolve_trade_day(as_of_datetime[:10])[0]
+    end = _tech_end_day(as_of_datetime)
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     daily = [_bar_dict(r) for r in _trade_day_rows(get_daily_prices(code, start, end))]
     weekly = [_bar_dict(r) for r in _trade_day_rows(get_period_prices("weekly_price_cache", code, "1970-01-01", end))]
@@ -1100,9 +1112,8 @@ def build_technical_bars_many_multi(codes: list[str], as_of_datetime: str,
                                     monthly_limit: int = 36) -> dict[str, dict]:
     """批量版：一次查多只日/周/月K，返回 {code: {bars, weekly_bars, monthly_bars}}。"""
     from app.data.cache import get_daily_prices_many, get_period_prices_many
-    from app.market.calendar import resolve_trade_day
 
-    end = resolve_trade_day(as_of_datetime[:10])[0]
+    end = _tech_end_day(as_of_datetime)
     start = (date.fromisoformat(end) - timedelta(days=800)).isoformat()
     daily_map = get_daily_prices_many(list(codes), start, end)
     weekly_map = get_period_prices_many("weekly_price_cache", list(codes), "1970-01-01", end)
@@ -1371,7 +1382,8 @@ _FUNDFLOW_ANALYSIS_SYSTEM = (
     "day_pct=本窗口量占全天%、cum_pct=累计量占全天%——据此判断量价/量额关系："
     "放量上攻（量增价升）/缩量回调（量缩价跌）/量价背离（价升量缩或价跌量增）、"
     "成交额与量同步或背离（放量但额不增、价涨量缩额滞）。\n"
-    "   - 天窗口（window 如 '1d'/'7d'/'30d'）：points 为多日逐日五档序列（'7d'/'30d' 为每 N 个交易日聚合桶），"
+    "   - 天窗口（window 如 'day'/'week'/'month'）：points 为多日逐日五档序列"
+    "（'week'=按自然周、'month'=按自然月聚合，与 K 线周线/月线对齐），"
     "每个点含 date 起止标签、五档净额 netamount/main_net/super_large_net/large_net/medium_net/small_net/xs_net、"
     "buy_amount=买盘成交额/sell_amount=卖盘成交额；price=该点收盘价、pct_chg=当日涨跌幅（聚合桶取末交易日）。"
     "total_net=窗口内累计净流入、day_net=最近交易日净流入。\n"
@@ -1440,7 +1452,7 @@ _BATCH_FUNDFLOW_SYSTEM = (
     "points 为分时量价：price=窗口末收盘、volume=窗口累计量、amount=窗口累计成交额、"
     "cum=累计量、cum_amount=累计成交额、day_pct/cum_pct=窗口/累计量占全天%"
     "——据此判断量额/量价关系（成交额放大上攻/萎缩回调/量额背离、成交额与量背离），判断资金强弱优先看金额（成交额）。"
-    "天窗口为多日逐日/聚合桶，"
+    "天窗口为多日逐日（day）/自然周（week）/自然月（month）聚合，"
     "含 netamount/main_net/各档净额/buy_amount/sell_amount、price/pct_chg 收盘价与涨跌幅；"
     "指数（mode='index'）天窗口无五档，points 为逐日量价 close/volume/amount/pct_chg）。\n"
     "2. correlation 五分类判断「资金×股价」：资金与股价同步涨 → positive（同涨）；同步跌 → negative（同跌）；"
@@ -1540,13 +1552,24 @@ def _minute_price_map(code: str, window: int) -> dict:
 
 
 def _norm_flow_window(window: int | str) -> str:
-    """资金流窗口归一化为统一字符串（'1m'…'30d'）。兼容 int 旧值（15 → '15m'）。"""
-    _FLOW_WINDOWS = ("1m", "5m", "15m", "30m", "1d", "7d", "30d")
+    """资金流窗口归一化为统一字符串：分钟 '1m'/'5m'/'15m'/'30m' + 天窗口 'day'/'week'/'month'。
+
+    天窗口与 K 线周期对齐：day=日（逐日）、week=周（每 5 个交易日聚合桶）、
+    month=月（每 20 个交易日聚合桶）。兼容 int 旧值（15 → '15m'）与旧天窗口名
+    （'1d'→'day'、'7d'→'week'、'30d'→'month'，读取旧落库报告时归一化命中）。
+    """
+    _FLOW_WINDOWS = ("1m", "5m", "15m", "30m", "day", "week", "month")
     if isinstance(window, int):
         return f"{window}m" if window in (1, 5, 15, 30) else "15m"
     s = str(window).strip().lower()
     if s in _FLOW_WINDOWS:
         return s
+    if s == "1d":
+        return "day"
+    if s == "7d":
+        return "week"
+    if s == "30d":
+        return "month"
     if s.isdigit() and int(s) in (1, 5, 15, 30):
         return f"{s}m"
     return "15m"
@@ -1568,12 +1591,44 @@ def _day_flow_point(r):
     }
 
 
-def _bucket_day_flows(rows, bucket, price_map=None):
-    """逐日五档序列按 N 个交易日聚合桶（与前端 bucketFlowDays 同构）；price_map={date:{price,pct_chg}}。
-    bucket<=1 逐日原样输出；否则每 N 日求和，price/pct_chg 取桶末交易日。"""
+# 天窗口 → 聚合模式（与 K 线周期对齐：day=日逐日、week=自然周、month=自然月）
+_DAY_MODES = {"day": "day", "week": "week", "month": "month"}
+# 天窗口 → AI 发送量上限（与 K 线技术面对齐：日K 120 根 / 周K 60 根 / 月K 36 根）
+_DAY_AI_LIMITS = {"day": 120, "week": 60, "month": 36}
+# 天窗口 → 读取历史自然日窗口（覆盖新浪 500 条 ≈ 2 年）
+_DAY_LOOKBACK_DAYS = 760
+
+
+def _day_mode(w: str) -> str:
+    """天窗口字符串 → 聚合模式（day/week/month；非法回退 day）。"""
+    return _DAY_MODES.get(str(w).lower().strip(), "day")
+
+
+def _day_ai_limit(w: str) -> int:
+    """天窗口 → AI 发送桶数上限（day=120/week=60/month=36；非法回退 120）。"""
+    return _DAY_AI_LIMITS.get(str(w).lower().strip(), 120)
+
+
+def _natural_group_key(date_str: str, mode: str) -> str:
+    """自然周/自然月分组键：week → 'YYYY-Www'（ISO 周，周一为一周起始）；month → 'YYYY-MM'。"""
+    from datetime import date as _date
+
+    d = _date.fromisoformat(str(date_str)[:10])
+    if mode == "month":
+        return f"{d.year:04d}-{d.month:02d}"
+    iso = d.isocalendar()
+    return f"{iso[0]:04d}-W{iso[1]:02d}"
+
+
+def _bucket_day_flows(rows, mode, price_map=None):
+    """逐日五档序列按聚合模式分组（与前端 bucketFlowDays 同构）。
+
+    mode='day'：逐日原样；'week'：按自然周（ISO 周，周一起始）求和；'month'：按自然月求和。
+    price/pct_chg 取分组末交易日；分组标签为「组首日期~组末日期（月日）」。
+    """
     if not rows:
         return []
-    if bucket <= 1:
+    if mode == "day":
         out = []
         for r in rows:
             p = _day_flow_point(r)
@@ -1582,9 +1637,13 @@ def _bucket_day_flows(rows, bucket, price_map=None):
                 p.update(pm[r["trade_date"]])
             out.append(p)
         return out
+    buckets: dict[str, list] = {}
+    for r in rows:
+        key = _natural_group_key(r["trade_date"], mode)
+        buckets.setdefault(key, []).append(r)
     out = []
-    for i in range(0, len(rows), bucket):
-        g = rows[i:i + bucket]
+    for key in sorted(buckets):
+        g = buckets[key]
         last = g[-1]
         p = {"date": g[0]["trade_date"] + (f"~{last['trade_date'][5:]}" if len(g) > 1 else "")}
         for k in ("netamount", "main_net", "super_large_net", "large_net", "medium_net",
@@ -1598,21 +1657,28 @@ def _bucket_day_flows(rows, bucket, price_map=None):
     return out
 
 
-def _bucket_day_prices(rows, bucket):
-    """指数逐日量价（close/volume/amount）按 N 个交易日聚合桶（与 _bucket_day_flows 同构）。
-    bucket<=1 逐日原样输出；否则每 N 日 volume/amount 求和、close/pct_chg 取桶末交易日。"""
+def _bucket_day_prices(rows, mode):
+    """指数逐日量价（close/volume/amount）按聚合模式分组（与 _bucket_day_flows 同构）。
+
+    mode='day'：逐日原样；'week'：按自然周求和；'month'：按自然月求和；
+    volume/amount 求和、close/pct_chg 取分组末交易日。
+    """
     if not rows:
         return []
     rows = [dict(r) for r in rows]
-    if bucket <= 1:
+    if mode == "day":
         return [
             {"date": r["trade_date"], "close": r.get("close"), "volume": r.get("volume"),
              "amount": r.get("amount"), "pct_chg": r.get("pct_change")}
             for r in rows
         ]
+    buckets: dict[str, list] = {}
+    for r in rows:
+        key = _natural_group_key(r["trade_date"], mode)
+        buckets.setdefault(key, []).append(r)
     out = []
-    for i in range(0, len(rows), bucket):
-        g = rows[i:i + bucket]
+    for key in sorted(buckets):
+        g = buckets[key]
         last = g[-1]
         vols = [float(r["volume"]) for r in g if r["volume"] is not None]
         amts = [float(r["amount"]) for r in g if r.get("amount") is not None]
@@ -1648,7 +1714,9 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
     """个股资金流 AI 分析上下文（统一时间窗）。
 
     - 分钟窗口（'1m'/'5m'/'15m'/'30m'）：当日分时五档序列 + 分时股价对齐同一窗口。
-    - 天窗口（'1d'/'7d'/'30d'）：多日逐日五档（'7d'/'30d' 聚合桶）+ 每日收盘价日K。
+    - 天窗口（'day'/'week'/'month'）：多日逐日五档（week=自然周、month=自然月聚合，与 K 线
+      周线/月线对齐）+ 每日收盘价日K。发送量与 K 线对齐：day 最多 120 桶 / week 60 / month 36
+      （数据源不足时有多少发多少）。
     - with_price=False：分钟模式跳过新浪分时股价拉取（联网），供批量分析多股时零网络。
     指数（is_index）：无五档 → 腾讯量价，points 带 price/volume/amount/cum/cum_amount/day_pct/cum_pct，
     成交额由 _index_amount_scale 派生（与组合页 combo_index_volume 同口径）。
@@ -1663,7 +1731,7 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
     from app.market.calendar import resolve_trade_day
 
     w = _norm_flow_window(window)
-    is_day = w.endswith("d")
+    is_day = w in ("day", "week", "month")
     today, _ = resolve_trade_day(None)
     out = {"mode": "stock", "window": w, "date": today, "points": []}
     inst = get_instrument(code)
@@ -1671,7 +1739,8 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
     if getattr(inst, "is_index", False):
         scale = _index_amount_scale(code)
         if is_day:
-            start = (date.fromisoformat(today) - timedelta(days=45)).isoformat()
+            mode = _day_mode(w)
+            start = (date.fromisoformat(today) - timedelta(days=_DAY_LOOKBACK_DAYS)).isoformat()
             rows = [dict(r) for r in get_daily_prices(code, start, today)]
             for r in rows:
                 if r.get("volume") is not None:
@@ -1679,7 +1748,7 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
             if not rows:
                 return out
             out["mode"] = "index"
-            out["points"] = _bucket_day_prices(rows, int(w[:-1]))
+            out["points"] = _bucket_day_prices(rows, mode)
             out["code"] = code
             return out
         raw = get_index_intraday(code, today)
@@ -1709,14 +1778,22 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
         if bands:
             out["bands"] = bands
     if is_day:
-        start = (date.fromisoformat(today) - timedelta(days=45)).isoformat()
+        mode = _day_mode(w)
+        limit_buckets = _day_ai_limit(w)
+        start = (date.fromisoformat(today) - timedelta(days=_DAY_LOOKBACK_DAYS)).isoformat()
         rows = get_daily_fundflows(code, start, today)
         if not rows:
             return out
+        # 与 K 线对齐的发送量：只发最近 N 个桶（day=120 交易日 / week=60 周 / month=36 月）。
+        # 自然周/月按每桶约 5/20 个交易日估算截断行数；数据源不足时有多少发多少。
+        est_days_per_bucket = {"day": 1, "week": 5, "month": 20}.get(mode, 1)
+        max_rows = limit_buckets * est_days_per_bucket
+        if len(rows) > max_rows:
+            rows = rows[-max_rows:]
         price_map = {}
         for r in get_daily_prices(code, start, today):
             price_map[r["trade_date"]] = {"price": r["close"], "pct_chg": r["pct_change"]}
-        out["points"] = _bucket_day_flows(rows, int(w[:-1]), price_map)
+        out["points"] = _bucket_day_flows(rows, mode, price_map)
         nets = [float(r["netamount"]) for r in rows if r["netamount"] is not None]
         out["total_net"] = round(sum(nets), 0)
         out["code"] = code
@@ -2078,7 +2155,7 @@ def analyze_batch_fundflow(tags: list[str] | None = None, window: int | str = "1
     except Exception:  # noqa: BLE001 组合相关性落库失败不阻断批量
         pass
     logger.info("[AI资金流-批量] %s %s%s 分析 %d/%d 只",
-                scope, ctx["window"], "天" if w.endswith("d") else "分钟",
+                scope, ctx["window"], "天" if w in ("day", "week", "month") else "分钟",
                 len(reports), ctx["covered"])
     return {
         "mode": ctx["mode"], "window": w, "date": ctx["date"],
@@ -2195,7 +2272,8 @@ _TECH_SYSTEM = (
     "2. bars=最近约 120 个交易日、weekly_bars=最近约 60 周、monthly_bars=最近约 36 个月——"
     "日K看短线、周K看中期、月K看长期，必须结合三个级别判断趋势与关键位。\n"
     "3. 你解读的是「截至 as_of 对应交易日」的价格结构（K 线已截断到该交易日收盘），不要冒充盘中、"
-    "不要臆测 as_of 之后的数据。\n"
+    "不要臆测 as_of 之后的数据。若当前时间早于开盘（未开盘），K线已截断到上一交易日\n"
+    "（见 bars_as_of），不要期待当日K线，也不要把未开盘日当作数据缺失。\n"
     "4. 若日/周/月任一周期为空（该股无该周期K线数据），summary 必须明确写出缺少哪个周期"
     "（如「缺少周K/月K数据」），不得假装有该周期数据；三套全空时明确说无法分析技术面，不要硬下结论。\n"
     "[输出要求]\n"
@@ -2290,6 +2368,7 @@ _BATCH_TECH_SYSTEM = (
     "pct_change（涨跌幅%，周/月K为段末当日涨跌幅，可能为 null）。组合内每只根数较少："
     "日K约 60、周K约 36、月K约 24——日K看短线、周K看中期、月K看长期，结合判断。\n"
     "2. 解读「截至 as_of 对应交易日」的价格结构，不要冒充盘中；三套 K 线均为空说明该标的无K线数据，"
+    "若当前时间早于开盘（未开盘），K线已截断到上一交易日（见 bars_as_of）。三套 K 线均为空说明该标的无K线数据，\n"
     "明说无法分析，不要硬下结论。\n"
     "[输出要求]\n"
     "1. 对 stocks 中每只 code 输出：trend_short / trend_mid（up/down/range）、summary（一句话结论）、"
@@ -2522,6 +2601,7 @@ def analyze_technical(code: str, system_prompt: str | None = None, intensity: st
     _ensure_tech_kline(code)
     ctx = {
         "code": code, "name": _stock_display_name(code), "as_of_datetime": as_of,
+        "bars_as_of": _tech_end_day(as_of),
         **build_technical_bars_multi(code, as_of),
     }
     schema = {k: v for k, v in _TECH_SCHEMA.items() if intensity == "deep" or k != "html"}
@@ -2749,6 +2829,7 @@ def analyze_batch_technical(tags: list[str] | None = None, codes: list[str] | No
         [m["code"] for m in members], as_of, daily_limit=60, weekly_limit=36, monthly_limit=24)
     ctx = {
         "as_of_datetime": as_of,
+        "bars_as_of": _tech_end_day(as_of),
         "stocks": [
             {"code": m["code"], "name": m["name"], **multi_map.get(m["code"], {})}
             for m in members
@@ -2975,13 +3056,18 @@ def get_stock_fundflow_report(code: str, window: str | None = None) -> dict | No
     from app.models.db import get_conn
 
     if window:
-        sql, params = (
+        # 新旧窗口名兼容：'day'/'week'/'month' 匹配旧 '1d'/'7d'/'30d' 落库报告
+        norm = _norm_flow_window(window)
+        alias = {"day": "1d", "week": "7d", "month": "30d"}.get(norm)
+        sql = (
             """SELECT code, trade_date, source, window, correlation, summary, main_force, rhythm,
                       divergence, alerts, conclusion, html, model_name
-               FROM ai_fundflow_reports WHERE code=? AND window=?
-               ORDER BY trade_date DESC, updated_at DESC LIMIT 1""",
-            (code, window),
+               FROM ai_fundflow_reports
+               WHERE code=? AND (window=? OR window=?)
+               ORDER BY CASE window WHEN ? THEN 0 WHEN ? THEN 1 ELSE 2 END,
+                        trade_date DESC, updated_at DESC LIMIT 1"""
         )
+        params = (code, norm, alias, norm, alias) if alias else (code, norm, norm, norm, norm)
     else:
         sql, params = (
             """SELECT code, trade_date, source, window, correlation, summary, main_force, rhythm,

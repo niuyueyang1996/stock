@@ -23,7 +23,9 @@ RULES: dict[str, dict] = {
     },
     "hk": {
         "currency": "HKD", "can_trade": True, "has_financials": True,
-        "has_fundflow": False, "participates_fundflow": False,
+        # 港股无逐笔：资金流由腾讯分时分钟量价按价向派生（tick rule），近5日窗口
+        "has_fundflow": True, "participates_fundflow": False,
+        "has_multi_day_fundflow": True,
         "source_name": "sina", "tag": "港股",
     },
     "etf": {

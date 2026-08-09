@@ -34,6 +34,7 @@ class Instrument:
     has_financials: bool = False
     has_fundflow: bool = False
     participates_fundflow: bool = False
+    has_multi_day_fundflow: bool = False   # 港股：分时派生近5日窗口（覆盖漏刷日）
     source_name: str = "sina"
     tag: str = "个股"
     has_intraday_quote: bool = False   # 是否有分时量价（指数=腾讯 mkline；个股分时是五档非量价）
@@ -113,6 +114,18 @@ class Instrument:
     def fundflow_bands(self) -> dict | None:
         """当日自适应分档阈值 {p50,p80,p95}，默认无。"""
         return None
+
+    def fundflow_days(self):
+        """多日逐日资金流（港股分时近5日窗口）。默认无。"""
+        return []
+
+    def fundflow_history(self, start: str, end: str) -> list:
+        """日级资金流历史（A股/ETF 新浪回填）。默认无。"""
+        return []
+
+    def fundflow_intraday_by_date(self) -> dict:
+        """多日分时五档 {date: [FundflowPoint]}（港股）。默认无。"""
+        return {}
 
     def dividend_per_share(self) -> float | None:
         """最近年报每股股息（元），默认无。"""

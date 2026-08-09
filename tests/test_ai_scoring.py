@@ -324,8 +324,8 @@ def test_maybe_auto_score_daily_no_model_invalidates(monkeypatch):
 
 
 def test_maybe_auto_score_daily_with_model_spawns(monkeypatch):
-    # 还原真实 maybe_auto_score_daily，验证「有激活模型且当日有交易 → 起线程打分」
-    # 今天是打分目标 → mock 已收盘，放行起线程（否则盘中守卫会只失效不打）
+    # 还原真实 maybe_auto_score_daily，验证「有激活模型且当日有交易 → 入队 AI 车道打分」
+    # 今天是打分目标 → mock 已收盘，放行入队（否则盘中守卫会只失效不打）
     monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     monkeypatch.setattr(svc, "maybe_auto_score_daily", _REAL_MAYBE_AUTO)
     _seed_trade("600000", qty=100)
@@ -333,16 +333,14 @@ def test_maybe_auto_score_daily_with_model_spawns(monkeypatch):
     _activate_mock_model()
     calls = []
 
-    # 用同步 Thread 替身，保证确定性地执行后台打分目标（不依赖线程调度）
-    class _SyncThread:
-        def __init__(self, target, args=(), daemon=False):
-            self._target = target
-            self._args = args
+    # 用同步 start_simple 替身，保证确定性地执行入队任务（不依赖 worker 线程调度）
+    from app.services import job_runners
 
-        def start(self):
-            self._target(*self._args)
+    def _sync_start(kind, label, fn, step=None):
+        fn()
+        return "mock-job"
 
-    monkeypatch.setattr(threading, "Thread", _SyncThread)
+    monkeypatch.setattr(job_runners, "start_simple", _sync_start)
     monkeypatch.setattr(svc, "score_daily", lambda date_: calls.append(date_) or {"score_date": date_, "report": {}})
 
     svc.maybe_auto_score_daily(d)

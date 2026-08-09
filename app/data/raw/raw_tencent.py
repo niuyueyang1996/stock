@@ -213,3 +213,44 @@ def kline(symbol: str, period: str = "day", start: str = "", end: str = "",
     # 部分行会多带第 7 列（成交额等扩展字段），统一截取前 6 列
     rows = [r[:6] for r in rows]
     return pd.DataFrame(rows, columns=["date", "open", "close", "high", "low", "volume"])
+def hk_intraday(code: str) -> list[dict]:
+    """港股近5个交易日分时（腾讯 appstock/app/day/query）。
+
+    腾讯仅提供分钟级「累计量额」，无逐笔买卖方向；返回
+    [{date: 'YYYY-MM-DD', prec: 昨收, points: [(time 'HH:MM', price, cum_vol, cum_amount)]}]
+    最新在前。失败/空返回 []。
+    """
+    symbol = f"hk{code}"
+    resp = requests.get(
+        "https://web.ifzq.gtimg.cn/appstock/app/day/query",
+        params={"code": symbol},
+        headers=HTTP_HEADERS,
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    node = (resp.json().get("data") or {}).get(symbol) or {}
+    out = []
+    for item in node.get("data") or []:
+        d = str(item.get("date") or "")
+        if len(d) != 8:
+            continue
+        date_s = f"{d[0:4]}-{d[4:6]}-{d[6:8]}"
+        try:
+            prec = float(item.get("prec") or 0) or 0.0
+        except (TypeError, ValueError):
+            prec = 0.0
+        points = []
+        for row in item.get("data") or []:
+            f = str(row).split()
+            if len(f) < 4:
+                continue
+            try:
+                price = float(f[1])
+                cum_vol = float(f[2])
+                cum_amt = float(f[3])
+            except (TypeError, ValueError):
+                continue
+            points.append((f[0], price, cum_vol, cum_amt))
+        if points:
+            out.append({"date": date_s, "prec": prec, "points": points})
+    return out

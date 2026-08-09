@@ -19,6 +19,7 @@ logger = logging.getLogger("jobs")
 LANE_REFRESH = "refresh"
 LANE_AI = "ai"
 REFRESH_WORKERS = 6  # 与含资金流时的股内并发上限一致，避免源站打爆
+AI_WORKERS = 8  # AI 车道并发：多个任务并行调模型（OpenAI 兼容接口无全局锁）
 RECENT_MAX = 24
 
 
@@ -192,10 +193,11 @@ def _ensure_workers() -> None:
             target=_worker_loop, args=(LANE_REFRESH,),
             daemon=True, name=f"job-refresh-{i}",
         ).start()
-    threading.Thread(
-        target=_worker_loop, args=(LANE_AI,),
-        daemon=True, name="job-ai-0",
-    ).start()
+    for i in range(AI_WORKERS):
+        threading.Thread(
+            target=_worker_loop, args=(LANE_AI,),
+            daemon=True, name=f"job-ai-{i}",
+        ).start()
 
 
 def _worker_loop(lane: str) -> None:

@@ -1786,10 +1786,16 @@ function asOfEmptyHint(meta, kind) {
   /** kind: 'flow' | 'valuation' */
   if (!meta) return '';
   if (kind === 'flow') {
+    if (meta.market_status === 'pre_open') {
+      return `今日尚未开盘，已自动按上一交易日 ${meta.as_of}。该日没有分时数据（当时未刷新采集），可切到「1天」看近45日走势。`;
+    }
     if (meta.as_of_adjusted) {
       return `所选日期非交易日，已自动切到 ${meta.as_of}。该日没有分时数据（当时未刷新采集），可切到「1天」看近45日走势。`;
     }
     return `${meta.as_of || '该日'}没有分时数据（当时未刷新采集），可切到「1天」看近45日走势。`;
+  }
+  if (meta.market_status === 'pre_open') {
+    return `今日尚未开盘，估值按上一交易日 ${meta.as_of}。这天还没有估值数据，试试其它日期或做一次完整更新。`;
   }
   if (meta.as_of_adjusted) {
     return `所选日期非交易日，已自动切到 ${meta.as_of}。这天还没有估值数据，试试其它日期或做一次完整更新。`;
@@ -1836,6 +1842,8 @@ function setAsOfHint(container, meta) {
     hint.textContent = meta.as_of_adjusted
       ? `截至 ${meta.as_of}（已从非交易日自动调整）`
       : `截至 ${meta.as_of}`;
+  } else if (meta.market_status === 'pre_open') {
+    hint.textContent = `今日未开盘，分时/估值按最近交易日 ${meta.as_of}`;
   } else if (meta.as_of_adjusted) {
     hint.textContent = `分时按最近交易日 ${meta.as_of}`;
   } else {

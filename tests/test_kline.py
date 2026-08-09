@@ -268,21 +268,79 @@ def test_process_stock_financials_only_no_kline_crash():
     assert entry.get("fetched", 0) >= 0
 
 
-def test_sync_realtime_quote_skips_non_trade_day():
-    """非交易日（周末）不写当日日K行：源会把昨收当现价（0%），写库会产生假K线。"""
+def _quote_instrument(code, ts):
+    """实时行情日期可控的假标的（ts=行情自带日期，用于「行情日期≠今天」开盘判断测试）。"""
+    from types import SimpleNamespace
+
+    from app.data.base import Quote
+
+    def quote():
+        return Quote(code=code, name="模拟", price=10.0, pct_chg=0.5, prev_close=9.95,
+                     open=9.96, high=10.1, low=9.9, volume=100000, amount=1000000, ts=ts)
+
+    return SimpleNamespace(source_name="mock", is_index=False, quote=quote)
+
+
+def test_sync_realtime_quote_skips_when_quote_date_not_today(monkeypatch):
+    """实时行情日期≠今天（未开盘/非交易日/节假日，源返回上一交易日）→ 不写当日假K。"""
     from app.data.cache import get_daily_prices
     from app.services.refresh import _sync_realtime_quote
 
-    saturday = datetime(2026, 8, 8, 10, 0)          # 2026-08-08 周六
-    q = _sync_realtime_quote("600000", saturday)
+    # 行情停在上一交易日（周五）：周六刷新、周一未开盘刷新都不写当日行
+    monkeypatch.setattr(refresh, "get_instrument",
+                        lambda code: _quote_instrument(code, "2026-08-07 15:00:00"))
+    q = _sync_realtime_quote("600000", datetime(2026, 8, 8, 10, 0))      # 周六
     assert q is None
-    assert get_daily_prices("600000", "2026-08-08", "2026-08-08") == []
-    # 交易日（周五）正常写入当日行
-    friday = datetime(2026, 8, 7, 15, 30)
-    q2 = _sync_realtime_quote("600000", friday)
-    assert q2 is not None
-    rows = get_daily_prices("600000", "2026-08-07", "2026-08-07")
-    assert len(rows) == 1 and rows[0]["trade_date"] == "2026-08-07"
+    q2 = _sync_realtime_quote("600000", datetime(2026, 8, 10, 8, 30))    # 周一 08:30 未开盘
+    assert q2 is None
+    assert get_daily_prices("600000", "2026-08-08", "2026-08-10") == []
+
+
+def test_sync_realtime_quote_writes_when_quote_date_today(monkeypatch):
+    """行情日期=今天（盘中/已收盘）→ 正常写当日行。"""
+    from app.data.cache import get_daily_prices
+    from app.services.refresh import _sync_realtime_quote
+
+    monkeypatch.setattr(refresh, "get_instrument",
+                        lambda code: _quote_instrument(code, "2026-08-10 15:00:00"))
+    q = _sync_realtime_quote("600000", datetime(2026, 8, 10, 15, 30))
+    assert q is not None
+    rows = get_daily_prices("600000", "2026-08-10", "2026-08-10")
+    assert len(rows) == 1 and rows[0]["trade_date"] == "2026-08-10"
+
+
+def test_sync_daily_bars_filters_pre_open_today_bar(monkeypatch):
+    """数据源开盘前返回当日占位行（昨收当现价）时，sync_daily_bars 不写当日。"""
+    from app.data.cache import get_daily_prices
+    from app.services.refresh import sync_daily_bars
+
+    fri = date(2026, 8, 7)
+    mon = date(2026, 8, 10)
+
+    class _FakeInst:
+        source_name = "mock"
+
+        def daily_bars(self, start, end):
+            return _bars((fri.isoformat(), 10.0), (mon.isoformat(), 10.0))  # 周一占位行
+
+    monkeypatch.setattr(refresh, "get_instrument", lambda code: _FakeInst())
+    out = sync_daily_bars("601111", datetime(2026, 8, 10, 8, 30))
+    assert out["reason"] == "ok"
+    dates = [r["trade_date"] for r in get_daily_prices("601111", "2000-01-01", "2999-12-31")]
+    assert fri.isoformat() in dates
+    assert mon.isoformat() not in dates
+
+
+def test_kline_api_returns_asof_fields(client):
+    """K线 API 返回有效交易日 as_of / market_status（前端「未开盘」提示用）。"""
+    _seed_daily("601111", "2026-08-07", 10.0)
+    r = client.get("/api/stocks/601111/kline?period=day")
+    assert r.status_code == 200, r.text
+    d = r.json()["data"]
+    assert d["market_status"] in ("open", "pre_open", "not_trade_day")
+    assert d["as_of"]
+    assert d["as_of_adjusted"] in (True, False)
+    assert d["period"] == "day"
 
 
 # ============================================================ 非交易日假K：读取过滤 / 存量清理 / 写入兜底

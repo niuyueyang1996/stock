@@ -164,10 +164,10 @@
     let lastName = '';
     let lastLive = {};
     let lastFx = null;          // 港股当前汇率（人民币折算显示用）
-    // 资金流统一时间窗：'1m'/'5m'/'15m'/'30m'（当日分时）+ '1d'/'7d'/'30d'（多日聚合桶）
-    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', '1d', '7d', '30d'];
+    // 资金流统一时间窗：'1m'/'5m'/'15m'/'30m'（当日分时）+ 'day'/'week'/'month'（多日聚合桶，与 K 线周期对齐）
+    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', 'day', 'week', 'month'];
     const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
-                                '1d': '1天', '7d': '7天', '30d': '30天' };
+                                'day': '日', 'week': '周', 'month': '月' };
     let flowWindow = '15m';     // 当前选中窗口（绘图与 AI 分析共用）
     let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（估值+分时）
 
@@ -313,15 +313,21 @@
       try {
         const d = await api('/stocks/' + encodeURIComponent(currentCode) + '/kline?period=' + klinePeriod, { silent: true });
         const bars = (d && d.bars) || [];
+        const ms = (d && d.market_status) || '';
+        const asOf = (d && d.as_of) || '';
         klineChart(el, bars, { defaultShow: 60 });   // 日/周/月K统一默认展示 60 根，可缩放看全部
-        if (meta) meta.textContent = bars.length ? bars.length + ' 根' : '';
+        if (meta) {
+          let mt = bars.length ? bars.length + ' 根' : '';
+          if (asOf) mt += (mt ? ' · ' : '') + (ms === 'pre_open' ? '今日未开盘 截至 ' : '截至 ') + asOf.slice(5);
+          meta.textContent = mt;
+        }
         if (bars.length) {
           const b = bars[bars.length - 1];
           const chg = b.pct_change != null && b.pct_change !== ''
             ? (Number(b.pct_change) >= 0 ? '+' : '') + Number(b.pct_change).toFixed(2) + '%'
             : '';
           const tone = chg && Number(b.pct_change) >= 0 ? 'up' : chg ? 'down' : 'hi';
-          setPanelSummary('techAiPanel', '最新 ' + (b.date || '').slice(5) + ' 收 ' + fmtNum(b.close)
+          setPanelSummary('techAiPanel', (ms === 'pre_open' ? '截至 ' : '最新 ') + (b.date || '').slice(5) + ' 收 ' + fmtNum(b.close)
             + (chg ? sumSep() + sumV(chg, tone) : ''));
         } else {
           setPanelSummary('techAiPanel', '暂无K线数据');
@@ -1197,7 +1203,7 @@
             indexVolumePrice(intraEl, pts, FLOW_WINDOW_LABEL[w] + '分时', names);
           } else {
             if (!daily.length) { clearChart(intraEl); return; }
-            const days = bucketIndexVolume(daily, parseInt(w, 10));
+            const days = bucketIndexVolume(daily, flowBucket(w));
             indexVolumePrice(intraEl, days, FLOW_WINDOW_LABEL[w], names);
           }
         };
@@ -1282,7 +1288,7 @@
           fundflowIntraday(intraEl, pts, parseInt(w, 10));
           fundflowBuySell(bsEl, pts, parseInt(w, 10));
         } else {
-          const days = bucketFlowDays(hist, parseInt(w, 10));
+          const days = bucketFlowDays(hist, flowBucket(w));
           if (!days.length) {
             intraEmpty.style.display = 'block';
             clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);

@@ -13,15 +13,21 @@ from app.data.cache import get_daily_price, get_latest_daily_price, get_prev_clo
 
 
 def get_quote(code: str, now: datetime | None = None, stale: dict | None = None) -> dict:
-    """读取缓存行情，返回行情 dict 与可选 stale 标记。"""
+    """读取缓存行情，返回行情 dict 与可选 stale 标记。
+
+    交易日未开盘（<09:15 集合竞价）/非交易日：当日无有效行情，即使缓存里有当日行
+    （多为把昨收当现价的占位/过期快照），也回退最近一条并标记 stale。
+    """
+    from app.market.calendar import has_market_opened
+
     now = now or datetime.now()
     today = now.date().isoformat()
 
     row = get_daily_price(code, today)
-    if row:
+    if row and has_market_opened(now):
         return _row_to_quote(row, today)
 
-    # 当日无数据 → 回退最近一条并标记 stale
+    # 当日无数据/未开盘 → 回退最近一条并标记 stale
     fallback = get_latest_daily_price(code)
     if stale is not None:
         stale["value"] = True

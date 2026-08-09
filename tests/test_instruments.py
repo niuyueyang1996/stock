@@ -97,7 +97,9 @@ def test_get_instrument_index_untradeable():
 def test_rules_by_kind():
     assert MockInstrument("600000", "ashare").tag == "个股"
     hk = MockInstrument("00700", "hk")
-    assert hk.currency == "HKD" and not hk.has_fundflow and not hk.participates_fundflow
+    # 港股资金流已接入（腾讯分时派生近5日）；仍不参与组合穿透求和
+    assert hk.currency == "HKD" and hk.has_fundflow and not hk.participates_fundflow
+    assert hk.has_multi_day_fundflow
     etf = MockInstrument("515080", "etf")
     assert etf.tag == "ETF" and etf.participates_fundflow and etf.has_fundflow
     idx = MockInstrument("000300", "index")

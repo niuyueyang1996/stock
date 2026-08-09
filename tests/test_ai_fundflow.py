@@ -150,39 +150,87 @@ def test_build_fundflow_context_stock_day_1d():
     _seed_daily_price("600000", d0.isoformat(), 10.0, 0.5)
     _seed_daily_price("600000", d1.isoformat(), 10.2, 2.0)
     _seed_daily_price("600000", d2.isoformat(), 10.1, -1.0)
-    ctx = ai_svc.build_fundflow_analysis_context("600000", "1d")
-    assert ctx["window"] == "1d"
-    assert len(ctx["points"]) == 3                     # 1 天桶 = 逐日原样
+    ctx = ai_svc.build_fundflow_analysis_context("600000", "day")
+    assert ctx["window"] == "day"
+    assert len(ctx["points"]) == 3                     # 日桶 = 逐日原样
     assert ctx["points"][1]["netamount"] == -0.4e6
     assert ctx["points"][1]["price"] == 10.2 and ctx["points"][1]["pct_chg"] == 2.0
     assert ctx["total_net"] == round(1.0e6 - 0.4e6 + 0.5e6, 0)
     assert ctx["day_net"] == 0.5e6                     # 最近交易日净流入
 
 
-def test_build_fundflow_context_stock_day_7d_buckets():
-    from datetime import timedelta
+def test_build_fundflow_context_stock_day_week_buckets():
+    from datetime import date, timedelta
 
+    # 用固定日期直接测 _bucket_day_flows 自然周聚合（同 ISO 周 → 1 点，跨周 → 2 点）
+    rows = [
+        {"trade_date": "2026-03-02", "netamount": 1.0e6, "main_net": 0.8e6,
+         "super_large_net": 0.5e6, "large_net": 0.3e6, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 2.0e6, "sell_amount": 1.0e6},
+        {"trade_date": "2026-03-03", "netamount": -0.4e6, "main_net": -0.3e6,
+         "super_large_net": -0.2e6, "large_net": -0.1e6, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 1.0e6, "sell_amount": 1.4e6},
+        {"trade_date": "2026-03-05", "netamount": 0.5e6, "main_net": 0.4e6,
+         "super_large_net": 0.3e6, "large_net": 0.1e6, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 1.5e6, "sell_amount": 1.0e6},
+        {"trade_date": "2026-03-09", "netamount": 0.3e6, "main_net": 0.2e6,
+         "super_large_net": 0.2e6, "large_net": 0.0, "medium_net": 0.0,
+         "small_net": 0.0, "xs_net": 0.0, "buy_amount": 1.0e6, "sell_amount": 0.7e6},
+    ]
+    pm = {"2026-03-05": {"price": 10.1, "pct_chg": -1.0},
+          "2026-03-09": {"price": 10.3, "pct_chg": 1.5}}
+    pts = ai_svc._bucket_day_flows(rows, "week", pm)
+    assert len(pts) == 2                    # 03-02~03-05 同一 ISO 周；03-09 下一周
+    w1 = pts[0]
+    assert w1["date"].startswith("2026-03-02") and w1["date"].endswith("03-05")
+    assert w1["netamount"] == round(1.0e6 - 0.4e6 + 0.5e6, 0)
+    assert w1["price"] == 10.1 and w1["pct_chg"] == -1.0     # 组末 03-05
+    w2 = pts[1]
+    assert w2["date"].startswith("2026-03-09") and w2["netamount"] == round(0.3e6, 0)
+    assert w2["price"] == 10.3 and w2["pct_chg"] == 1.5
+
+    # 经 build_fundflow_analysis_context 端到端：只种过去日期，避免未来日被范围排除
     today = _asof_today_date()
-    # 5 天数据，'7d' 桶 → 1 个点（5 天求和），price/pct_chg 取末交易日
-    days = [(1.0e6, 10.0, 0.5), (-0.4e6, 10.2, 2.0), (0.5e6, 10.1, -1.0),
-            (0.2e6, 10.3, 1.5), (0.3e6, 10.5, 2.0)]
-    for i, (net, close, pct) in enumerate(days):
-        d = (today - timedelta(days=len(days) - 1 - i)).isoformat()
-        _seed_day("600000", netamount=net, main_net=net * 0.8, trade_date=d)
-        _seed_daily_price("600000", d, close, pct)
-    ctx = ai_svc.build_fundflow_analysis_context("600000", "7d")
-    assert ctx["window"] == "7d"
-    assert len(ctx["points"]) == 1
+    d1 = (today - timedelta(days=1)).isoformat()
+    d2 = (today - timedelta(days=2)).isoformat()
+    if date.fromisoformat(d1).isocalendar()[1] != date.fromisoformat(d2).isocalendar()[1]:
+        # 跨周则补到同一周：用最近一个同一周的两天
+        iso = today.isocalendar()
+        jan4 = date.fromisoformat(f"{iso[0]}-01-04")
+        mon = jan4 + timedelta(days=(iso[1] - 1) * 7 - (jan4.isocalendar()[2] - 1))
+        d1 = (mon + timedelta(days=3)).isoformat()   # 本周周四（≤今天的前提由下方守卫保证）
+        d2 = (mon + timedelta(days=2)).isoformat()
+        if d2 > today.isoformat():
+            d1 = d2 = today.isoformat()
+    _seed_day("600000", netamount=0.7e6, main_net=0.5e6, trade_date=d1)
+    _seed_day("600000", netamount=0.2e6, main_net=0.1e6, trade_date=d2)
+    _seed_daily_price("600000", d1, 10.5, 2.0)
+    _seed_daily_price("600000", d2, 10.2, 1.0)
+    ctx = ai_svc.build_fundflow_analysis_context("600000", "week")
+    assert ctx["window"] == "week" and ctx["points"]
+
+
+def test_build_fundflow_context_stock_day_month_buckets():
+    from datetime import date
+
+    # 固定同月 3 个日期（2026-03），自然月聚合 1 个点；经 build_fundflow_analysis_context 端到端
+    ds = ["2026-03-02", "2026-03-09", "2026-03-16"]
+    for i, d in enumerate(ds):
+        _seed_day("600000", netamount=(0.4e6 + i * 0.1e6), main_net=(0.3e6 + i * 0.1e6),
+                  trade_date=d)
+        _seed_daily_price("600000", d, 10.0 + i, i + 1.0)
+    ctx = ai_svc.build_fundflow_analysis_context("600000", "month")
+    assert ctx["window"] == "month"
+    assert len(ctx["points"]) == 1                     # 同自然月 → 1 个点
     p = ctx["points"][0]
-    assert p["date"] == (today - timedelta(days=4)).isoformat() + "~" + today.isoformat()[5:]
-    assert p["netamount"] == round(1.0e6 - 0.4e6 + 0.5e6 + 0.2e6 + 0.3e6, 0)
-    assert p["price"] == 10.5 and p["pct_chg"] == 2.0  # 桶末交易日
+    assert p["netamount"] == round(0.4e6 + 0.5e6 + 0.6e6, 0)
+    assert p["price"] == 12.0 and p["pct_chg"] == 3.0  # 组末交易日 03-16
 
 
 def test_build_fundflow_context_stock_day_no_prices():
     _seed_day("600000", netamount=1.0e6, trade_date=_asof_today())
-    ctx = ai_svc.build_fundflow_analysis_context("600000", "30d")
-    assert ctx["window"] == "30d"
+    ctx = ai_svc.build_fundflow_analysis_context("600000", "month")
+    assert ctx["window"] == "month"
     assert len(ctx["points"]) == 1
     assert "price" not in ctx["points"][0]
 
@@ -215,29 +263,27 @@ def test_build_fundflow_context_index_day_volume_price():
     _seed_index_price("000300", d0, 4000.0, 1.0e7)
     _seed_index_price("000300", d1, 4020.0, 2.0e7)
     _seed_index_price("000300", d2, 4010.0, 1.5e7)
-    ctx = ai_svc.build_fundflow_analysis_context("000300", "1d")
+    ctx = ai_svc.build_fundflow_analysis_context("000300", "day")
     assert ctx["mode"] == "index"
-    assert len(ctx["points"]) == 3                     # 1 天桶 = 逐日原样
+    assert len(ctx["points"]) == 3                     # 日桶 = 逐日原样
     assert ctx["points"][1]["close"] == 4020.0
     assert ctx["points"][1]["volume"] == 2.0e7
     assert ctx["points"][1]["pct_chg"] == 0.0
     assert "total_net" not in ctx
 
 
-def test_build_fundflow_context_index_day_30d_buckets():
-    from datetime import timedelta
-
-    today = _asof_today_date()
-    closes = [(4000.0, 1.0e7), (4020.0, 2.0e7), (4010.0, 1.5e7), (4050.0, 3.0e7)]
-    for i, (close, vol) in enumerate(closes):
-        d = (today - timedelta(days=len(closes) - 1 - i)).isoformat()
+def test_build_fundflow_context_index_day_month_buckets():
+    # 固定同月 4 个日期（2026-03），自然月聚合 1 个点
+    closes = [("2026-03-02", 4000.0, 1.0e7), ("2026-03-09", 4020.0, 2.0e7),
+              ("2026-03-16", 4010.0, 1.5e7), ("2026-03-23", 4050.0, 3.0e7)]
+    for d, close, vol in closes:
         _seed_index_price("000300", d, close, vol)
-    ctx = ai_svc.build_fundflow_analysis_context("000300", "30d")
+    ctx = ai_svc.build_fundflow_analysis_context("000300", "month")
     assert ctx["mode"] == "index"
-    assert len(ctx["points"]) == 1                     # 4 天聚合 1 个 30 天桶
+    assert len(ctx["points"]) == 1                     # 同自然月聚合 1 个点
     p = ctx["points"][0]
     assert p["volume"] == round(1.0e7 + 2.0e7 + 1.5e7 + 3.0e7, 0)
-    assert p["close"] == 4050.0                        # 桶末交易日收盘
+    assert p["close"] == 4050.0                        # 组末交易日收盘
 
 
 def test_analyze_fundflow_day_window(monkeypatch):
@@ -251,8 +297,8 @@ def test_analyze_fundflow_day_window(monkeypatch):
         "summary": "多日资金持续流入", "correlation": "positive", "divergence": [],
         "main_force": "主力连日流入", "rhythm": "近两日单边", "alerts": [], "conclusion": "c",
     })
-    r = ai_svc.analyze_fundflow("600000", "1d")
-    assert r["mode"] == "stock" and r["window"] == "1d"
+    r = ai_svc.analyze_fundflow("600000", "day")
+    assert r["mode"] == "stock" and r["window"] == "day"
     assert r["points_count"] == 2
 
 
@@ -361,9 +407,9 @@ def test_build_batch_context(monkeypatch):
     assert len(s0["points"]) == 1
     assert s0["points"][0]["price"] == 10.0 and "buy" in s0["points"][0]   # 批量带价 + 买卖盘
 
-    # 天窗口原样：1d 逐日
-    ctx1 = ai_svc.build_batch_fundflow_context(tags=["红利"], window="1d")
-    assert ctx1["window"] == "1d"
+    # 天窗口原样：day 逐日
+    ctx1 = ai_svc.build_batch_fundflow_context(tags=["红利"], window="day")
+    assert ctx1["window"] == "day"
     assert ctx1["covered"] == 2
     s1 = next(s for s in ctx1["stocks"] if s["code"] == "600000")
     assert len(s1["points"]) == 1 and s1["points"][0]["date"] == _asof_today()
@@ -441,7 +487,7 @@ def test_analyze_single_persists(monkeypatch):
 
 
 def test_single_persists_per_window(monkeypatch):
-    """个股按 window 分存：15m 与 1d 各分析一次 → 2 行（跨窗互不覆盖）。"""
+    """个股按 window 分存：15m 与 day 各分析一次 → 2 行（跨窗互不覆盖）。"""
     from datetime import timedelta
 
     _activate_mock_model()
@@ -455,12 +501,12 @@ def test_single_persists_per_window(monkeypatch):
     ai_svc.analyze_fundflow("600000", "15m")
     _fake_chat(monkeypatch, {"summary": "多日", "correlation": "negative", "divergence": [],
                              "main_force": "m", "rhythm": "r", "alerts": [], "conclusion": "c"})
-    ai_svc.analyze_fundflow("600000", "1d")
+    ai_svc.analyze_fundflow("600000", "day")
     with get_conn() as c:
         rows = c.execute(
             "SELECT window, summary FROM ai_fundflow_reports WHERE code='600000' AND source='single'"
         ).fetchall()
-        assert {r["window"]: r["summary"] for r in rows} == {"1d": "多日", "15m": "分时"}
+        assert {r["window"]: r["summary"] for r in rows} == {"day": "多日", "15m": "分时"}
 
 
 def test_get_stock_fundflow_report_by_window(monkeypatch):
@@ -474,7 +520,7 @@ def test_get_stock_fundflow_report_by_window(monkeypatch):
     ai_svc.analyze_fundflow("600000", "15m")
     r15 = ai_svc.get_stock_fundflow_report("600000", "15m")
     assert r15 and r15["window"] == "15m" and r15["correlation"] == "top_divergence"
-    assert ai_svc.get_stock_fundflow_report("600000", "1d") is None      # 未分析过 1d
+    assert ai_svc.get_stock_fundflow_report("600000", "day") is None      # 未分析过 day
     assert ai_svc.get_stock_fundflow_report("600000") is not None        # 缺省取最近一条
 
 

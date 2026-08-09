@@ -21,6 +21,7 @@ from datetime import date
 from app.analysis.valuation import PERIODS, compute_live, compute_ttm, get_quantiles, ttm_pair
 from app.analysis.volatility import compute_volatility
 from app.data.cache import get_financials, get_valuation_series
+from app.data.fundflow import FUNDFLOW_HISTORY_DAYS
 from app.instruments import get_instrument
 from app.market.calendar import is_trade_day
 from app.models.db import get_conn
@@ -1016,7 +1017,7 @@ def portfolio_fundflow(tags: list[str] | None = None, as_of: str | None = None) 
     聚合逻辑复用 combo_fundflow（participates_fundflow 过滤 + 等权求和），全部读本地缓存，零网络。返回：
       fundflow_15m：当日分时（按 ts 并集求和，升序）
       fundflow_latest：当日五档汇总 + netamount
-      fundflow_history：近30日逐日净流入（按 trade_date 并集求和）
+      fundflow_history：近2年逐日净流入（按 trade_date 并集求和）
       covered/total：有当日分时数据的持仓数 / 参与持仓数（A股/ETF，港股排除）
     每个点额外带 price = 组合净值线（Σ 价格×股数，仅参与资金流的 A股/ETF 人民币持仓，
     避免与港股混币）：分时用分笔末笔价、日级用收盘价。港股无分时价、币种不同，不纳入净值线。
@@ -1043,7 +1044,7 @@ def portfolio_fundflow(tags: list[str] | None = None, as_of: str | None = None) 
     if participants:
         from datetime import timedelta
 
-        start = (date.fromisoformat(trade_day) - timedelta(days=45)).isoformat()
+        start = (date.fromisoformat(trade_day) - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
         qty = {h["code"]: h["quantity"] for h in participants}
         union_ts = [pt["ts"] for pt in out.get("fundflow_15m", [])]   # 已按 ts 升序
         min_val: dict[str, float] = {}

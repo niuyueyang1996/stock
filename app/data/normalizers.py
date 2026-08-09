@@ -573,3 +573,48 @@ def normalize_mock_financials(fields: dict) -> Financials:
         dv_report=fields["dv_report"], profit_series=fields["profit_series"],
         total_shares=fields["total_shares"],
     )
+def normalize_sina_fundflow_days(rows: list[dict]) -> list:
+    """新浪日级五档资金流原始行 → list[FundflowDay]（升序，非东财源）。
+
+    行字段：opendate, netamount(总净流入), r0_net/r1_net/r2_net/r3_net(超大/大/中/小单净额),
+    r0/r1/r2/r3(各档买入额), trade, turnover, changeratio。
+    新浪仅四档（无特小单）：xs_net=0；netamount 取新浪总净流入（=四档净额之和）；
+    买盘=四档买入额之和，卖盘=买盘−净流入；主力占比按「主力净额/全天成交额(买+卖)」口径。
+    """
+    from app.data.base import FundflowDay
+
+    out = []
+    for r in rows or []:
+        try:
+            d = str(r.get("opendate") or "")
+            net = float(r.get("netamount") or 0)
+            r0 = float(r.get("r0_net") or 0)
+            r1 = float(r.get("r1_net") or 0)
+            r2 = float(r.get("r2_net") or 0)
+            r3 = float(r.get("r3_net") or 0)
+            b0 = float(r.get("r0") or 0)
+            b1 = float(r.get("r1") or 0)
+            b2 = float(r.get("r2") or 0)
+            b3 = float(r.get("r3") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not d:
+            continue
+        buy = b0 + b1 + b2 + b3
+        sell = buy - net
+        total = buy + sell
+        main = r0 + r1
+        out.append(FundflowDay(
+            date=d,
+            netamount=round(net, 2),
+            main_net=round(main, 2),
+            super_large_net=round(r0, 2),
+            large_net=round(r1, 2),
+            medium_net=round(r2, 2),
+            small_net=round(r3, 2),
+            main_net_pct=round(main / total * 100, 2) if total else 0.0,
+            xs_net=0.0,
+            buy_amount=round(buy, 2),
+            sell_amount=round(sell, 2),
+        ))
+    return out

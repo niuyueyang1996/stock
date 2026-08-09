@@ -11,6 +11,7 @@ from app.data.normalizers import (
     normalize_ashare_financials,
     normalize_bars,
     normalize_dividend_info,
+    normalize_sina_fundflow_days,
     normalize_total_shares,
     normalize_valuation_history,
 )
@@ -118,6 +119,13 @@ class AshareInstrument(Instrument):
     def fundflow_bands(self):
         """当日自适应分档阈值 P50/P80/P95。失败/无分笔返回 None。"""
         return tick_bands(raw_tencent.fetch_ticks(self.code))
+
+
+    def fundflow_history(self, start: str, end: str) -> list:
+        """新浪日级五档资金流历史回填（直连 HTTP 非东财）。返回 [start,end] 区间升序。"""
+        rows = raw_sina.fundflow_daily_history(self.symbol(), count=500)
+        days = normalize_sina_fundflow_days(rows)
+        return [d for d in days if start <= d.date <= end]
 
     def valuation_history(self, indicator: str, period: str):
         df = raw_baidu.valuation_ab(self.code, indicator, period)

@@ -45,6 +45,9 @@ STATIC_DIR = RESOURCE_DIR / "static"
 CLOSE_CONFIRM_MINUTES = 5
 MARKET_CLOSE = "15:00"
 
+# 开盘时间（集合竞价 09:15 起算）：交易日 now < 09:15 视为未开盘（所有带日期的线回退上一交易日）
+MARKET_OPEN = "09:15"
+
 # 网络请求
 REQUEST_TIMEOUT = 10
 HTTP_HEADERS = {

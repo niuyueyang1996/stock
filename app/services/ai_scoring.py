@@ -12,7 +12,6 @@
 import hashlib
 import json
 import logging
-import threading
 from datetime import datetime
 
 from app.models.db import get_conn
@@ -535,6 +534,7 @@ def _fundflow_factor(code: str, as_of: str | None) -> dict:
     from datetime import date, timedelta
 
     from app.data.cache import get_daily_fundflow, get_daily_fundflows, get_fundflow_asof
+    from app.data.fundflow import FUNDFLOW_HISTORY_DAYS
 
     out = {}
     try:
@@ -549,7 +549,7 @@ def _fundflow_factor(code: str, as_of: str | None) -> dict:
         pass
     try:
         end = as_of or date.today().isoformat()
-        start = (date.fromisoformat(end) - timedelta(days=45)).isoformat()
+        start = (date.fromisoformat(end) - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
         rows = get_daily_fundflows(code, start, end)
         nets = [float(r["netamount"]) for r in rows if r["netamount"] is not None]
         if nets:
@@ -973,11 +973,29 @@ def invalidate_daily(score_date: str) -> None:
 
 
 def _safe_score_daily(score_date: str) -> None:
-    """后台线程执行体：失败只记日志，当日保持"未评分"（绝不抛到调用方）。"""
+    """后台执行体：失败只记日志，当日保持"未评分"（绝不抛到调用方）。"""
     try:
         score_daily(score_date)
     except Exception:  # noqa: BLE001
         logger.warning("[AI打分] 后台自动打分 %s 失败", score_date, exc_info=True)
+
+
+def _enqueue_daily_score(score_date: str) -> None:
+    """把自动打分入队到 AI 车道（LANE_AI，AI_WORKERS 并发，/status/jobs 可见可取消）。
+
+    不再裸起线程（绕过队列曾导致并发无上限、排队不可见）。入队失败只记日志，
+    当日保持"未评分"（后续可手动或由 catchup 重试）。
+    """
+    from app.services.job_runners import start_simple
+
+    def work():
+        _safe_score_daily(score_date)
+
+    try:
+        start_simple("ai.daily_auto", f"每日 AI 打分 {score_date}",
+                     work, step=f"AI 自动打分 {score_date}…")
+    except Exception:  # noqa: BLE001
+        logger.warning("[AI打分] 自动打分入队失败 %s", score_date, exc_info=True)
 
 
 def _is_market_closed_now() -> bool:
@@ -996,7 +1014,7 @@ def _guard_today(score_date: str) -> None:
 
 
 def catchup_pending_daily() -> None:
-    """启动/全量刷新：今天已收盘 + 有 buy/sell 交易 + 尚无 AI 报告 → 后台补打一次。
+    """启动/全量刷新：今天已收盘 + 有 buy/sell 交易 + 尚无 AI 报告 → 入队 AI 车道补打一次。
 
     盘中/未收盘不触发；无模型或无交易不触发；已有报告不重复打。失败只记日志。
     """
@@ -1009,16 +1027,13 @@ def catchup_pending_daily() -> None:
         return
     if get_daily_report(today) is not None:
         return
-    try:
-        threading.Thread(target=_safe_score_daily, args=(today,), daemon=True).start()
-        logger.info("[AI打分] 收盘后补打今日（%s）AI 评分", today)
-    except Exception:  # noqa: BLE001
-        logger.warning("[AI打分] 启动补打线程失败", exc_info=True)
+    _enqueue_daily_score(today)
+    logger.info("[AI打分] 收盘后补打今日（%s）AI 评分", today)
 
 
 def maybe_auto_score_daily(score_date: str) -> None:
     """交易变动后：先同步失效该日旧报告（保证后续失败时页面为"未评分"而非陈旧结果）；
-    有激活模型且当日有交易才起 daemon 线程重打分（无模型/无交易不起线程，保证测试确定、不触发网络）。
+    有激活模型且当日有交易才入队 AI 车道重打分（无模型/无交易不入队，保证测试确定、不触发网络）。
     收盘守卫：当日未收盘（盘中录入交易）只失效、不打分，保持「未评分」，收盘后由 catchup 补打。"""
     invalidate_daily(score_date)
     if ai.get_active_model() is None:
@@ -1028,6 +1043,6 @@ def maybe_auto_score_daily(score_date: str) -> None:
     try:
         if score_date == _now()[:10] and not _is_market_closed_now():
             return  # 盘中：今日数据未定格，不打
-        threading.Thread(target=_safe_score_daily, args=(score_date,), daemon=True).start()
+        _enqueue_daily_score(score_date)
     except Exception:  # noqa: BLE001
         logger.warning("[AI打分] 启动后台打分线程失败", exc_info=True)

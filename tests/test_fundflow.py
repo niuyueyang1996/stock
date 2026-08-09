@@ -11,7 +11,7 @@ from app.data.fundflow import (
     resample_points,
     ticks_to_day,
 )
-from app.market.calendar import last_trade_date
+from app.market.calendar import last_trade_date, resolve_trade_day
 
 
 # ---------- 分位计算 ----------
@@ -226,11 +226,173 @@ def test_sync_fundflow_persists():
     assert round(sum(float(p["sell_amount"]) for p in rows), 2) == round(day["sell_amount"], 2)
 
 
-def test_sync_fundflow_skips_hk_and_weekend():
+def test_sync_fundflow_skips_weekend():
+    """周六：A股/ETF 无分时源不刷（港股近5日窗口继续补刷见 test_hk_fundflow_*）。"""
     from app.services.refresh import sync_fundflow
 
-    assert sync_fundflow("00700", datetime(2026, 8, 6, 10, 0))["reason"] == "skipped"
     assert sync_fundflow("600036", datetime(2026, 8, 8, 10, 0))["reason"] == "skipped"  # 周六
+
+
+def _hk_days_sample():
+    """模拟腾讯港股 day/query 近3日分时（时间 HHMM、累计量额）。"""
+    return [
+        {"date": "2026-08-06", "prec": 10.00, "points": [
+            ("0930", 10.00, 0, 0.0),
+            ("0931", 10.02, 1000, 10020.0),
+            ("0932", 10.01, 2000, 20020.0),
+            ("0933", 10.03, 3000, 30090.0),
+        ]},
+        {"date": "2026-08-05", "prec": 9.90, "points": [
+            ("0930", 9.90, 0, 0.0),
+            ("0931", 9.88, 1000, 9880.0),
+            ("0932", 9.90, 2000, 19780.0),
+        ]},
+        {"date": "2026-08-04", "prec": 9.95, "points": [
+            ("0930", 9.95, 0, 0.0),
+            ("0931", 9.96, 1000, 9960.0),
+            ("0932", 9.95, 2000, 19910.0),
+        ]},
+    ]
+
+
+def test_minute_bars_to_ticks():
+    """分时累计量额 → 逐分钟成交：tick rule 价向 + 4 位时间归一化 + 平盘沿用前向。"""
+    from app.data.fundflow import minute_bars_to_ticks
+
+    ticks = minute_bars_to_ticks(_hk_days_sample()[0]["points"], 10.00)
+    assert [t[0] for t in ticks] == ["09:31", "09:32", "09:33"]      # 首行累计 0 跳过
+    assert [t[1] for t in ticks] == [10020.0, 10000.0, 10070.0]     # 相邻累计额差
+    assert [t[2] for t in ticks] == [1, -1, 1]                       # 价升买 / 价跌卖
+    # 平盘沿用最近方向
+    flat = minute_bars_to_ticks([("0930", 10.0, 0, 0.0),
+                                 ("0931", 10.1, 1, 10.1),
+                                 ("0932", 10.1, 2, 20.2)], 10.0)
+    assert [t[2] for t in flat] == [1, 1]
+
+
+def test_hk_fundflow_days_and_intraday(monkeypatch):
+    """港股近5日资金流：逐日五档 + 分时分钟点（腾讯分时派生）。"""
+    from app.instruments.hk import HkInstrument
+
+    monkeypatch.setattr("app.data.raw.raw_tencent.hk_intraday", lambda code: _hk_days_sample())
+    inst = HkInstrument("00700")
+    days = inst.fundflow_days()
+    assert [d.date for d in days] == ["2026-08-06", "2026-08-05", "2026-08-04"]
+    # 当日（08-06）：09:31 价升+10020、09:32 价跌-10000、09:33 价升+10070 → 净流入 10090
+    d0 = days[0]
+    assert round(d0.netamount, 2) == 10020.0 - 10000.0 + 10070.0
+    assert round(d0.buy_amount, 2) == 10020.0 + 10070.0
+    assert round(d0.sell_amount, 2) == 10000.0
+    assert abs(d0.main_net + d0.medium_net + d0.small_net + d0.xs_net - d0.netamount) < 1e-6
+    # 分时 1 分钟基础粒度
+    by_date = inst.fundflow_intraday_by_date()
+    assert [p.ts for p in by_date["2026-08-06"]] == ["09:31", "09:32", "09:33"]
+    assert by_date["2026-08-06"][0].buy_amount == 10020.0
+    # 单日路径（daily_fundflow / fundflow_intraday / fundflow_bands）
+    assert inst.daily_fundflow()[0].date == "2026-08-06"
+    assert [p.ts for p in inst.fundflow_intraday()] == ["09:31", "09:32", "09:33"]
+    assert inst.fundflow_bands() and "p15" in inst.fundflow_bands()
+
+
+def test_hk_sync_fundflow_multi_day(monkeypatch):
+    """sync_fundflow 对港股：近5日逐日落库（daily + 分时），非交易日也补刷。"""
+    from app.instruments import registry as reg
+    from app.instruments.hk import HkInstrument
+    from app.services.refresh import sync_fundflow
+    from app.data.cache import get_daily_fundflow, get_daily_fundflows, get_fundflow_min
+    from mock_instrument import MockInstrument
+
+    monkeypatch.setattr("app.data.raw.raw_tencent.hk_intraday", lambda code: _hk_days_sample())
+
+    def factory(code):
+        kind = reg.type_of(code)
+        if kind == "hk":
+            return HkInstrument(code)
+        return MockInstrument(code, kind)
+
+    monkeypatch.setattr(reg, "_FACTORY", factory)
+    reg.clear_cache()
+
+    # 交易日：落当日 + 历史日
+    r = sync_fundflow("00700", datetime(2026, 8, 6, 10, 0))
+    assert r["reason"] == "ok"
+    rows = get_daily_fundflows("00700", "2026-08-01", "2026-08-08")
+    assert [x["trade_date"] for x in rows] == ["2026-08-04", "2026-08-05", "2026-08-06"]
+    d0 = get_daily_fundflow("00700", "2026-08-06")
+    assert d0 and round(d0["netamount"], 2) == 10090.0
+    assert len(get_fundflow_min("00700", "2026-08-06")) == 3
+    assert len(get_fundflow_min("00700", "2026-08-05")) == 2
+    # 非交易日（周六）：仍补刷近5日窗口
+    r2 = sync_fundflow("00700", datetime(2026, 8, 8, 10, 0))
+    assert r2["reason"] == "ok"
+    assert get_daily_fundflow("00700", "2026-08-06")
+
+
+def test_sina_fundflow_days_normalize():
+    """新浪日级五档 → FundflowDay（四档 + 买卖盘 + 主力占比）。"""
+    from app.data.normalizers import normalize_sina_fundflow_days
+
+    rows = [{
+        "opendate": "2026-08-07", "netamount": "-59039847.37",
+        "r0_net": "-76106093.07", "r1_net": "5669311.36",
+        "r2_net": "9908024.23", "r3_net": "1488910.11",
+        "r0": "199004025.07", "r1": "179806351.28",
+        "r2": "101341379.35", "r3": "40563882.89",
+    }]
+    days = normalize_sina_fundflow_days(rows)
+    assert len(days) == 1
+    d = days[0]
+    assert d.date == "2026-08-07"
+    assert d.netamount == -59039847.37
+    assert d.main_net == round(-76106093.07 + 5669311.36, 2)
+    assert d.xs_net == 0.0
+    assert round(d.buy_amount + d.sell_amount, 2) == round(d.buy_amount * 2 - d.netamount, 2)
+    assert d.main_net_pct > -100 and d.main_net_pct < 0
+
+
+def test_sync_fundflow_history_backfills_missing(monkeypatch):
+    """A股新浪日级回填：只补缺失日、不覆盖已有日；缓存连续后跳过。"""
+    from types import SimpleNamespace
+
+    from app.data.base import FundflowDay
+    from app.data.cache import upsert_daily_fundflow
+    from app.services.refresh import sync_fundflow_history
+
+    # 已有 08-05（模拟腾讯分笔派生当日值），缺 08-04 及更早
+    have = FundflowDay(date="2026-08-05", netamount=1.0, main_net=1.0,
+                       super_large_net=0.0, large_net=1.0, medium_net=0.0,
+                       small_net=0.0, main_net_pct=100.0)
+    upsert_daily_fundflow("600036", "2026-08-05", have, None)
+
+    hist = [
+        FundflowDay(date="2026-08-05", netamount=999.0, main_net=999.0, super_large_net=0.0,
+                    large_net=999.0, medium_net=0.0, small_net=0.0, main_net_pct=100.0),
+        FundflowDay(date="2026-08-04", netamount=200.0, main_net=100.0, super_large_net=0.0,
+                    large_net=100.0, medium_net=0.0, small_net=0.0, main_net_pct=50.0),
+        FundflowDay(date="2026-08-03", netamount=300.0, main_net=150.0, super_large_net=0.0,
+                    large_net=150.0, medium_net=0.0, small_net=0.0, main_net_pct=50.0),
+    ]
+    from app.instruments import registry as reg
+    from mock_instrument import MockInstrument
+
+    def factory(code):
+        inst = MockInstrument(code, reg.type_of(code))
+        inst.fundflow_history = lambda start, end: [d for d in hist if start <= d.date <= end]
+        return inst
+
+    monkeypatch.setattr(reg, "_FACTORY", factory)
+    reg.clear_cache()
+
+    r = sync_fundflow_history("600036", datetime(2026, 8, 5, 10, 0))
+    assert r["reason"] == "ok"
+    assert r["fetched"] == 2                          # 补 08-04/08-03，08-05 已有不覆盖
+    from app.data.cache import get_daily_fundflow
+    assert get_daily_fundflow("600036", "2026-08-05")["netamount"] == 1.0   # 未覆盖当日
+    assert get_daily_fundflow("600036", "2026-08-04")["netamount"] == 200.0
+
+    # 二次回填：窗口未满 30 天 → 仍拉取，但无新增日（fetched=0）
+    r2 = sync_fundflow_history("600036", datetime(2026, 8, 5, 10, 0))
+    assert r2["reason"] == "ok" and r2["fetched"] == 0
 
 
 # ---------- API ----------
@@ -242,7 +404,8 @@ def test_stock_fundflow_api(client):
     from app.data.cache import upsert_daily_fundflow, upsert_fundflow_min
     from app.data.fundflow import FundflowPoint
 
-    today = last_trade_date(date.today()).isoformat()
+    # 与后端实时口径一致：交易日未开盘回退上一交易日（pre-open 时 last_trade_date(today) 会错位）
+    today = resolve_trade_day(None)[0]
     upsert_fundflow_min("600000", today, [
         FundflowPoint(ts="09:31", main_net=5, super_large_net=0, large_net=5,
                       medium_net=0, small_net=5, xs_net=2, buy_amount=10, sell_amount=6, price=10.1),
@@ -296,7 +459,8 @@ def test_portfolio_fundflow_aggregates(client):
     from app.data.fundflow import FundflowPoint
     from app.models.db import get_conn
 
-    today = last_trade_date(date.today()).isoformat()
+    # 与后端实时口径一致：交易日未开盘回退上一交易日（pre-open 时 last_trade_date(today) 会错位）
+    today = resolve_trade_day(None)[0]
     with get_conn() as c:
         for code, name, tag, qty in (("600000", "浦发银行", "银行", 100),
                                      ("600519", "贵州茅台", "白酒", 100),

@@ -19,7 +19,7 @@ from app.data.cache import (
     get_index_intraday,
     get_latest_daily_price,
 )
-from app.data.fundflow import FUNDFLOW_WINDOWS
+from app.data.fundflow import FUNDFLOW_HISTORY_DAYS, FUNDFLOW_WINDOWS
 from app.instruments import get_instrument
 
 # 日级汇总字段：五档 + 净额 + 主力 + 买卖盘
@@ -34,11 +34,11 @@ def combo_fundflow(codes: list[str], weights: list[float] | None = None,
     - 按 participates_fundflow 过滤（A股/ETF/指数参与，港股排除）。
     - fundflow_15m：指定交易日分时按 ts 并集求和（某 code 缺失该分钟按 0）。
     - fundflow_latest：当日五档 + netamount/main_net/buy_amount/sell_amount。
-    - fundflow_history：近45日逐日（五档 + 买卖盘，按 trade_date 并集求和）。
+    - fundflow_history：近2年逐日（五档 + 买卖盘，按 trade_date 并集求和）。
     - covered/total：有当日分时数据的 code 数 / 参与 code 数。
     - as_of：可选；非交易日退到最近交易日（缺省=今天有效交易日）。
     """
-    from app.market.calendar import resolve_trade_day
+    from app.market.calendar import market_status, resolve_trade_day
 
     trade_day, adjusted = resolve_trade_day(as_of)
     members: list[tuple[str, float]] = []
@@ -52,11 +52,12 @@ def combo_fundflow(codes: list[str], weights: list[float] | None = None,
             "fundflow_15m": [], "fundflow_latest": None, "fundflow_history": [],
             "fundflow_windows": FUNDFLOW_WINDOWS, "covered": 0, "total": 0,
             "trade_date": trade_day, "as_of": trade_day, "as_of_adjusted": adjusted,
+        "market_status": market_status(),
             "as_of_requested": as_of, "note": note or "",
         }
 
     flow_end = date.fromisoformat(trade_day)
-    flow_start = (flow_end - timedelta(days=45)).isoformat()
+    flow_start = (flow_end - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
 
     # 当日分时：按 ts 并集求和
     intraday: dict[str, dict[str, float]] = {}
@@ -77,7 +78,7 @@ def combo_fundflow(codes: list[str], weights: list[float] | None = None,
         for ts, b in sorted(intraday.items())
     ]
 
-    # 当日五档汇总 + 近45日逐日历史
+    # 当日五档汇总 + 近2年逐日历史
     latest = {k: 0.0 for k in _LATEST_KEYS}
     hist: dict[str, dict[str, float]] = {}
     has_latest = False
@@ -106,6 +107,7 @@ def combo_fundflow(codes: list[str], weights: list[float] | None = None,
         "trade_date": trade_day,
         "as_of": trade_day,
         "as_of_adjusted": adjusted,
+        "market_status": market_status(),
         "as_of_requested": as_of,
         "note": note or "资金流穿透求和（A股/ETF/指数参与，港股排除）",
     }
@@ -116,14 +118,14 @@ def combo_index_volume(codes: list[str], weights: list[float] | None = None,
     """多指数成交额等权求和（腾讯量价，无五档）。全部读缓存零网络。
 
     - intraday：有效交易日分时 1 分钟基础 [{ts, amount(Σ成交额), prices:{code:price}}]。
-    - daily：近45日逐日 [{date, amount(Σ成交额), closes:{code:close}}]。
+    - daily：近2年逐日 [{date, amount(Σ成交额), closes:{code:close}}]。
     - covered/total：有当日分时量价数据的指数数 / 参与指数数。
     成交额派生：腾讯指数分时/日K只有量无额。用「行情实时成交额（三元组，今日真实值）÷
     最新交易日量」得到该指数每单位量→金额比例，再乘各分钟/各日量（历史日假设比例恒定，
     今日刻度准确，跨指数按等权加总）。
     as_of：可选；非交易日退到最近交易日（缺省=今天有效交易日，修周末白板）。
     """
-    from app.market.calendar import resolve_trade_day
+    from app.market.calendar import market_status, resolve_trade_day
 
     trade_day, adjusted = resolve_trade_day(as_of)
     members = [
@@ -134,7 +136,8 @@ def combo_index_volume(codes: list[str], weights: list[float] | None = None,
         return {
             "mode": "index", "intraday": [], "daily": [],
             "covered": 0, "total": 0, "trade_date": trade_day,
-            "as_of": trade_day, "as_of_adjusted": adjusted, "as_of_requested": as_of,
+            "as_of": trade_day, "as_of_adjusted": adjusted,
+        "market_status": market_status(), "as_of_requested": as_of,
             "note": note or "",
         }
 
@@ -161,9 +164,9 @@ def combo_index_volume(codes: list[str], weights: list[float] | None = None,
             b["amount"] += (r["volume"] or 0.0) * w * scale[code]
             intraday_price.setdefault(code, {})[r["ts"]] = r["price"]
 
-    # 近45日 Σ成交额 + 各指数日收盘
+    # 近2年 Σ成交额 + 各指数日收盘
     flow_end = date.fromisoformat(trade_day)
-    start = (flow_end - timedelta(days=45)).isoformat()
+    start = (flow_end - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
     daily: dict[str, dict] = {}
     daily_close: dict[str, dict] = {}
     for code, w in members:
@@ -191,6 +194,7 @@ def combo_index_volume(codes: list[str], weights: list[float] | None = None,
         "trade_date": trade_day,
         "as_of": trade_day,
         "as_of_adjusted": adjusted,
+        "market_status": market_status(),
         "as_of_requested": as_of,
         "note": note or "指数资金面（全量价）：分时/日级 Σ成交额 + 各指数价格叠加",
     }

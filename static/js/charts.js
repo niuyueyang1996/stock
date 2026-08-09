@@ -604,9 +604,61 @@ function fundflowBuySell(el, points, window) {
 // 多日资金流（统一时间窗的天窗口）：五档堆叠柱 + 每日买卖盘
 // ============================================================
 
-// 把逐日五档行按 N 个交易日聚合成桶（聚合桶语义：7天 = 每 7 个交易日一个点）
+// 默认展示最近 show 个点（与 K 线 defaultShow:60 对齐）的 dataZoom start/end
+function defaultZoomRange(n, show) {
+  if (!n) return { start: 0, end: 100 };
+  const s = Math.max(1, Math.min(n, show || 60));
+  return { start: ((n - s) / n) * 100, end: 100 };
+}
+
+// 资金流窗口 → 聚合模式（与 K 线周期对齐：day=逐日、week=自然周、month=自然月；分钟窗口返回分钟数）
+function flowBucket(w) {
+  if (w === 'day' || w === 'week' || w === 'month') return w;
+  const n = parseInt(w, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+// 自然周/月分组键：week → 'YYYY-Www'（ISO 周，周一为一周起始）；month → 'YYYY-MM'
+function naturalGroupKey(dateStr, mode) {
+  const d = new Date(dateStr.slice(0, 10) + 'T00:00:00');
+  if (mode === 'month') {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  }
+  // ISO 周
+  const day = (d.getDay() + 6) % 7;      // 周一=0 ... 周日=6
+  const thursday = new Date(d);
+  thursday.setDate(d.getDate() - day + 3);
+  const firstThu = new Date(thursday.getFullYear(), 0, 4);
+  const firstMon = new Date(firstThu);
+  firstMon.setDate(firstThu.getDate() - ((firstThu.getDay() + 6) % 7));
+  const week = 1 + Math.round((thursday - firstMon) / (7 * 24 * 3600 * 1000));
+  return thursday.getFullYear() + '-W' + String(week).padStart(2, '0');
+}
+
+// 把逐日五档行按聚合模式分组：day=逐日、week=自然周、month=自然月（与后端 _bucket_day_flows 同构）
 function bucketFlowDays(hist, bucket) {
-  if (!hist.length || bucket <= 1) return hist;
+  if (!hist.length) return hist;
+  if (bucket === 'week' || bucket === 'month') {
+    const groups = new Map();
+    for (const r of hist) {
+      const key = naturalGroupKey(r.trade_date, bucket);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    const out = [];
+    const FIELDS = ['super_large_net', 'large_net', 'medium_net', 'small_net', 'xs_net',
+                    'netamount', 'main_net', 'buy_amount', 'sell_amount'];
+    for (const rows of groups.values()) {
+      const acc = { trade_date: rows[0].trade_date + (rows.length > 1 ? '~' + rows[rows.length - 1].trade_date.slice(5) : '') };
+      for (const k of FIELDS) acc[k] = 0;
+      for (const r of rows) for (const k of FIELDS) acc[k] += r[k] || 0;
+      const last = rows[rows.length - 1];
+      acc.price = last.price != null ? last.price : null;   // 分组末交易日收盘价（股价折线）
+      out.push(acc);
+    }
+    return out;
+  }
+  if (bucket <= 1) return hist;
   const FIELDS = ['super_large_net', 'large_net', 'medium_net', 'small_net', 'xs_net',
                   'netamount', 'main_net', 'buy_amount', 'sell_amount'];
   const out = [];
@@ -634,6 +686,7 @@ function fundflowStacked(el, days, windowLabel) {
     name, type: 'bar', stack: 'flow', data: days.map((d) => Math.round(d[key] || 0)),
     itemStyle: { color }, emphasis: { focus: 'series' },
   }));
+  const zr = defaultZoomRange(labels.length, 60);
   chart.setOption({
     title: { text: '五档资金净流入（' + windowLabel + '）', left: 'center', textStyle: { fontSize: 14 } },
     tooltip: {
@@ -648,10 +701,13 @@ function fundflowStacked(el, days, windowLabel) {
     },
     legend: { data: ['特大单', '大单', '中单', '小单', '特小单'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
-    grid: { left: 75, right: 30, top: 60, bottom: 40 },
+    grid: { left: 75, right: 30, top: 60, bottom: 56 },
     xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
-    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    dataZoom: [
+      { type: 'inside', start: zr.start, end: zr.end },
+      { type: 'slider', start: zr.start, end: zr.end, bottom: 8, height: 16 },
+    ],
     series,
   }, { notMerge: true });
   applyLegendSolo(chart, ['特大单', '大单', '中单', '小单', '特小单']);
@@ -672,6 +728,7 @@ function fundflowDayBuySell(el, days, windowLabel) {
     cumNet.push(buy - sell);
     bucketNet.push(Math.round((d.buy_amount || 0) - (d.sell_amount || 0)));
   }
+  const zr = defaultZoomRange(labels.length, 60);
   chart.setOption({
     title: { text: '买盘 / 卖盘 / 净流入（' + windowLabel + ' · 累积）· 柱=' + windowLabel + '净流入',
              left: 'center', textStyle: { fontSize: 14 } },
@@ -690,13 +747,16 @@ function fundflowDayBuySell(el, days, windowLabel) {
     },
     legend: { data: ['买盘', '卖盘', '净流入', windowLabel + '净流入'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
-    grid: { left: 75, right: 70, top: 60, bottom: 40 },
+    grid: { left: 75, right: 70, top: 60, bottom: 56 },
     xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
       { type: 'value', splitLine: { show: false }, axisLabel: { formatter: (v) => fmtFlow(v) } },
     ],
-    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    dataZoom: [
+      { type: 'inside', start: zr.start, end: zr.end },
+      { type: 'slider', start: zr.start, end: zr.end, bottom: 8, height: 16 },
+    ],
     series: [
       { name: '买盘', type: 'line', smooth: true, symbol: 'none', data: cumBuy,
         itemStyle: { color: CHART_COLORS.up }, lineStyle: { width: 2, color: CHART_COLORS.up },
@@ -723,12 +783,20 @@ function fundflowDayBuySell(el, days, windowLabel) {
 // 股价/净值独立折线图（资金流趋势面板最上方）：只看价格/净值自身走势，独立自适应刻度。
 // points 为分时（{ts,price}）或日级（{trade_date,price}）；无 price 返回空。
 function fundflowPrice(el, points, windowLabel) {
-  const labels = (points || []).map((p) => p.ts || p.trade_date || '');
-  const prices = (points || []).map((p) => (p.price != null ? p.price : null));
+  let pts = (points || []).slice();
+  // 去掉头部 price 为 null 的点（日K缓存可能短于资金流历史），避免图最左侧一段空白
+  let firstVal = -1;
+  for (let i = 0; i < pts.length; i++) {
+    if (pts[i].price != null) { firstVal = i; break; }
+  }
+  if (firstVal > 0) pts = pts.slice(firstVal);
+  const labels = pts.map((p) => p.ts || p.trade_date || '');
+  const prices = pts.map((p) => (p.price != null ? p.price : null));
   if (!prices.some((v) => v != null)) { clearChart(el); el.style.display = 'none'; return null; }
   el.style.display = '';
   const chart = initChart(el);
   if (!chart) return null;
+  const zr = defaultZoomRange(labels.length, 60);
   chart.setOption({
     title: { text: '股价 / 组合净值（' + windowLabel + '）', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
@@ -738,11 +806,14 @@ function fundflowPrice(el, points, windowLabel) {
         return [labels[i], '价格 ' + prices[i]].join('<br>');
       },
     },
-    grid: { left: 62, right: 20, top: 36, bottom: 30 },
+    grid: { left: 62, right: 20, top: 36, bottom: 46 },
     xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 10, hideOverlap: true },
              axisPointer: { label: { show: false } } },
     yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
-    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    dataZoom: [
+      { type: 'inside', start: zr.start, end: zr.end },
+      { type: 'slider', start: zr.start, end: zr.end, bottom: 8, height: 16 },
+    ],
     series: [{
       name: '股价', type: 'line', smooth: true, symbol: 'none', data: prices,
       itemStyle: { color: CHART_COLORS.primaryDeep }, lineStyle: { width: 2, color: CHART_COLORS.primaryDeep },
@@ -783,6 +854,7 @@ function indexVolumePrice(el, points, windowLabel, names) {
       lineStyle: { width: 3, color: '#495057' },
       emphasis: { focus: 'series' } },
   ];
+  const zr = defaultZoomRange(labels.length, 60);
   chart.setOption({
     title: { text: windowLabel + ' · 成交额变化（柱=各期 / 线=累计）+ 价格', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
@@ -826,8 +898,8 @@ function indexVolumePrice(el, points, windowLabel, names) {
         splitLine: { show: false }, axisLabel: { fontSize: 10, formatter: (v) => fmtAmt(v) } },
     ],
     dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-      { type: 'slider', height: 16, bottom: 8, start: 0, end: 100 },
+      { type: 'inside', start: zr.start, end: zr.end },
+      { type: 'slider', height: 16, bottom: 8, start: zr.start, end: zr.end },
     ],
     series,
   }, { notMerge: true });
@@ -851,9 +923,25 @@ function resampleIndexVolume(points, windowMin) {
   return [...buckets.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1));
 }
 
-// 逐日量价 → N 个交易日聚合桶（Σ成交额、价格取桶末交易日），与后端 _bucket_day_prices 同构
+// 逐日量价 → 聚合模式分组（day=逐日、week=自然周、month=自然月，Σ成交额、价格取组末交易日），与后端 _bucket_day_prices 同构
 function bucketIndexVolume(daily, bucket) {
-  if (!daily.length || bucket <= 1) return daily;
+  if (!daily.length) return daily;
+  if (bucket === 'week' || bucket === 'month') {
+    const groups = new Map();
+    for (const r of daily) {
+      const key = naturalGroupKey(r.date, bucket);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    const out = [];
+    for (const g of groups.values()) {
+      const last = g[g.length - 1];
+      const amt = g.reduce((s, r) => s + (r.amount || 0), 0);
+      out.push({ date: g[0].date + (g.length > 1 ? '~' + last.date.slice(5) : ''), amount: amt, closes: last.closes });
+    }
+    return out;
+  }
+  if (bucket <= 1) return daily;
   const out = [];
   for (let i = 0; i < daily.length; i += bucket) {
     const g = daily.slice(i, i + bucket);

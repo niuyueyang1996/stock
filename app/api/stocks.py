@@ -39,25 +39,28 @@ def get_kline(code: str, period: str = "day"):
     from datetime import datetime, timedelta
 
     from app.data.cache import get_daily_prices, get_period_prices
+    from app.market.calendar import market_status, resolve_live_trade_date
 
     period = (period or "day").lower().strip()
     if period not in ("day", "week", "month"):
         raise HTTPException(400, "period 仅支持 day/week/month")
-    today = date.today().isoformat()
+    # 有效交易日：交易日未开盘（<09:15 集合竞价）回退上一交易日，当日无K线数据
+    eff = resolve_live_trade_date().isoformat()
+    ms = market_status()
     if period == "day":
         table = None
-        start = (date.today() - timedelta(days=800)).isoformat()
-        rows = get_daily_prices(code, start, today)
+        start = (date.fromisoformat(eff) - timedelta(days=800)).isoformat()
+        rows = get_daily_prices(code, start, eff)
     else:
         table = "weekly_price_cache" if period == "week" else "monthly_price_cache"
-        rows = get_period_prices(table, code, "1970-01-01", today)
+        rows = get_period_prices(table, code, "1970-01-01", eff)
     if period != "day" and not rows:
         # 周/月K尚未同步：兜底增量拉一次（无缓存即全量），再读本地
         try:
             from app.services.refresh import sync_kline_bars
 
             sync_kline_bars(code, datetime.now())
-            rows = get_period_prices(table, code, "1970-01-01", today)
+            rows = get_period_prices(table, code, "1970-01-01", eff)
         except Exception:  # noqa: BLE001 拉取失败返回空，前端提示先刷新
             rows = []
     # 过滤非交易日（周末）行：旧版可能把周末假K写入缓存，读取层兜底不上图
@@ -70,7 +73,11 @@ def get_kline(code: str, period: str = "day"):
         }
         for r in rows
     ]
-    return {"ok": True, "data": {"code": code, "period": period, "bars": bars}}
+    return {"ok": True, "data": {
+        "code": code, "period": period, "bars": bars,
+        "as_of": eff, "as_of_adjusted": eff != date.today().isoformat(),
+        "market_status": ms,
+    }}
 
 
 def _cache_status(code: str) -> dict:
@@ -530,6 +537,9 @@ def stock_detail(code: str, partial: bool = False, window: int = 15, as_of: str 
         fx_rate = get_fx_rate_cny(inst.currency, fx_day)
 
     # 共享四段（估值序列/日资金流/近45日历史/分时）+ 统一装配（detail.py）
+    note = "当日分笔派生，历史从接入日起累积"
+    if inst.kind == "hk":
+        note = "港股无逐笔：资金流由腾讯分时分钟量价按价向派生（tick rule），分档按分钟成交额自适应"
     return build_detail(
         inst,
         name,
@@ -538,6 +548,7 @@ def stock_detail(code: str, partial: bool = False, window: int = 15, as_of: str 
         fx_rate=fx_rate,
         partial_missing=status["missing_items"] if partial else [],
         as_of=as_of,
+        note=note,
         extra={"tag": tag, "is_etf": is_etf, "tracked_index": tracked_index},
     )
 

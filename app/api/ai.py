@@ -39,7 +39,7 @@ class ReportBody(BaseModel):
 
 class FundflowAnalysisBody(BaseModel):
     code: str = ""          # 个股模式必填（fundflow-batch 用 tags/codes，忽略 code）
-    window: int | str = "15m"   # 统一时间窗：'1m'/'5m'/'15m'/'30m'/'1d'/'7d'/'30d'（兼容 int 旧值）
+    window: int | str = "15m"   # 统一时间窗：'1m'/'5m'/'15m'/'30m'/'day'/'week'/'month'（兼容 int 旧值）
     tags: str | None = None     # 持仓组合：逗号分隔标签筛选（缺省=全部持仓）
     codes: str | None = None    # 指数组合：逗号分隔标的代码（指数页批量分析用）
     weights: str | None = None  # codes 模式对应权重（逗号分隔，缺省=等权）

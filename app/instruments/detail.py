@@ -18,8 +18,8 @@ from app.data.cache import (
     get_valuation,
     get_valuation_series,
 )
-from app.data.fundflow import FUNDFLOW_WINDOWS
-from app.market.calendar import resolve_trade_day
+from app.data.fundflow import FUNDFLOW_HISTORY_DAYS, FUNDFLOW_WINDOWS
+from app.market.calendar import market_status, resolve_trade_day
 from app.services.quote import get_quote
 
 DEFAULT_CHART_PERIOD = "3y"
@@ -101,9 +101,9 @@ def build_detail(
         flow_latest = {k: flow_latest[k] for k in _FLOW_LATEST_FIELDS}
         flow_latest["xs_net"] = xs_net
 
-    # 近45日净流入历史（日级收盘价作股价折线）；终点为有效交易日
+    # 日级资金流历史（日级收盘价作股价折线）；终点为有效交易日，起点覆盖新浪历史（约2年）
     flow_end = date.fromisoformat(trade_day)
-    flow_start = (flow_end - timedelta(days=45)).isoformat()
+    flow_start = (flow_end - timedelta(days=FUNDFLOW_HISTORY_DAYS)).isoformat()
     close_map = {r["trade_date"]: r["close"] for r in get_daily_prices(code, flow_start, trade_day)}
     flow_hist = [
         {
@@ -171,6 +171,7 @@ def build_detail(
         "as_of_adjusted": adjusted,
         "as_of_requested": as_of,
         "hist_view": hist_view,
+        "market_status": None if hist_view else market_status(),
     }
     if fx_rate is not None:
         data["fx_rate"] = fx_rate
