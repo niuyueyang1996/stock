@@ -6,7 +6,9 @@
   JSON 解析失败时本地修复 + 必要时请模型重发合法 JSON。
 - build_stock_context 复用缓存汇总个股数据（读缓存零网络）作为结构化输入。
 - analyze_stock 组装 prompt → 调 AI → 规整输出 → 存 ai_reports。
+- 统一 ScoreCard：score/grade/action/risk/confidence + 10 维（含消息面/技术面）。
 """
+import hashlib
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -23,21 +25,151 @@ logger = logging.getLogger("ai")
 _AI_MAX_TOKENS = 81920
 _AI_MAX_TOKENS_SAFE = 16384
 
-# 诊股 8 维度（固定，用于 prompt 与输出校验）
-DIMENSIONS = ["cyclicality", "moat", "fundamentals", "growth", "dividend", "valuation", "competition", "fundflow"]
+# 诊股 10 维度（共享 5 + 个股专属 5；固定，用于 prompt 与输出校验）
+DIMENSIONS = [
+    "cyclicality", "moat", "fundamentals", "growth", "dividend",
+    "valuation", "competition", "fundflow", "news", "technical",
+]
 DIMENSION_CN = {
     "cyclicality": "周期性", "moat": "护城河", "fundamentals": "基本面",
     "growth": "增长", "dividend": "股息", "valuation": "估值", "competition": "同业竞争",
-    "fundflow": "资金面",
+    "fundflow": "资金面", "news": "消息面", "technical": "技术面",
 }
 # dimensions 键名别名：AI 偶发把维度 JSON 键名写成中文（prompt 要求正文用中文维度名），映射回英文键
 DIM_KEY_ALIASES = {k: (k, cn) for k, cn in DIMENSION_CN.items()}
 
+# ---------- ScoreCard 公共定义（个股/组合/交易复用） ----------
+GRADE_NAMES = {"A": "优秀", "B": "良好", "C": "一般", "D": "较差"}
+ACTION_NAMES = {
+    "add": "加仓", "hold": "持有", "watch": "观望", "reduce": "减仓", "exit": "清仓",
+    "repeat": "可复制", "cautious": "谨慎复制", "avoid": "避免重复",
+}
+ACTION_STOCK_PORTFOLIO = frozenset({"add", "hold", "watch", "reduce", "exit"})
+ACTION_TRADE = frozenset({"repeat", "cautious", "avoid"})
+RISK_LEVELS = frozenset({"low", "medium", "high"})
+SHARED_DIMENSIONS = ["fundamentals", "valuation", "fundflow", "news", "technical"]
+PORTFOLIO_EXTRA_DIMENSIONS = ["structure", "tag_fit"]
+TRADE_EXTRA_DIMENSIONS = ["timing", "execution", "sizing", "discipline"]
+STOCK_EXTRA_DIMENSIONS = ["cyclicality", "moat", "growth", "dividend", "competition"]
+
+_SCORE_RULES = (
+    "[评分口径（强制）]\n"
+    "1. score 0-100；grade 质量：A优秀/B良好/C一般/D较差。锚点：80+→A，60-79→B，40-59→C，<40→D；"
+    "grade 须与 score 区间自洽，但由你直接给出，后端不做换算。\n"
+    "2. action 操作建议与 grade 解耦：个股/组合用 add/hold/watch/reduce/exit；"
+    "「好公司但现在贵」应 grade=A + action=watch。\n"
+    "3. risk 0-100（越高风险越大）与 risk_level low|medium|high；可与 grade 解耦（高质量高风险允许）。\n"
+    "4. confidence high|medium|low：缺数据时降级并写明缺什么，禁止臆造。\n"
+    "5. 每维输出 {score, grade, analysis}；action 须被 advice 支撑并给触发条件。\n"
+)
+
+
+def check_grade(r) -> str:
+    """校验 AI 质量评级 ∈ {A,B,C,D}；非法兜底 C（不做 score→grade 换算）。"""
+    g = str(r or "C").upper().strip()
+    return g if g in GRADE_NAMES else "C"
+
+
+def check_action(a, allowed) -> str:
+    """校验 action ∈ allowed；非法时个股/组合兜底 hold，交易兜底 cautious。"""
+    v = str(a or "").lower().strip()
+    if v in allowed:
+        return v
+    # 交易复盘集合含 cautious 不含 hold；个股/组合反之
+    return "cautious" if "cautious" in allowed and "hold" not in allowed else "hold"
+
+
+def check_risk_level(v) -> str:
+    """校验 risk_level ∈ low|medium|high；非法兜底 medium。"""
+    lv = str(v or "medium").lower().strip()
+    return lv if lv in RISK_LEVELS else "medium"
+
+
+def risk_level_from_score(risk: float) -> str:
+    """由 risk 分数推导档位：<35 low，<65 medium，否则 high。"""
+    try:
+        r = float(risk)
+    except (TypeError, ValueError):
+        return "medium"
+    if r < 35:
+        return "low"
+    if r < 65:
+        return "medium"
+    return "high"
+
+
+def _normalize_dim_block(d, *, with_stock_extras: bool = False) -> dict:
+    """规整单维 {score, grade, analysis[, risk, data_source]}。"""
+    if not isinstance(d, dict):
+        d = {}
+    try:
+        score = max(0, min(100, int(float(d.get("score", 50)))))
+    except (TypeError, ValueError):
+        score = 50
+    out = {
+        "score": score,
+        "grade": check_grade(d.get("grade") or d.get("rating")),
+        "analysis": str(d.get("analysis", "")),
+    }
+    if with_stock_extras:
+        out["risk"] = check_risk_level(d.get("risk"))
+        src = str(d.get("data_source", "provided")).lower()
+        out["data_source"] = "supplemented" if src == "supplemented" else "provided"
+    return out
+
+
+def upgrade_legacy_card(report: dict) -> dict:
+    """内存兼容：老字段映射到 ScoreCard 新键；不回写 DB、不改入参原对象语义外字段。
+
+    rating→grade、rating_name→grade_name、risk_score→risk；补 action/confidence 缺省。
+    """
+    if not isinstance(report, dict):
+        return {}
+    out = dict(report)
+    grade = check_grade(out.get("grade") or out.get("rating"))
+    out["grade"] = grade
+    out["grade_name"] = GRADE_NAMES[grade]
+    out["rating"] = grade  # 兼容旧前端
+    out["rating_name"] = GRADE_NAMES[grade]
+    if "risk" not in out and "risk_score" in out:
+        try:
+            out["risk"] = max(0, min(100, int(float(out["risk_score"]))))
+        except (TypeError, ValueError):
+            out["risk"] = 50
+    elif "risk" in out:
+        try:
+            out["risk"] = max(0, min(100, int(float(out["risk"]))))
+        except (TypeError, ValueError):
+            out["risk"] = 50
+    if "risk_score" not in out and "risk" in out:
+        out["risk_score"] = out["risk"]
+    if "risk_level" not in out or out.get("risk_level") not in RISK_LEVELS:
+        out["risk_level"] = risk_level_from_score(out.get("risk", 50))
+    if "action" not in out or not out.get("action"):
+        out["action"] = "hold"
+    act = str(out["action"]).lower().strip()
+    if act not in ACTION_NAMES:
+        act = "hold"
+        out["action"] = act
+    out["action_name"] = ACTION_NAMES.get(act, ACTION_NAMES["hold"])
+    conf = str(out.get("confidence") or "medium").lower().strip()
+    out["confidence"] = conf if conf in ("high", "medium", "low") else "medium"
+    if "score" in out:
+        try:
+            out["score"] = max(0, min(100, float(out["score"])))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 _SYSTEM_PROMPT = (
-    "你是资深股票分析师。根据给定的个股结构化数据，从周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面 "
-    "8 个维度分析该股，给出买入评级（A=强烈推荐/B=推荐/C=中性/D=回避）、买入风险系数（0-100，越高风险越大）与原因。\n\n"
+    "你是资深股票分析师。根据给定的个股结构化数据，从周期性、护城河、基本面、增长、股息、估值、同业竞争、"
+    "资金面、消息面、技术面 10 个维度分析该股，给出总分 score、质量评级 grade（A=优秀/B=良好/C=一般/D=较差）、"
+    "操作建议 action（add/hold/watch/reduce/exit，与 grade 解耦）、风险分 risk（0-100）与原因。\n\n"
+    f"{_SCORE_RULES}\n"
+    # _ASOF_RULES 在模块后部定义；analyze 时与消息/技术共用同一时效规则（见下方拼接处）
     "[数据使用规范]\n"
-    "1. 系统提供的所有结构化字段都必须纳入分析（行情/估值/财务/分位/资金流/持仓），"
+    "1. 系统提供的所有结构化字段都必须纳入分析（行情/估值/财务/分位/资金流/日K bars/消息摘要/持仓），"
     "不得只挑少数指标或只看总分——漏用数据视为不合格。\n"
     "2. 字段带 *_source / *_confidence 后缀表示可靠度：user=你的输入、ttm=滚动口径、latest_report=最新财报、"
     "zero_conservative=零增长保守假设；confidence 为 high/medium/low/invalid。来源为 user 的优先采信；"
@@ -46,17 +178,19 @@ _SYSTEM_PROMPT = (
     "4. 资金流字段为净流入（元，正=流入负=流出）；五档 super=超大单/large=大单/medium=中单/small=小单/xs=特小单，"
     "main=主力（超大+大单）。当日分时 15 分钟序列（intraday_15m：每窗口五档净额，main=单窗口主力/cum=累计主力）"
     "与近30日累计反映资金趋势，须结合看。\n"
-    "5. 若某维度数据缺失或不足（如同业竞争对比、行业景气度），可用你的领域知识补充，但必须：\n"
+    "5. bars 为截至 as_of_datetime 的日K；news_report/tech_report 若存在则优先采信其摘要（stance/trend/summary），"
+    "过时或 omit_reason 说明缺数时勿臆造。消息面无正文库时按 as_of 用领域知识补充并标 [AI补充]。\n"
+    "6. 若某维度数据缺失或不足（如同业竞争对比、行业景气度），可用你的领域知识补充，但必须：\n"
     "   a) 在该维度 analysis 中明确标注「[AI补充]」；\n"
     "   b) 注明补充数据的时效（如「截至2026年」），确保有时效性、不用过时数据；\n"
     "   c) 无法确认时效时明确说明；字段为 null 表示系统无此数据，不得臆造数值。\n"
-    "6. data_source 字段：provided=基于系统数据；supplemented=AI 补充/推断。\n"
-    "7. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、html、"
+    "7. data_source 字段：provided=基于系统数据；supplemented=AI 补充/推断。\n"
+    "8. 输出语言与键名：所有文字字段（维度 analysis、cross_analysis.explanation、summary、reasons、html、"
     "预期增速依据）一律使用简体中文，禁止混入英文单词；若在正文中提及维度，用中文名"
-    "（周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面），不要写 growth/fundamentals 等英文。\n"
-    "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 8 个键固定为 "
-    "cyclicality/moat/fundamentals/growth/dividend/valuation/competition/fundflow，禁止改名。\n"
-    "8. expected_growth 字段：基于系统财务数据（最新财报同比、TTM 同比、ROE、支付率、前瞻指标）与陷阱判断，"
+    "（周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面、消息面、技术面），不要写 growth/fundamentals 等英文。\n"
+    "   JSON 键名必须保持英文、与下方输出结构完全一致，不得改成中文；尤其 dimensions 的 10 个键固定为 "
+    "cyclicality/moat/fundamentals/growth/dividend/valuation/competition/fundflow/news/technical，禁止改名。\n"
+    "9. expected_growth 字段：基于系统财务数据（最新财报同比、TTM 同比、ROE、支付率、前瞻指标）与陷阱判断，"
     "给出你对该股未来一年净利与营收年同比增速的预判（%，可为负），并用 net_profit_reason / revenue_reason 简述依据。"
     "若识别出周期陷阱，勿把历史高点同比直接外推到未来，增速应回归行业中枢。\n\n"
     "[资金面分析要求]\n"
@@ -79,7 +213,7 @@ _SYSTEM_PROMPT = (
     "   c) 股息陷阱：高股息率可能因股价大幅下跌或盈利下滑（分红不可持续）而虚高。"
     "需结合派息率、盈利趋势、现金流判断；若分红不可持续，股息维度评分应下调。\n"
     "2. cross_analysis 输出每个陷阱是否识别、对得分的调整量（impact_score 负数=下调）、以及识别依据（结合哪些维度数据）。\n"
-    "3. 最终 rating / risk_score / summary 必须综合陷阱判断，不可仅按孤立维度加权。\n"
+    "3. 最终 score / grade / action / risk / summary 必须综合陷阱判断，不可仅按孤立维度加权。\n"
     "严格输出 JSON，不要输出任何额外文字。"
 )
 
@@ -90,10 +224,10 @@ _HTML_REQUIREMENT = (
     "[HTML 深度分析强制规范]\n"
     "1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止泛泛复述 prompt 结构、禁止空话套话，浅尝辄止视为不合格重写。\n"
     "2. 结构必须覆盖：核心结论 / 商业模式与护城河 / 财务与盈利质量 / 成长驱动 / "
-    "资金面（主力/五档/近30日资金流）/ 估值判断（含前瞻）/ 风险与陷阱 / 情景推演 / 操作建议分级。\n"
+    "资金面（主力/五档/近30日资金流）/ 消息面与技术面 / 估值判断（含前瞻）/ 风险与陷阱 / 情景推演 / 操作建议分级。\n"
     "3. 每个判断必须带具体数字与上下文（如「当前 PE 12.3 处近 1 年约 15% 分位，前瞻 PE 仅 9.8，"
     "但增长来源为 zero_conservative 保守假设」）；禁止「估值偏低」「基本面扎实」这类无数字断言。\n"
-    "4. 操作建议分级：加仓/持有/减仓/清仓四档，每档给出触发条件，不得含糊。\n"
+    "4. 操作建议分级：加仓/持有/观望/减仓/清仓，每档给出触发条件，不得含糊；与顶层 action 一致。\n"
     "5. HTML 为独立成文，离开本应用页面即可读懂；已提供的行情/财务/估值等原始数据用户在本应用已可查看，"
     "HTML 中**不得原样罗列数据表格**；把篇幅全部用于深入分析与洞察。\n"
     "6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。\n"
@@ -102,11 +236,16 @@ _HTML_REQUIREMENT = (
 )
 
 _OUTPUT_SCHEMA = {
-    "rating": "A|B|C|D",
-    "risk_score": "0-100 整数，越高风险越大",
+    "score": "0-100 总分",
+    "grade": "A|B|C|D 质量评级",
+    "action": "add|hold|watch|reduce|exit",
+    "risk": "0-100 风险分",
+    "risk_level": "low|medium|high",
+    "confidence": "high|medium|low",
     "dimensions": {
         k: {
             "score": "0-100 该维度健康度/吸引力评分",
+            "grade": "A|B|C|D",
             "analysis": "该维度分析（若为补充数据需标注[AI补充]及时效，如「截至2026年」）",
             "risk": "low|medium|high",
             "data_source": "provided（系统数据）|supplemented（AI补充，analysis 内需标注[AI补充]）",
@@ -816,6 +955,32 @@ def build_stock_context(code: str) -> dict:
             }
     except Exception:  # noqa: BLE001
         pass
+
+    # 时效 + 技术面日K + 专项报告摘要（阶段二 ScoreCard）
+    as_of = now_as_of_datetime()
+    ctx["as_of_datetime"] = as_of
+    try:
+        ctx["bars"] = build_technical_bars(code, as_of, limit=60)
+    except Exception:  # noqa: BLE001
+        ctx["bars"] = []
+    try:
+        nr = get_stock_news_report(code)
+        if nr:
+            ctx["news_report"] = {
+                "stance": nr.get("stance"), "summary": nr.get("summary"),
+                "omit_reason": nr.get("omit_reason"), "as_of": nr.get("as_of"),
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        tr = get_stock_tech_report(code)
+        if tr:
+            ctx["tech_report"] = {
+                "trend_short": tr.get("trend_short"), "trend_mid": tr.get("trend_mid"),
+                "summary": tr.get("summary"), "as_of": tr.get("as_of"),
+            }
+    except Exception:  # noqa: BLE001
+        pass
     return ctx
 
 
@@ -841,6 +1006,9 @@ _ASOF_RULES = (
     "4. 无任何可用信息时：items 输出空数组 [] 并在 omit_reason 说明原因，不要硬凑结论。\n"
     "5. 带日期的条目必须给 event_date（YYYY-MM-DD），缺日期的条目不输出。\n"
 )
+
+# 诊股 system 在定义处尚未拿到 _ASOF_RULES；此处补上（与 _SCORE_RULES 并列）
+_SYSTEM_PROMPT = f"{_SYSTEM_PROMPT}\n{_ASOF_RULES}"
 
 
 def _bar_dict(r) -> dict:
@@ -882,15 +1050,83 @@ def build_technical_bars_many(codes: list[str], as_of_datetime: str, limit: int 
 
 # ---------- 诊股 ----------
 
-def _normalize_report(data: dict) -> dict:
-    """校验/规整 AI 输出为统一结构，缺失字段补默认。"""
-    rating = str(data.get("rating", "C")).upper()
-    if rating not in ("A", "B", "C", "D"):
-        rating = "C"
+def _price_bucket(price) -> str | None:
+    """价格档位（粗粒度，避免微小波动刷 stale）：按数量级分桶。"""
+    if price is None:
+        return None
     try:
-        risk = max(0, min(100, int(float(data.get("risk_score", 50)))))
+        p = float(price)
+    except (TypeError, ValueError):
+        return None
+    if p <= 0:
+        return "0"
+    # 约 2% 档：取 log 粗分，或简单按整数/十位
+    if p < 10:
+        return f"{round(p, 1):.1f}"
+    if p < 100:
+        return f"{int(round(p))}"
+    if p < 1000:
+        return f"{int(round(p / 5) * 5)}"
+    return f"{int(round(p / 10) * 10)}"
+
+
+def stock_report_snapshot_hash(code: str, model_name: str = "") -> str:
+    """诊股新鲜度哈希：价格档位 + 财报报告期 + 资金流日期 + 模型名（不含时间戳）。"""
+    from app.data.cache import get_daily_fundflow, get_financials
+    from app.services.quote import get_quote
+
+    price = None
+    try:
+        price = (get_quote(code) or {}).get("price")
+    except Exception:  # noqa: BLE001
+        pass
+    report_date = None
+    try:
+        fin = get_financials(code)
+        if fin:
+            report_date = fin.get("report_date")
+    except Exception:  # noqa: BLE001
+        pass
+    flow_date = None
+    try:
+        flow = get_daily_fundflow(code)
+        if flow:
+            flow_date = flow.get("trade_date")
+    except Exception:  # noqa: BLE001
+        pass
+    payload = {
+        "code": code,
+        "price_bucket": _price_bucket(price),
+        "fin_report_date": report_date,
+        "fundflow_date": flow_date,
+        "model": model_name or "",
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _normalize_report(data: dict) -> dict:
+    """校验/规整 AI 输出为统一 ScoreCard 结构，缺失字段补默认；保留 rating/risk_score 别名。"""
+    grade = check_grade(data.get("grade") or data.get("rating"))
+    try:
+        score = max(0, min(100, float(data.get("score", 50))))
+    except (TypeError, ValueError):
+        score = 50.0
+    # score/grade 明显冲突只记 warning，不改数据
+    if score >= 80 and grade == "D":
+        logger.warning("[AI诊股] score/grade 冲突：score=%.1f grade=%s", score, grade)
+    elif score < 40 and grade == "A":
+        logger.warning("[AI诊股] score/grade 冲突：score=%.1f grade=%s", score, grade)
+    action = check_action(data.get("action"), ACTION_STOCK_PORTFOLIO)
+    risk_raw = data.get("risk", data.get("risk_score", 50))
+    try:
+        risk = max(0, min(100, int(float(risk_raw))))
     except (TypeError, ValueError):
         risk = 50
+    risk_level = check_risk_level(data.get("risk_level")) if data.get("risk_level") else risk_level_from_score(risk)
+    conf = str(data.get("confidence") or "medium").lower().strip()
+    if conf not in ("high", "medium", "low"):
+        conf = "medium"
     dims = {}
     raw_dims = data.get("dimensions") or {}
     if not isinstance(raw_dims, dict):
@@ -898,18 +1134,7 @@ def _normalize_report(data: dict) -> dict:
     for k in DIMENSIONS:
         # AI 偶发把维度 JSON 键名写成中文，映射回英文键（英文优先，中文兜底）
         d = next((raw_dims[a] for a in DIM_KEY_ALIASES[k] if isinstance(raw_dims.get(a), dict)), {})
-        try:
-            score = max(0, min(100, int(float(d.get("score", 50)))))
-        except (TypeError, ValueError):
-            score = 50
-        risk_lv = str(d.get("risk", "medium")).lower()
-        if risk_lv not in ("low", "medium", "high"):
-            risk_lv = "medium"
-        src = str(d.get("data_source", "provided")).lower()
-        dims[k] = {
-            "score": score, "analysis": str(d.get("analysis", "")), "risk": risk_lv,
-            "data_source": "supplemented" if src == "supplemented" else "provided",
-        }
+        dims[k] = _normalize_dim_block(d, with_stock_extras=True)
     raw_reasons = data.get("reasons") or []
     if not isinstance(raw_reasons, list):
         raw_reasons = [str(raw_reasons)] if raw_reasons else []
@@ -951,7 +1176,17 @@ def _normalize_report(data: dict) -> dict:
         "revenue_reason": str(eg.get("revenue_reason") or ""),
     }
     return {
-        "rating": rating,
+        "score": round(score, 1),
+        "grade": grade,
+        "grade_name": GRADE_NAMES[grade],
+        "action": action,
+        "action_name": ACTION_NAMES[action],
+        "risk": risk,
+        "risk_level": risk_level,
+        "confidence": conf,
+        # 兼容旧前端/测试：rating=grade，risk_score=risk
+        "rating": grade,
+        "rating_name": GRADE_NAMES[grade],
         "risk_score": risk,
         "dimensions": dims,
         "cross_analysis": traps,
@@ -989,6 +1224,8 @@ def analyze_stock(code: str, system_prompt: str | None = None,
     except Exception as e:  # noqa: BLE001
         raise ValueError(str(e))
     report = _normalize_report(raw)
+    report["as_of"] = ctx.get("as_of_datetime") or now_as_of_datetime()
+    report["snapshot_hash"] = stock_report_snapshot_hash(code, model_cfg["name"])
     from app.data.cache import get_financials
 
     fin = get_financials(code)
@@ -1007,18 +1244,26 @@ def analyze_stock(code: str, system_prompt: str | None = None,
                  model_name=excluded.model_name, updated_at=excluded.updated_at""",
             (code, name, json.dumps(report, ensure_ascii=False), model_cfg["name"], now, now),
         )
-    logger.info("[AI诊股] %s 生成报告：%s（%s）", code, report["rating"], model_cfg["name"])
+    logger.info("[AI诊股] %s 生成报告：%s（%s）", code, report["grade"], model_cfg["name"])
     return {"code": code, "model_name": model_cfg["name"], "created_at": now, "report": report}
 
 
 def get_report(code: str) -> dict | None:
-    """读取已存报告。"""
+    """读取已存报告；内存 upgrade_legacy_card + stale（快照哈希对比）。"""
     with get_conn() as c:
         row = c.execute("SELECT * FROM ai_reports WHERE code=?", (code,)).fetchone()
     if not row:
         return None
     d = dict(row)
-    d["report"] = json.loads(d.pop("report_json"))
+    report = json.loads(d.pop("report_json"))
+    report = upgrade_legacy_card(report)
+    stored = report.get("snapshot_hash")
+    if stored:
+        current = stock_report_snapshot_hash(code, d.get("model_name") or "")
+        d["stale"] = stored != current
+    else:
+        d["stale"] = False
+    d["report"] = report
     return d
 
 
@@ -2514,8 +2759,9 @@ def list_tech_reports(codes: list[str]) -> dict:
 # 只展示用户可能想改的「要求块」；用户改了才作为「用户附加要求」追加到完整指令后。
 _EDITABLE_PROMPTS = {
     "stock": (
-        "请从基本面、成长性、估值、股息、护城河、周期性、同业竞争、资金面八个维度分析该股，"
-        "重点提示风险与交叉陷阱，给出明确评级与买卖建议。"
+        "请从周期性、护城河、基本面、增长、股息、估值、同业竞争、资金面、消息面、技术面"
+        "十个维度分析该股；给出总分、质量评级 grade（优秀/良好/一般/较差）与操作建议 action"
+        "（加仓/持有/观望/减仓/清仓，与 grade 解耦）；重点提示风险与交叉陷阱。"
     ),
     "fundflow": (
         "请判断资金与股价的相关性/背离、主力资金意图（含大单拆小单的伪装），"
@@ -2527,11 +2773,13 @@ _EDITABLE_PROMPTS = {
         "给出组合层面结论。"
     ),
     "portfolio": (
-        "请从组合整体评估质量、估值、风险与成长性，给出得分（0-100）与评级（A/B/C/D）"
+        "请从组合整体按共享维（基本面/估值/资金面/消息面/技术面）+ 结构集中度 + 标签契合度"
+        "打分；给出总分、质量评级 grade、操作建议 action（加仓/持有/观望/减仓/清仓）与风险分，"
         "及改进建议。"
     ),
     "daily": (
-        "请逐笔评估当日每笔交易合理性，再汇总当日整体操作给出评分与改进建议。"
+        "请逐笔评估当日交易合理性（时机/价格执行/仓位/纪律），再汇总当日整体；"
+        "给出总分、质量评级与操作建议（可复制/谨慎复制/避免重复）。"
     ),
     "news": (
         "请判断该股近期消息面（公司公告、行业与政策事件、财报节点等）与时效性，"

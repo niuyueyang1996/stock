@@ -3,11 +3,11 @@
 - 标签偏好（tag_prefs）：用户输入简短偏好，保存时自动请求 AI 补全成完整「评分指引」
   （draft），确认后（confirmed）才用于打分。
 - 组合 AI 打分：手动触发，把 compute_portfolio 全量聚合 + 各标签「评分指引」带给 AI，
-  AI 直接输出 0-100 总分 + 评级（A/B/C/D）+ 总结/建议/风险/理由/详细分析。支持标签筛选。
+  AI 直接输出 ScoreCard（score/grade/action/risk + 共享维+结构/标签契合）+ 总结/建议。
 - 每日 AI 打分：每天一次调用，AI 按每笔交易所属标签的「评分指引」逐笔打分，再综合当日总分。
   偏好提示词按当天涉及的标签去重（50 笔同标签也只带 1 条）。
-- AI 评级（A/B/C/D）由 AI 直接给出，后端只做格式校验，不做 score→grade 转换。
-- 复用 app/services/ai.py 的 get_active_model / chat_json（OpenAI 兼容）。
+- AI 评级（A/B/C/D=质量）由 AI 直接给出，后端只做格式校验，不做 score→grade 转换。
+- 复用 app/services/ai.py 的 get_active_model / chat_json / ScoreCard 公共定义。
 """
 import hashlib
 import json
@@ -20,8 +20,8 @@ from app.services import ai
 
 logger = logging.getLogger("ai_scoring")
 
-# AI 评级中文显示标签（仅展示；评级由 AI 直接给出）
-_RATING_NAMES = {"A": "优秀", "B": "良好", "C": "一般", "D": "较差"}
+# AI 评级中文显示标签（复用 ai.GRADE_NAMES；评级由 AI 直接给出）
+_RATING_NAMES = ai.GRADE_NAMES
 _RATING_KEYS = set(_RATING_NAMES)
 
 _NO_MODEL_MSG = "尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）"
@@ -43,14 +43,17 @@ def _clamp_score(v, lo: float = 0.0, hi: float = 100.0, default: float = 50.0) -
 
 def _check_rating(r) -> str:
     """校验 AI 直接给出的评级 ∈ {A,B,C,D}；非法兜底 C（仅防脏数据，不做换算）。"""
-    r = str(r or "C").upper().strip()
-    return r if r in _RATING_KEYS else "C"
+    return ai.check_grade(r)
 
 
 def _str_list(v) -> list[str]:
     if not isinstance(v, list):
         v = [v] if v else []
     return [str(x) for x in v]
+
+
+_PORTFOLIO_DIMS = ai.SHARED_DIMENSIONS + ai.PORTFOLIO_EXTRA_DIMENSIONS
+_DAILY_DIMS = ai.TRADE_EXTRA_DIMENSIONS
 
 
 # ============================================================ 标签偏好
@@ -238,7 +241,8 @@ def _portfolio_fundflow_summary(tags: list[str] | None) -> dict:
 
 
 def build_portfolio_context(tags: list[str] | None = None) -> dict:
-    """组合汇总好的所有信息（compute_portfolio 全量聚合，单股/标签全字段）+ 资金流穿透 + 各标签「评分指引」。"""
+    """组合汇总好的所有信息（compute_portfolio 全量聚合，单股/标签全字段）+ 资金流穿透
+    + 技术面 bars / 消息面 meta + 可选专项报告摘要 + 各标签「评分指引」。"""
     from app.analysis.portfolio import compute_portfolio
 
     p = compute_portfolio(tags=tags)
@@ -246,6 +250,42 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
     if tags is not None:
         tag_set = set(tags)
         prefs = {k: v for k, v in prefs.items() if k in tag_set}
+    stocks = p["stocks"]
+    as_of = ai.now_as_of_datetime()
+    # 按权重取前约 15 只喂 bars，控 token
+    ranked = sorted(
+        [s for s in stocks if s.get("code")],
+        key=lambda s: float(s.get("weight") or 0),
+        reverse=True,
+    )[:15]
+    top_codes = [s["code"] for s in ranked]
+    bar_map: dict = {}
+    try:
+        if top_codes:
+            bar_map = ai.build_technical_bars_many(top_codes, as_of, limit=40)
+    except Exception:  # noqa: BLE001
+        bar_map = {}
+    technical = [
+        {
+            "code": s["code"], "name": s.get("name") or s["code"],
+            "weight": s.get("weight"), "bars": bar_map.get(s["code"], []),
+        }
+        for s in ranked
+    ]
+    news_meta = {
+        "as_of_datetime": as_of,
+        "stocks": [{"code": s["code"], "name": s.get("name") or s["code"]} for s in stocks if s.get("code")],
+    }
+    all_codes = [s["code"] for s in stocks if s.get("code")]
+    news_reports, tech_reports = {}, {}
+    try:
+        news_reports = ai.list_news_reports(all_codes) if all_codes else {}
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        tech_reports = ai.list_tech_reports(all_codes) if all_codes else {}
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "portfolio": p["portfolio"],
         "weights": p["weights"],
@@ -256,17 +296,28 @@ def build_portfolio_context(tags: list[str] | None = None) -> dict:
         "all_tags": p["all_tags"],
         "selected_tags": sorted(tags) if tags else [],
         "tag_prefs": prefs,
+        "as_of_datetime": as_of,
+        "technical": technical,
+        "news_meta": news_meta,
+        "news_reports": news_reports,
+        "tech_reports": tech_reports,
     }
 
 
 _PORTFOLIO_SYSTEM = (
     "你是资深个人投资组合分析师。系统提供当前组合的聚合数据（人民币口径）、单股与标签板块全量指标、"
-    "组合资金流穿透（fundflow），以及各标签的「评分指引」。"
-    "请综合打分：优先依据提供的结构化数据；各持仓所属标签的「评分指引」是评分的核心准则，"
-    "不同标签的持仓按各自指引分别衡量后形成整体判断。"
-    "直接给出 0-100 总分与评级（A=优秀/B=良好/C=一般/D=较差），并给出总结、建议、风险、核心理由。"
-    "\n\n[数据使用规范]"
-    "\n1. 系统提供的所有结构化字段都必须纳入分析（组合聚合/单股估值/标签板块/资金流穿透/覆盖率），不得只挑少数指标——漏用数据视为不合格。"
+    "组合资金流穿透（fundflow）、技术面日K（technical）、消息面元数据（news_meta）及可选专项报告摘要"
+    "（news_reports/tech_reports），以及各标签的「评分指引」。"
+    "请综合打分：优先依据提供的结构化数据；已有 news_reports/tech_reports 摘要时优先采信；"
+    "各持仓所属标签的「评分指引」是评分的核心准则，不同标签的持仓按各自指引分别衡量后形成整体判断。"
+    "直接给出 ScoreCard：score 0-100、grade（A=优秀/B=良好/C=一般/D=较差，质量）、"
+    "action（add/hold/watch/reduce/exit，与 grade 解耦）、risk 0-100、risk_level、confidence，"
+    "以及 dimensions（共享维 fundamentals/valuation/fundflow/news/technical + structure/tag_fit），"
+    "并给出总结、建议、风险、核心理由。"
+    f"\n\n{ai._SCORE_RULES}\n{ai._ASOF_RULES}"
+    "\n[数据使用规范]"
+    "\n1. 系统提供的所有结构化字段都必须纳入分析（组合聚合/单股估值/标签板块/资金流穿透/技术面/"
+    "消息面/覆盖率），不得只挑少数指标——漏用数据视为不合格。"
     "\n2. 字段带 *_source / *_confidence 后缀表示可靠度：user=你的输入、ttm=滚动口径、latest_report=最新财报、"
     "zero_conservative=零增长保守假设；confidence 为 high/medium/low/invalid。来源为 user 的优先采信；"
     "zero_conservative / low / invalid 的须保守解读并在报告注明。"
@@ -276,7 +327,9 @@ _PORTFOLIO_SYSTEM = (
     "netamount/main_net/各档净额/buy_amount/sell_amount）、累计速览 history_30d_net/history_5d_net、"
     "covered/total）必须纳入分析：评估组合整体资金面（净流入/流出、各档主力态度、全天节奏与跨日趋势），"
     "识别资金驱动的高权重板块。covered/total 表示有资金流数据的持仓占比，低于全部时按可用部分判断。"
-    "\n5. missing_fx=该股缺汇率、已从人民币汇总剔除；字段为 null 表示系统无此数据，不得臆造数值；"
+    "\n5. technical 为按权重裁剪的持仓日K；news_meta 仅含 as_of 与 code/name——"
+    "消息面/技术面须与资金面并列纳入；过时或不确信的不写进结论。"
+    "\n6. missing_fx=该股缺汇率、已从人民币汇总剔除；字段为 null 表示系统无此数据，不得臆造数值；"
     "用领域知识补充时须标 [AI补充] 并注明时效。"
     "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
@@ -287,10 +340,11 @@ _PORTFOLIO_HTML_REQUIREMENT = (
     "同时生成一份完整、独立、可读性强的 HTML 详细报告（字段 html），供用户新开页面查看。"
     "\n[HTML 深度分析强制规范]"
     "\n1. HTML 正文（简体中文）必须 ≥1000 字，必须有实质分析；禁止只列要点、禁止空话套话，浅尝辄止视为不合格重写。"
-    "\n2. 结构必须覆盖：核心结论 / 逐标签深度解读 / 结构集中度 / 指标含义与背离 / 资金流与波动率 / 风险与陷阱 / 情景推演 / 操作建议分级。"
+    "\n2. 结构必须覆盖：核心结论 / 逐标签深度解读 / 结构集中度 / 指标含义与背离 / 资金流·消息面·技术面 / "
+    "波动率 / 风险与陷阱 / 情景推演 / 操作建议分级。"
     "\n3. 每个判断必须带具体数字与上下文（如「组合综合 PE 15.2，处近1年约 30% 分位，但覆盖率仅 65% 需谨慎」）；"
     "禁止「估值合理」「组合稳健」这类无数字断言。"
-    "\n4. 操作建议分级：加仓/持有/减仓/清仓四档，每档给出触发条件，不得含糊。"
+    "\n4. 操作建议分级：加仓/持有/观望/减仓/清仓，每档给出触发条件，不得含糊；与顶层 action 一致。"
     "\n5. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的持仓明细/标签板块/估值数据表。"
     "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
     "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
@@ -298,7 +352,15 @@ _PORTFOLIO_HTML_REQUIREMENT = (
 )
 _PORTFOLIO_OUTPUT_SCHEMA = {
     "score": "0-100 整数总分",
-    "rating": "A|B|C|D 评级（直接给出，不要按分数换算）",
+    "grade": "A|B|C|D 质量评级（直接给出，不要按分数换算）",
+    "action": "add|hold|watch|reduce|exit",
+    "risk": "0-100 风险分",
+    "risk_level": "low|medium|high",
+    "confidence": "high|medium|low",
+    "dimensions": {
+        k: {"score": "0-100", "grade": "A|B|C|D", "analysis": "该维分析（简体中文）"}
+        for k in _PORTFOLIO_DIMS
+    },
     "summary": "一句话总体结论",
     "advice": ["建议数组（简体中文）"],
     "risks": ["风险数组（简体中文）"],
@@ -310,17 +372,46 @@ _PORTFOLIO_OUTPUT_SCHEMA = {
 def _normalize_portfolio_report(data: dict) -> dict:
     if not isinstance(data, dict):
         data = {}
-    rating = _check_rating(data.get("rating"))
-    return {
-        "score": round(_clamp_score(data.get("score"), 0, 100), 1),
-        "rating": rating,
-        "rating_name": _RATING_NAMES[rating],
+    grade = _check_rating(data.get("grade") or data.get("rating"))
+    score = round(_clamp_score(data.get("score"), 0, 100), 1)
+    if score >= 80 and grade == "D":
+        logger.warning("[AI打分] 组合 score/grade 冲突：score=%s grade=%s", score, grade)
+    action = ai.check_action(data.get("action"), ai.ACTION_STOCK_PORTFOLIO)
+    risk_raw = data.get("risk", data.get("risk_score", 50))
+    risk = int(round(_clamp_score(risk_raw, 0, 100, 50)))
+    risk_level = (ai.check_risk_level(data.get("risk_level"))
+                  if data.get("risk_level") else ai.risk_level_from_score(risk))
+    conf = str(data.get("confidence") or "medium").lower().strip()
+    if conf not in ("high", "medium", "low"):
+        conf = "medium"
+    raw_dims = data.get("dimensions") if isinstance(data.get("dimensions"), dict) else {}
+    dims = {}
+    for k in _PORTFOLIO_DIMS:
+        d = raw_dims.get(k)
+        if isinstance(d, dict):
+            dims[k] = ai._normalize_dim_block(d, with_stock_extras=False)
+        else:
+            dims[k] = {}
+    out = {
+        "score": score,
+        "grade": grade,
+        "grade_name": _RATING_NAMES[grade],
+        "action": action,
+        "action_name": ai.ACTION_NAMES[action],
+        "risk": risk,
+        "risk_level": risk_level,
+        "confidence": conf,
+        "rating": grade,
+        "rating_name": _RATING_NAMES[grade],
+        "risk_score": risk,
+        "dimensions": dims,
         "summary": str(data.get("summary") or ""),
         "advice": _str_list(data.get("advice")),
         "risks": _str_list(data.get("risks")),
         "reasons": _str_list(data.get("reasons")),
         "html": str(data.get("html") or ""),   # AI 生成的完整 HTML 报告（可空 → 前端不显示入口）
     }
+    return ai.upgrade_legacy_card(out)
 
 
 def _tags_key(tags: list[str] | None = None) -> list[str]:
@@ -365,7 +456,7 @@ def score_portfolio(tags: list[str] | None = None, system_prompt: str | None = N
                  model_name=excluded.model_name, updated_at=excluded.updated_at""",
             (phash, tags_json, json.dumps(report, ensure_ascii=False), model["name"], now, now),
         )
-    logger.info("[AI打分] 组合%s 完成：%s 分（%s）", f"筛选{tags}" if tags else "全部", report["score"], report["rating"])
+    logger.info("[AI打分] 组合%s 完成：%s 分（%s）", f"筛选{tags}" if tags else "全部", report["score"], report["grade"])
     return {"report": report, "profile_hash": phash, "model_name": model["name"], "created_at": now}
 
 
@@ -385,7 +476,7 @@ def get_portfolio_report(tags: list[str] | None = None) -> dict | None:
         ).fetchone()
         if row:
             d = dict(row)
-            d["report"] = json.loads(d.pop("report_json"))
+            d["report"] = ai.upgrade_legacy_card(json.loads(d.pop("report_json")))
             d["tags"] = json.loads(d.pop("tags_json") or "[]")
             d["profile_hash"] = d.pop("profile_hash", "")
             d["stale"] = False
@@ -401,7 +492,7 @@ def get_portfolio_report(tags: list[str] | None = None) -> dict | None:
             same = False
         if same:
             d = dict(r)
-            d["report"] = json.loads(d.pop("report_json"))
+            d["report"] = ai.upgrade_legacy_card(json.loads(d.pop("report_json")))
             d["tags"] = json.loads(d.pop("tags_json") or "[]")
             d["profile_hash"] = d.pop("profile_hash", "")
             d["stale"] = d["profile_hash"] != phash
@@ -548,6 +639,16 @@ def _stock_factors(code: str, as_of: str | None = None) -> dict:
             pass
     f["pct_chg"] = pct_chg
     f.update(_fundflow_factor(code, as_of))
+    # 技术面日K + as_of（与资金流同级，供交易复盘 technical/news 维）
+    as_of_dt = as_of or ai.now_as_of_datetime()
+    # as_of 可能是 YYYY-MM-DD；补齐成可被 resolve_trade_day 吃的串
+    if as_of and len(str(as_of)) == 10:
+        as_of_dt = f"{as_of}T15:00:00"
+    f["as_of_datetime"] = as_of_dt if as_of else ai.now_as_of_datetime()
+    try:
+        f["bars"] = ai.build_technical_bars(code, f["as_of_datetime"], limit=40)
+    except Exception:  # noqa: BLE001
+        f["bars"] = []
     return f
 
 
@@ -608,14 +709,17 @@ def build_daily_context(score_date: str) -> dict:
 
 
 _DAILY_SYSTEM = (
-    "你是资深交易复盘分析师。系统提供某交易日的每笔买卖交易、该股当日 asof 因子与持仓位置、"
+    "你是资深交易复盘分析师。系统提供某交易日的每笔买卖交易、该股当日 asof 因子（含 bars 日K）与持仓位置、"
     "当日/近30日资金流，以及各标签的「评分指引」。"
-    "请按每笔交易所属标签的「评分指引」逐笔评分并给出评级，再综合当日多笔交易的节奏/集中度/方向"
+    "请按每笔交易所属标签的「评分指引」逐笔评分并给出质量评级与操作建议，再综合当日多笔交易的节奏/集中度/方向"
     "给出当日总分与评级。评分准则：不同标签的交易按各自指引分别衡量。"
-    "直接给出 0-100 总分与评级（A/B/C/D），每笔交易也给出分数、评级与一句话点评。"
-    "\n\n[数据使用规范]"
-    "\n1. 系统提供的所有结构化字段都必须纳入分析（交易明细/估值/分位/资金流/持仓位置），不得只挑少数指标——漏用数据视为不合格。"
-    "\n2. 每股 factors 为该笔交易「当日」的 asof 快照（当日收盘价口径的估值/分位/资金流）——"
+    "直接给出 ScoreCard：score 0-100、grade（A/B/C/D 质量）、action（repeat/cautious/avoid）、"
+    "risk、risk_level、confidence，以及 dimensions（timing/execution/sizing/discipline）；"
+    "每笔交易也给出分数、grade、action 与一句话点评。"
+    f"\n\n{ai._SCORE_RULES}\n{ai._ASOF_RULES}"
+    "\n[数据使用规范]"
+    "\n1. 系统提供的所有结构化字段都必须纳入分析（交易明细/估值/分位/资金流/日K bars/持仓位置），不得只挑少数指标——漏用数据视为不合格。"
+    "\n2. 每股 factors 为该笔交易「当日」的 asof 快照（当日收盘价口径的估值/分位/资金流/bars）——"
     "不要用当前时点的数据评价历史交易；字段含 asof_fallback=true 表示当日数据缺失、已回退当前值，须保守解读。"
     "\n3. holding 字段是该股在你组合中的当前位置（权重/成本/盈亏/今日盈亏/累计分红，不在仓为 null）——"
     "评估每笔买卖对组合的意义（加仓集中度、摊薄成本、兑现盈亏）时必须结合。"
@@ -623,7 +727,8 @@ _DAILY_SYSTEM = (
     "main=主力（超大+大单）。fundflow_intraday_15m（当日 15 分钟五档序列，每窗口含各档净额与累计主力）"
     "反映交易当日各档资金节奏，fundflow_daily（完整逐日五档/买卖盘升序序列）与累计速览 "
     "fundflow_30d_net / 5d_net 反映资金中期趋势——用于判断交易当日/近期的资金环境。"
-    "\n5. 字段为 null 表示系统无此数据，不得臆造数值；用领域知识补充时须标 [AI补充] 并注明时效。"
+    "\n5. factors.bars 与 as_of_datetime 用于技术面/消息面环境判断；过时不写。"
+    "\n6. 字段为 null 表示系统无此数据，不得臆造数值；用领域知识补充时须标 [AI补充] 并注明时效。"
     "输出语言：所有文字字段用简体中文。输出严格 JSON，不要任何额外文字。"
 )
 
@@ -637,7 +742,7 @@ _DAILY_HTML_REQUIREMENT = (
     "与标签偏好吻合度 / 集中度与风险 / 改进与后续策略。"
     "\n3. 每个判断必须带具体数字与上下文（如「该笔买入价 12.3，当日 PE 11 处于近1年约20%分位，"
     "但 asof 数据缺失已回退当前值」）；禁止「价格合理」「买入时机好」这类无数字断言。"
-    "\n4. 操作建议分级：加仓/持有/减仓/清仓四档，每档给出触发条件，不得含糊。"
+    "\n4. 操作建议分级：可复制/谨慎复制/避免重复，每档给出触发条件，不得含糊；与顶层/逐笔 action 一致。"
     "\n5. HTML 为独立成文，离开本应用页面即可读懂；不得原样罗列系统已展示的交易数据表。"
     "\n6. 质量自检：写完后逐段检查——这段是否提供了用户在数据表上看不到的洞察？若没有，重写。"
     "\n要求：自包含单文件、内联 CSS、不引用任何外部资源、不得包含 <script> 或任何可执行代码；"
@@ -645,15 +750,23 @@ _DAILY_HTML_REQUIREMENT = (
 )
 _DAILY_OUTPUT_SCHEMA = {
     "score": "0-100 当日综合总分",
-    "rating": "A|B|C|D 当日评级（直接给出）",
+    "grade": "A|B|C|D 当日质量评级（直接给出）",
+    "action": "repeat|cautious|avoid",
+    "risk": "0-100 风险分",
+    "risk_level": "low|medium|high",
+    "confidence": "high|medium|low",
+    "dimensions": {
+        k: {"score": "0-100", "grade": "A|B|C|D", "analysis": "该维分析（简体中文）"}
+        for k in _DAILY_DIMS
+    },
     "summary": "当日一句话总结",
     "advice": ["建议数组（简体中文）"],
     "risks": ["风险数组（简体中文）"],
     "reasons": ["核心理由数组（简体中文）"],
     "html": "完整独立 HTML 复盘报告源代码（自包含、内联 CSS、无外部依赖、无脚本、简体中文、≥1000字深度正文，聚焦深入分析，不罗列原始数据）",
     "trades": [
-        {"trade_id": "整数，对应输入交易", "score": "0-100 该笔得分", "rating": "A|B|C|D 该笔评级",
-         "comment": "该笔一句话点评"}
+        {"trade_id": "整数，对应输入交易", "score": "0-100 该笔得分", "grade": "A|B|C|D 该笔质量评级",
+         "action": "repeat|cautious|avoid", "comment": "该笔一句话点评"}
     ],
 }
 
@@ -663,7 +776,23 @@ def _normalize_daily_report(data: dict, trades: list[dict]) -> dict:
     并把交易显示字段并入各 trade 项，保证每笔真实交易各有一条。"""
     if not isinstance(data, dict):
         data = {}
-    day_rating = _check_rating(data.get("rating"))
+    day_grade = _check_rating(data.get("grade") or data.get("rating"))
+    day_action = ai.check_action(data.get("action"), ai.ACTION_TRADE)
+    risk_raw = data.get("risk", data.get("risk_score", 50))
+    risk = int(round(_clamp_score(risk_raw, 0, 100, 50)))
+    risk_level = (ai.check_risk_level(data.get("risk_level"))
+                  if data.get("risk_level") else ai.risk_level_from_score(risk))
+    conf = str(data.get("confidence") or "medium").lower().strip()
+    if conf not in ("high", "medium", "low"):
+        conf = "medium"
+    raw_dims = data.get("dimensions") if isinstance(data.get("dimensions"), dict) else {}
+    dims = {}
+    for k in _DAILY_DIMS:
+        d = raw_dims.get(k)
+        if isinstance(d, dict):
+            dims[k] = ai._normalize_dim_block(d, with_stock_extras=False)
+        else:
+            dims[k] = {}
     by_id: dict[int, dict] = {}
     raw_trades = data.get("trades") if isinstance(data.get("trades"), list) else []
     for t in raw_trades:
@@ -679,20 +808,33 @@ def _normalize_daily_report(data: dict, trades: list[dict]) -> dict:
         if not isinstance(entry, dict):
             entry = {}
         tscore = round(_clamp_score(entry.get("score"), 0, 100), 1)
-        trating = _check_rating(entry.get("rating"))
+        tgrade = _check_rating(entry.get("grade") or entry.get("rating"))
+        taction = ai.check_action(entry.get("action"), ai.ACTION_TRADE)
         ai_trades.append({
             "trade_id": tr["trade_id"],
             "code": tr["code"], "name": tr["name"], "tag": tr["tag"],
             "side": tr["side"], "price": tr["price"], "quantity": tr["quantity"],
             "amount": tr["amount"], "amount_cny": tr["amount_cny"], "fee": tr["fee"],
             "trade_time": tr["trade_time"],
-            "score": tscore, "rating": trating, "rating_name": _RATING_NAMES[trating],
+            "score": tscore,
+            "grade": tgrade, "grade_name": _RATING_NAMES[tgrade],
+            "action": taction, "action_name": ai.ACTION_NAMES[taction],
+            "rating": tgrade, "rating_name": _RATING_NAMES[tgrade],
             "comment": str(entry.get("comment") or ""),
         })
-    return {
+    out = {
         "score": round(_clamp_score(data.get("score"), 0, 100), 1),
-        "rating": day_rating,
-        "rating_name": _RATING_NAMES[day_rating],
+        "grade": day_grade,
+        "grade_name": _RATING_NAMES[day_grade],
+        "action": day_action,
+        "action_name": ai.ACTION_NAMES[day_action],
+        "risk": risk,
+        "risk_level": risk_level,
+        "confidence": conf,
+        "rating": day_grade,
+        "rating_name": _RATING_NAMES[day_grade],
+        "risk_score": risk,
+        "dimensions": dims,
         "summary": str(data.get("summary") or ""),
         "advice": _str_list(data.get("advice")),
         "risks": _str_list(data.get("risks")),
@@ -700,6 +842,7 @@ def _normalize_daily_report(data: dict, trades: list[dict]) -> dict:
         "html": str(data.get("html") or ""),
         "trades": ai_trades,
     }
+    return ai.upgrade_legacy_card(out)
 
 
 def score_daily(score_date: str, system_prompt: str | None = None,
@@ -743,7 +886,7 @@ def score_daily(score_date: str, system_prompt: str | None = None,
             (score_date, json.dumps(report, ensure_ascii=False), model["name"], len(trades), now, now),
         )
     logger.info("[AI打分] 当日 %s 完成：%s 分（%s）%d 笔",
-                score_date, report["score"], report["rating"], len(trades))
+                score_date, report["score"], report["grade"], len(trades))
     return {"score_date": score_date, "report": report, "model_name": model["name"], "created_at": now}
 
 
@@ -772,7 +915,7 @@ def get_daily_report(score_date: str) -> dict | None:
     if not row:
         return None
     d = dict(row)
-    d["report"] = json.loads(d.pop("report_json"))
+    d["report"] = ai.upgrade_legacy_card(json.loads(d.pop("report_json")))
     return d
 
 
@@ -799,14 +942,18 @@ def list_daily_days() -> list[dict]:
     days = []
     for d in dates:
         rep = reps.get(d)
-        ai = None
+        ai_sum = None
         if rep:
-            r = json.loads(rep["report_json"])
-            ai = {"score": r.get("score"), "rating": r.get("rating"),
-                  "rating_name": r.get("rating_name"), "model_name": rep["model_name"],
-                  "updated_at": rep["updated_at"]}
+            r = ai.upgrade_legacy_card(json.loads(rep["report_json"]))
+            ai_sum = {
+                "score": r.get("score"),
+                "grade": r.get("grade"), "grade_name": r.get("grade_name"),
+                "rating": r.get("rating") or r.get("grade"),
+                "rating_name": r.get("rating_name") or r.get("grade_name"),
+                "model_name": rep["model_name"], "updated_at": rep["updated_at"],
+            }
         days.append({"score_date": d, "trades_count": cnt.get(d, 0),
-                     "net_amount": round(net.get(d, 0.0), 2), "ai": ai})
+                     "net_amount": round(net.get(d, 0.0), 2), "ai": ai_sum})
     return days
 
 

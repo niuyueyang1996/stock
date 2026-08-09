@@ -517,11 +517,7 @@
       }
     }
 
-    // ---------- AI 诊股 ----------
-    const AI_DIM_CN = { cyclicality: '周期性', moat: '护城河', fundamentals: '基本面',
-      growth: '增长', dividend: '股息', valuation: '估值', competition: '同业竞争', fundflow: '资金面' };
-    const AI_RATING = { A: ['A 强烈推荐', '#2f9e44'], B: ['B 推荐', '#2f6fed'], C: ['C 中性', '#e8590c'], D: ['D 回避', '#e03131'] };
-    const AI_RISK = ['低风险', '中风险', '高风险'];
+    // ---------- AI 诊股（质量 grade：优秀/良好/一般/较差；动作走 action 字段）----------
 
     async function loadAiReport() {
       if (!currentCode) return;
@@ -608,54 +604,22 @@
         return;
       }
       const r = d.report;
+      const g = cardGrade(r);
+      const gName = cardGradeName(r) || GRADE_NAMES[g] || '';
+      const risk = cardRisk(r);
       setPanelSummary('aiReportPanel',
-        sumGrade(r.rating) + ' ' + sumL((AI_RATING[r.rating] || AI_RATING.C)[0].replace(/^[A-D]\s*/, ''))
-        + (r.risk_score != null
-          ? sumSep() + sumL('风险') + ' ' + sumV(String(r.risk_score), r.risk_score < 30 ? 'down' : (r.risk_score <= 60 ? 'hi' : 'up'))
-          : ''));
-      const rating = AI_RATING[r.rating] || AI_RATING.C;
-      const riskColor = r.risk_score < 30 ? '#2f9e44' : r.risk_score <= 60 ? '#e8590c' : '#e03131';
-      const riskText = AI_RISK[r.risk_score < 30 ? 0 : r.risk_score <= 60 ? 1 : 2];
+        sumGrade(g) + (gName ? ' ' + sumL(gName) : '')
+        + (r.score != null ? sumSep() + sumV(fmtNum(r.score)) : '')
+        + (risk != null && !Number.isNaN(risk)
+          ? sumSep() + sumL('风险') + ' ' + sumV(String(risk), risk < 35 ? 'down' : (risk < 65 ? 'hi' : 'up'))
+          : '')
+        + (d.stale ? ' ' + sumChip('已变化') : ''));
       document.getElementById('aiReportMeta').textContent =
-        `${d.model_name || 'AI'} · ${(d.created_at || '').slice(0, 16).replace('T', ' ')}`;
+        `${d.model_name || 'AI'} · ${(d.created_at || '').slice(0, 16).replace('T', ' ')}`
+        + (d.stale ? ' · 数据已更新，建议重诊' : '');
 
-      // 维度卡片
-      const dims = (Object.keys(AI_DIM_CN) || []).map((k) => {
-        const dim = (r.dimensions || {})[k];
-        if (!dim) return '';
-        const riskCls = dim.risk === 'low' ? '#2f9e44' : dim.risk === 'high' ? '#e03131' : '#e8590c';
-        const scoreColor = dim.score >= 70 ? '#2f9e44' : dim.score >= 40 ? '#e8590c' : '#e03131';
-        const supp = dim.data_source === 'supplemented'
-          ? '<span style="font-size:10px;color:#7048e8;border:1px solid #7048e8;border-radius:4px;padding:1px 5px;margin-left:6px">AI补充</span>' : '';
-        return `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:8px">
-          <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;user-select:none">
-            <span style="flex:1"><strong>${AI_DIM_CN[k]}</strong>${supp}</span>
-            <span style="font-size:15px;font-weight:700;color:${scoreColor}">${dim.score}</span>
-            <span style="font-size:11px;color:${riskCls};border:1px solid ${riskCls};border-radius:4px;padding:1px 5px">${dim.risk}</span>
-          </summary>
-          <div style="margin-top:8px;font-size:12px;color:#444;line-height:1.8">${dim.analysis || '—'}</div>
-        </details>`;
-      }).join('');
-
-      body.innerHTML = `
-        <div class="row" style="align-items:center;gap:20px;margin-bottom:14px">
-          <span class="badge" style="background:${rating[1]};color:#fff;font-size:16px;padding:6px 14px">${rating[0]}</span>
-          <div style="flex:1;max-width:300px">
-            <div style="display:flex;justify-content:space-between;font-size:12px;color:#555">
-              <span>买入风险系数</span><span style="color:${riskColor};font-weight:700">${r.risk_score}（${riskText}）</span>
-            </div>
-            <div style="height:8px;border-radius:4px;background:#eee;margin-top:4px;overflow:hidden">
-              <div style="height:100%;width:${r.risk_score}%;background:${riskColor}"></div>
-            </div>
-          </div>
-          ${r.html ? aiHtmlButton() : ''}
-        </div>
-        ${renderAiTraps(r)}
-        ${r.expected_growth ? renderAiGrowthCard(r.expected_growth) : ''}
-        ${r.summary ? `<div style="font-size:13px;color:#333;margin-bottom:12px">${r.summary}</div>` : ''}
-        ${r.reasons && r.reasons.length ? `<div style="margin-bottom:12px"><strong style="font-size:13px">核心理由</strong>
-          <ul style="margin:6px 0 0 18px;font-size:12px;color:#444;line-height:1.8">${r.reasons.map((x) => `<li>${x}</li>`).join('')}</ul></div>` : ''}
-        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">${dims}</div>`;
+      const extra = renderAiTraps(r) + (r.expected_growth ? renderAiGrowthCard(r.expected_growth) : '');
+      body.innerHTML = renderScoreCard(r, { stale: !!d.stale, extraHtml: extra });
       wireAiHtmlButton(body, r);
     }
 

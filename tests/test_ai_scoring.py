@@ -111,13 +111,44 @@ def test_normalize_portfolio_report_clamps_and_passes_rating():
                                          "advice": ["a"], "risks": "不是列表", "reasons": [],
                                          "html": "<html>详细报告</html>"})
     assert r["score"] == 100.0
+    assert r["grade"] == "B"
     assert r["rating"] == "B"            # 评级直传，不按分数换算
     assert r["rating_name"] == "良好"
+    assert r["grade_name"] == "良好"
+    assert r["action"] == "hold"
+    assert r["risk"] == 50
+    assert set(r["dimensions"]) == set(svc._PORTFOLIO_DIMS)
     assert r["risks"] == ["不是列表"]
     assert r["html"] == "<html>详细报告</html>"   # AI 生成的 HTML 报告原样透传
     # 非法评级兜底 C、坏分数回退 50、缺 html → 空
     r2 = svc._normalize_portfolio_report({"score": "abc", "rating": "Z"})
-    assert r2["score"] == 50.0 and r2["rating"] == "C" and r2["html"] == ""
+    assert r2["score"] == 50.0 and r2["grade"] == "C" and r2["rating"] == "C" and r2["html"] == ""
+
+
+def test_normalize_portfolio_dimensions_presence():
+    r = svc._normalize_portfolio_report({
+        "score": 70, "grade": "B", "action": "add", "risk": 40,
+        "dimensions": {
+            "fundamentals": {"score": 80, "grade": "A", "analysis": "稳"},
+            "structure": {"score": 60, "grade": "C", "analysis": "集中"},
+        },
+    })
+    assert r["dimensions"]["fundamentals"]["score"] == 80
+    assert r["dimensions"]["structure"]["grade"] == "C"
+    assert r["dimensions"]["news"] == {}
+    assert r["dimensions"]["technical"] == {}
+    assert r["action"] == "add"
+
+
+def test_build_portfolio_context_has_technical_news_meta():
+    _seed_trade("600000", qty=100)
+    ctx = svc.build_portfolio_context()
+    assert "as_of_datetime" in ctx
+    assert "technical" in ctx and isinstance(ctx["technical"], list)
+    assert "news_meta" in ctx
+    assert ctx["news_meta"]["as_of_datetime"] == ctx["as_of_datetime"]
+    assert any(s["code"] == "600000" for s in ctx["news_meta"]["stocks"])
+    assert "news_reports" in ctx and "tech_reports" in ctx
 
 
 def test_score_portfolio_persist_and_stale(monkeypatch):
@@ -229,18 +260,23 @@ def test_normalize_daily_report_alignment():
     ]
     # AI 只给了 trade 1 的逐笔、漏了 trade 2，且多给了一个未知 id
     r = svc._normalize_daily_report(
-        {"score": 72, "rating": "B", "summary": "s", "advice": [], "risks": [], "reasons": [],
+        {"score": 72, "grade": "B", "action": "cautious", "risk": 45, "summary": "s",
+         "advice": [], "risks": [], "reasons": [],
          "html": "<html>复盘</html>",
-         "trades": [{"trade_id": 1, "score": 85, "rating": "A", "comment": "好", "analysis": ""},
+         "trades": [{"trade_id": 1, "score": 85, "grade": "A", "action": "repeat", "comment": "好", "analysis": ""},
                     {"trade_id": 99, "score": 10, "rating": "D", "comment": "未知", "analysis": ""}]},
         trades,
     )
     # 每笔真实交易各一条、按输入顺序；未知 id 丢弃；漏掉的按默认分/评级补
     assert [t["trade_id"] for t in r["trades"]] == [1, 2]
-    assert r["trades"][0]["score"] == 85.0 and r["trades"][0]["rating"] == "A"
-    assert r["trades"][1]["score"] == 50.0 and r["trades"][1]["rating"] == "C"
+    assert r["grade"] == "B" and r["action"] == "cautious"
+    assert r["trades"][0]["score"] == 85.0 and r["trades"][0]["grade"] == "A"
+    assert r["trades"][0]["rating"] == "A" and r["trades"][0]["action"] == "repeat"
+    assert r["trades"][1]["score"] == 50.0 and r["trades"][1]["grade"] == "C"
+    assert r["trades"][1]["action"] == "cautious"  # 缺省兜底
     assert "code" in r["trades"][0] and "amount_cny" in r["trades"][0]   # 显示字段并入
     assert r["html"] == "<html>复盘</html>"                                # HTML 报告透传
+    assert set(r["dimensions"]) == set(svc._DAILY_DIMS)
 
 
 def test_score_daily_persist_and_read(monkeypatch):
@@ -409,6 +445,8 @@ def test_stock_factors_asof_snapshot(monkeypatch):
     assert f["fundflow_main_net"] == 800000.0
     assert f["fundflow_super_large_net"] == 500000.0
     assert f["fundflow_date"] == d
+    assert "as_of_datetime" in f and f["as_of_datetime"].startswith(d)
+    assert isinstance(f.get("bars"), list)
 
 
 def test_stock_factors_asof_fallback(monkeypatch):

@@ -192,7 +192,7 @@ function sumQ(pct) {
   const tone = v <= 25 ? 'down' : (v >= 75 ? 'up' : 'hi');
   return sumV((Math.round(v * 10) / 10) + '%', tone);
 }
-/** AI 评级色块 A/B/C/D（折叠摘要专用，展开态仍用 .badge） */
+/** AI 评级色块 A/B/C/D（折叠摘要专用，展开态仍用 .badge）；接受 grade|rating */
 function sumGrade(rating) {
   const raw = (rating == null ? '' : String(rating)).trim().toUpperCase();
   const g = 'ABCD'.includes(raw.charAt(0)) ? raw.charAt(0) : 'N';
@@ -973,12 +973,53 @@ function aiNotConfiguredHtml() {
   return '<div class="empty" style="padding:16px;margin:0">还没配置 AI。点右上角「🤖 AI」，用 DeepSeek 一键启用即可（只需填密钥）。</div>';
 }
 
-// AI 报告头部：大分 + 评级徽章 + 一句话结论
+// ScoreCard 质量/动作/维度中文名（三处打分共用；grade=质量，action=操作建议）
+const GRADE_NAMES = { A: '优秀', B: '良好', C: '一般', D: '较差' };
+const ACTION_NAMES = {
+  add: '加仓', hold: '持有', watch: '观望', reduce: '减仓', exit: '清仓',
+  repeat: '可复制', cautious: '谨慎复制', avoid: '避免重复',
+};
+const SCORE_DIM_CN = {
+  cyclicality: '周期性', moat: '护城河', fundamentals: '基本面', growth: '增长',
+  dividend: '股息', valuation: '估值', competition: '同业竞争', fundflow: '资金面',
+  news: '消息面', technical: '技术面',
+  structure: '结构集中度', tag_fit: '标签契合',
+  timing: '时机', execution: '价格执行', sizing: '仓位管理', discipline: '纪律',
+};
+const _RISK_LEVEL_CN = { low: '低', medium: '中', high: '高' };
+const _CONF_CN = { high: '高', medium: '中', low: '低' };
+const _RISK_COLORS = { low: '#2f9e44', medium: '#e8590c', high: '#e03131' };
+
+function cardGrade(r) { return (r && (r.grade || r.rating)) || ''; }
+function cardGradeName(r) {
+  if (!r) return '';
+  return r.grade_name || r.rating_name || GRADE_NAMES[cardGrade(r)] || '';
+}
+function cardRisk(r) {
+  if (!r) return null;
+  if (r.risk != null && r.risk !== '') return Number(r.risk);
+  if (r.risk_score != null && r.risk_score !== '') return Number(r.risk_score);
+  return null;
+}
+function cardRiskLevel(r) {
+  if (r && r.risk_level) return r.risk_level;
+  const v = cardRisk(r);
+  if (v == null || Number.isNaN(v)) return '';
+  return v < 35 ? 'low' : v < 65 ? 'medium' : 'high';
+}
+function cardActionName(r) {
+  if (!r || !r.action) return '';
+  return r.action_name || ACTION_NAMES[r.action] || r.action;
+}
+
+// AI 报告头部：大分 + 质量评级徽章 + 一句话结论（兼容 grade|rating）
 function aiScoreHeader(r) {
+  const g = cardGrade(r) || 'N';
+  const gName = cardGradeName(r);
   return `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
       <span style="font-size:42px;font-weight:700;line-height:1">${r.score == null ? '—' : fmtNum(r.score)}</span>
-      <span class="badge ${r.rating || 'N'}">${r.rating || 'N/A'} ${esc(r.rating_name || '')}</span>
+      <span class="badge ${g}">${g} ${esc(gName)}</span>
       ${r.summary ? `<div class="muted" style="font-size:13px;flex:1;min-width:200px">${esc(r.summary)}</div>` : ''}
     </div>`;
 }
@@ -996,6 +1037,96 @@ function renderAiReportBlock(r) {
     ${list('💡 建议', r.advice)}
     ${list('⚠️ 风险', r.risks)}
     ${list('核心理由', r.reasons)}`;
+}
+
+/** Unified ScoreCard renderer. opts: { stale, rescoreLabel, extraHtml, dimOrder, showDims, drillHtml(dimKey) }
+ *  Returns HTML string; caller wires [data-aiscore-btn] / [data-ai-html] after inject. */
+function renderScoreCard(r, opts = {}) {
+  if (!r) return '';
+  const g = cardGrade(r) || 'N';
+  const gName = cardGradeName(r);
+  const scoreTxt = r.score == null ? '—' : fmtNum(r.score);
+  const actionName = cardActionName(r);
+  const risk = cardRisk(r);
+  const riskLv = cardRiskLevel(r);
+  const riskColor = _RISK_COLORS[riskLv] || '#aeb6c2';
+  const riskPct = (risk != null && !Number.isNaN(risk)) ? Math.max(0, Math.min(100, risk)) : null;
+  const conf = r.confidence ? (_CONF_CN[r.confidence] || r.confidence) : '';
+
+  const actionPill = actionName
+    ? `<span style="display:inline-block;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid var(--border,#dee2e6);background:#f8f9fa;color:#495057">${esc(actionName)}</span>`
+    : '';
+  const riskBar = riskPct != null ? `
+    <div style="flex:1;min-width:140px;max-width:260px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#555">
+        <span>风险</span>
+        <span style="color:${riskColor};font-weight:700">${fmtNum(risk)}${riskLv ? `（${_RISK_LEVEL_CN[riskLv] || riskLv}）` : ''}</span>
+      </div>
+      <div style="height:8px;border-radius:4px;background:#eee;margin-top:4px;overflow:hidden">
+        <div style="height:100%;width:${riskPct}%;background:${riskColor}"></div>
+      </div>
+    </div>` : '';
+  const confHtml = conf
+    ? `<span class="muted" style="font-size:12px">置信 ${esc(conf)}</span>` : '';
+  const staleChip = opts.stale
+    ? '<span class="status-chip">已变化</span>' : '';
+
+  const header = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:42px;font-weight:700;line-height:1">${scoreTxt}</span>
+      <span class="badge ${g}">${g} ${esc(gName)}</span>
+      ${actionPill}
+      ${riskBar}
+      ${confHtml}
+      ${staleChip}
+      ${r.summary ? `<div class="muted" style="font-size:13px;flex:1;min-width:200px">${esc(r.summary)}</div>` : ''}
+    </div>`;
+
+  let dimsHtml = '';
+  const showDims = opts.showDims !== false;
+  const dims = r.dimensions && typeof r.dimensions === 'object' ? r.dimensions : null;
+  if (showDims && dims) {
+    const known = Object.keys(SCORE_DIM_CN);
+    const order = (opts.dimOrder && opts.dimOrder.length) ? opts.dimOrder
+      : known.filter((k) => dims[k]).concat(Object.keys(dims).filter((k) => !known.includes(k)));
+    const items = order.map((k) => {
+      const dim = dims[k];
+      if (!dim) return '';
+      const label = SCORE_DIM_CN[k] || k;
+      const ds = dim.score;
+      const scoreColor = ds == null ? '#868e96' : ds >= 70 ? '#2f9e44' : ds >= 40 ? '#e8590c' : '#e03131';
+      const barW = ds == null ? 0 : Math.max(0, Math.min(100, Number(ds)));
+      const dg = dim.grade || '';
+      const riskCls = dim.risk === 'low' ? '#2f9e44' : dim.risk === 'high' ? '#e03131' : dim.risk === 'medium' ? '#e8590c' : '';
+      const supp = dim.data_source === 'supplemented'
+        ? '<span style="font-size:10px;color:#7048e8;border:1px solid #7048e8;border-radius:4px;padding:1px 5px;margin-left:6px">AI补充</span>' : '';
+      const gradeBadge = dg ? `<span class="badge ${dg}" style="font-size:10px;padding:1px 6px">${dg}</span>` : '';
+      const riskBadge = (dim.risk && riskCls)
+        ? `<span style="font-size:11px;color:${riskCls};border:1px solid ${riskCls};border-radius:4px;padding:1px 5px">${esc(dim.risk)}</span>` : '';
+      const drill = (typeof opts.drillHtml === 'function') ? (opts.drillHtml(k) || '') : '';
+      return `<details style="border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:6px">
+        <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;user-select:none;list-style:none">
+          <span style="flex:1;min-width:72px"><strong>${esc(label)}</strong>${supp}</span>
+          <span style="flex:2;min-width:80px;height:6px;border-radius:3px;background:#eee;overflow:hidden">
+            <span style="display:block;height:100%;width:${barW}%;background:${scoreColor}"></span>
+          </span>
+          <span style="font-size:15px;font-weight:700;color:${scoreColor};min-width:28px;text-align:right">${ds == null ? '—' : ds}</span>
+          ${gradeBadge}${riskBadge}
+        </summary>
+        <div style="margin-top:8px;font-size:12px;color:#444;line-height:1.8">${esc(dim.analysis || '—')}</div>
+        ${drill}
+      </details>`;
+    }).filter(Boolean).join('');
+    if (items) {
+      dimsHtml = `<div style="margin:10px 0 8px">${items}</div>`;
+    }
+  }
+
+  const extra = opts.extraHtml || '';
+  const lists = renderAiReportBlock(r);
+  const btn = opts.rescoreLabel ? `<div style="margin:10px 0 4px">${aiScoreButtonHtml(opts.rescoreLabel)}</div>` : '';
+
+  return header + extra + dimsHtml + lists + btn;
 }
 
 // AI 打分按钮（innerHTML 注入后由调用方 querySelector('[data-aiscore-btn]') 绑定 onclick）

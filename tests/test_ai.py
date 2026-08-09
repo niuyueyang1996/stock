@@ -4,17 +4,25 @@ import pytest
 from app.services import ai as ai_svc
 
 _FAKE_AI_OUTPUT = {
-    "rating": "A",
+    "score": 82,
+    "grade": "A",
+    "action": "hold",
+    "risk": 30,
+    "risk_level": "low",
+    "confidence": "high",
+    "rating": "A",  # 兼容旧键
     "risk_score": 30,
     "dimensions": {
-        "cyclicality": {"score": 60, "analysis": "周期一般", "risk": "medium", "data_source": "provided"},
-        "moat": {"score": 80, "analysis": "品牌强", "risk": "low", "data_source": "supplemented"},
-        "fundamentals": {"score": 75, "analysis": "盈利稳定", "risk": "low", "data_source": "provided"},
-        "growth": {"score": 70, "analysis": "增长稳健", "risk": "low", "data_source": "provided"},
-        "dividend": {"score": 65, "analysis": "分红稳定", "risk": "low", "data_source": "provided"},
-        "valuation": {"score": 80, "analysis": "估值偏低", "risk": "low", "data_source": "provided"},
-        "competition": {"score": 60, "analysis": "竞争一般", "risk": "medium", "data_source": "supplemented"},
-        "fundflow": {"score": 62, "analysis": "主力当日小幅净流入", "risk": "low", "data_source": "provided"},
+        "cyclicality": {"score": 60, "grade": "C", "analysis": "周期一般", "risk": "medium", "data_source": "provided"},
+        "moat": {"score": 80, "grade": "A", "analysis": "品牌强", "risk": "low", "data_source": "supplemented"},
+        "fundamentals": {"score": 75, "grade": "B", "analysis": "盈利稳定", "risk": "low", "data_source": "provided"},
+        "growth": {"score": 70, "grade": "B", "analysis": "增长稳健", "risk": "low", "data_source": "provided"},
+        "dividend": {"score": 65, "grade": "B", "analysis": "分红稳定", "risk": "low", "data_source": "provided"},
+        "valuation": {"score": 80, "grade": "A", "analysis": "估值偏低", "risk": "low", "data_source": "provided"},
+        "competition": {"score": 60, "grade": "C", "analysis": "竞争一般", "risk": "medium", "data_source": "supplemented"},
+        "fundflow": {"score": 62, "grade": "C", "analysis": "主力当日小幅净流入", "risk": "low", "data_source": "provided"},
+        "news": {"score": 58, "grade": "C", "analysis": "近期无重大消息", "risk": "medium", "data_source": "supplemented"},
+        "technical": {"score": 55, "grade": "C", "analysis": "震荡整理", "risk": "medium", "data_source": "provided"},
     },
     "cross_analysis": {
         "cycle_trap": {"detected": False, "impact_score": 0, "explanation": ""},
@@ -35,17 +43,23 @@ _FAKE_AI_OUTPUT = {
 
 # AI 偶发把 dimensions 键名写成中文（300308 中际旭创真实复现：全部 analysis 丢失）
 _CHINESE_KEY_AI_OUTPUT = {
+    "score": 68,
+    "grade": "B",
+    "action": "watch",
+    "risk": 75,
     "rating": "B",
     "risk_score": 75,
     "dimensions": {
-        "周期性": {"score": 45, "analysis": "行业处于AI算力景气高点，盈利有周期性回落风险", "risk": "high", "data_source": "provided"},
-        "护城河": {"score": 85, "analysis": "全球光模块龙头，800G/1.6T技术领先", "risk": "low", "data_source": "provided"},
-        "基本面": {"score": 78, "analysis": "盈利强劲增长，ROE 42%", "risk": "low", "data_source": "provided"},
-        "增长": {"score": 70, "analysis": "收入高增但增速将回落", "risk": "medium", "data_source": "provided"},
-        "股息": {"score": 30, "analysis": "股息率仅0.14%，股东回报弱", "risk": "high", "data_source": "provided"},
-        "估值": {"score": 35, "analysis": "PE 74、PB 31 处历史高位", "risk": "high", "data_source": "provided"},
-        "同业竞争": {"score": 80, "analysis": "竞争格局良好，头部集中", "risk": "low", "data_source": "provided"},
-        "资金面": {"score": 55, "analysis": "当日主力净流入 1.2 亿，近5日持续流入", "risk": "medium", "data_source": "provided"},
+        "周期性": {"score": 45, "grade": "C", "analysis": "行业处于AI算力景气高点，盈利有周期性回落风险", "risk": "high", "data_source": "provided"},
+        "护城河": {"score": 85, "grade": "A", "analysis": "全球光模块龙头，800G/1.6T技术领先", "risk": "low", "data_source": "provided"},
+        "基本面": {"score": 78, "grade": "B", "analysis": "盈利强劲增长，ROE 42%", "risk": "low", "data_source": "provided"},
+        "增长": {"score": 70, "grade": "B", "analysis": "收入高增但增速将回落", "risk": "medium", "data_source": "provided"},
+        "股息": {"score": 30, "grade": "D", "analysis": "股息率仅0.14%，股东回报弱", "risk": "high", "data_source": "provided"},
+        "估值": {"score": 35, "grade": "D", "analysis": "PE 74、PB 31 处历史高位", "risk": "high", "data_source": "provided"},
+        "同业竞争": {"score": 80, "grade": "A", "analysis": "竞争格局良好，头部集中", "risk": "low", "data_source": "provided"},
+        "资金面": {"score": 55, "grade": "C", "analysis": "当日主力净流入 1.2 亿，近5日持续流入", "risk": "medium", "data_source": "provided"},
+        "消息面": {"score": 50, "grade": "C", "analysis": "无重大新消息", "risk": "medium", "data_source": "supplemented"},
+        "技术面": {"score": 48, "grade": "C", "analysis": "高位震荡", "risk": "medium", "data_source": "provided"},
     },
     "cross_analysis": {
         "cycle_trap": {"detected": True, "impact_score": -15, "explanation": "盈利与营收处于AI景气高点，需求透支，警惕周期回落"},
@@ -271,9 +285,14 @@ def test_analyze_stock_persists_report(monkeypatch):
     _add_active_model()
     monkeypatch.setattr(ai_svc, "chat_json", lambda *a, **k: _FAKE_AI_OUTPUT)
     result = ai_svc.analyze_stock("600000")
-    assert result["report"]["rating"] == "A"
+    assert result["report"]["grade"] == "A"
+    assert result["report"]["rating"] == "A"  # 兼容别名
+    assert result["report"]["score"] == 82.0
+    assert result["report"]["action"] == "hold"
+    assert result["report"]["risk"] == 30
     assert result["report"]["risk_score"] == 30
     assert set(result["report"]["dimensions"]) == set(ai_svc.DIMENSIONS)
+    assert len(ai_svc.DIMENSIONS) == 10
     # 交叉陷阱分析落库
     assert result["report"]["cross_analysis"]["value_trap"]["detected"] is True
     assert result["report"]["cross_analysis"]["value_trap"]["impact_score"] == -20
@@ -285,7 +304,9 @@ def test_analyze_stock_persists_report(monkeypatch):
     # 落库后读取
     saved = ai_svc.get_report("600000")
     assert saved is not None
+    assert saved["report"]["grade"] == "A"
     assert saved["report"]["rating"] == "A"
+    assert saved["stale"] is False
     assert saved["model_name"] == "DeepSeek"
 
 
@@ -299,15 +320,51 @@ def test_normalize_handles_bad_input():
     bad = {"rating": "X", "risk_score": 999, "dimensions": {}, "reasons": "not-a-list",
            "html": "<html>诊股报告</html>"}
     n = ai_svc._normalize_report(bad)
+    assert n["grade"] == "C"
     assert n["rating"] == "C"
+    assert n["risk"] == 100
     assert n["risk_score"] == 100
+    assert n["action"] == "hold"
     assert n["reasons"] == ["not-a-list"]
     assert n["html"] == "<html>诊股报告</html>"    # AI 生成的 HTML 报告原样透传
     # 缺失 reasons → 空列表；缺 html → 空
     n2 = ai_svc._normalize_report({"rating": "B", "risk_score": 0})
     assert n2["reasons"] == []
     assert n2["dimensions"]["moat"]["risk"] == "medium"
+    assert n2["dimensions"]["news"]["grade"] == "C"
     assert n2["html"] == ""
+
+
+def test_normalize_grade_action_fallback():
+    """grade/action 非法兜底；legacy rating/risk_score 可读。"""
+    n = ai_svc._normalize_report({"grade": "Z", "action": "yolo", "score": 85, "risk": 20})
+    assert n["grade"] == "C" and n["action"] == "hold"
+    n2 = ai_svc._normalize_report({"rating": "A", "risk_score": 40, "action": "watch", "score": 88})
+    assert n2["grade"] == "A" and n2["action"] == "watch" and n2["risk"] == 40
+
+
+def test_upgrade_legacy_card():
+    """老报告 rating/risk_score → grade/risk；补 action/confidence。"""
+    legacy = {"rating": "B", "risk_score": 55, "summary": "旧"}
+    u = ai_svc.upgrade_legacy_card(legacy)
+    assert u["grade"] == "B" and u["grade_name"] == "良好"
+    assert u["rating"] == "B"
+    assert u["risk"] == 55 and u["risk_score"] == 55
+    assert u["action"] == "hold" and u["confidence"] == "medium"
+    assert u["risk_level"] == "medium"
+
+
+def test_dimensions_length_ten():
+    assert len(ai_svc.DIMENSIONS) == 10
+    assert "news" in ai_svc.DIMENSIONS and "technical" in ai_svc.DIMENSIONS
+    assert ai_svc.DIMENSION_CN["news"] == "消息面"
+    assert ai_svc.DIMENSION_CN["technical"] == "技术面"
+
+
+def test_build_stock_context_has_asof_and_bars():
+    ctx = ai_svc.build_stock_context("600000")
+    assert "as_of_datetime" in ctx
+    assert isinstance(ctx.get("bars"), list)
 
 
 def test_normalize_expected_growth():
@@ -342,7 +399,11 @@ def test_normalize_maps_chinese_dimension_keys():
     # 其他字段不受影响
     assert n["expected_growth"]["net_profit"] == 40.0
     assert n["cross_analysis"]["cycle_trap"]["detected"] is True
+    assert n["grade"] == "B"
     assert n["rating"] == "B"
+    assert n["action"] == "watch"
+    assert n["dimensions"]["news"]["analysis"] == "无重大新消息"
+    assert n["dimensions"]["technical"]["score"] == 48
 
 
 def test_analyze_stock_chinese_dimension_keys(monkeypatch):
@@ -458,6 +519,9 @@ def test_ai_prompts_api(client):
         assert "请输出严格 JSON" not in v      # 不含 schema 结构，用户只看可编辑要求
     assert "共振" in d["batch"]                # 批量块保留共振/虹吸/分化措辞
     assert "消息面" in d["news"] and "证伪条件" in d["technical"]
+    assert "十个维度" in d["stock"] and "消息面" in d["stock"] and "技术面" in d["stock"]
+    assert "结构集中度" in d["portfolio"] and "标签契合" in d["portfolio"]
+    assert "可复制" in d["daily"]
 
 
 def test_ai_report_custom_prompt(client, monkeypatch):

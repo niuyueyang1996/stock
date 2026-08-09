@@ -390,12 +390,16 @@
       sub.textContent = aiPortfolioReport.stale
         ? '组合已变化，建议重新打分'
         : `打分于 ${(aiPortfolioReport.updated_at || aiPortfolioReport.created_at || '').slice(0, 16)}`;
-      const staleBadge = aiPortfolioReport.stale ? '<span class="status-chip">已变化</span>' : '';
+      const g = cardGrade(r);
+      const gName = cardGradeName(r);
       setPanelSummary('aiScorePanel',
-        sumV(fmtNum(r.score)) + ' ' + sumGrade(r.rating)
-        + (r.rating_name ? ' ' + sumL(r.rating_name) : '')
+        sumV(fmtNum(r.score)) + ' ' + sumGrade(g)
+        + (gName ? ' ' + sumL(gName) : '')
         + (aiPortfolioReport.stale ? ' ' + sumChip('已变化') : ''));
-      body.innerHTML = aiScoreHeader(r) + staleBadge + renderAiReportBlock(r) + aiScoreButtonHtml('重新打分');
+      body.innerHTML = renderScoreCard(r, {
+        stale: aiPortfolioReport.stale,
+        rescoreLabel: '重新打分',
+      });
       body.querySelector('[data-aiscore-btn]').onclick = runPortfolioAi;
       wireAiHtmlButton(body, r);
     }
@@ -415,7 +419,7 @@
           renderAiScore();
           renderTagPrefList();
           const score = aiPortfolioReport && aiPortfolioReport.report;
-          toast(score ? `AI 组合打分完成：${score.score} 分（${score.rating}）` : 'AI 组合打分完成');
+          toast(score ? `AI 组合打分完成：${score.score} 分（${cardGrade(score) || '—'}）` : 'AI 组合打分完成');
         } catch (e) {
           toast('AI 打分失败：' + e.message, 5000);
         }

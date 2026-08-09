@@ -132,7 +132,7 @@
           activeDate = date;
           renderDayDir();
           renderDayDetail();
-          toast(_aiReport ? `AI 打分完成：${_aiReport.score} 分（${_aiReport.rating}）` : 'AI 打分完成');
+          toast(_aiReport ? `AI 打分完成：${_aiReport.score} 分（${cardGrade(_aiReport) || '—'}）` : 'AI 打分完成');
         } catch (e) {
           toast('AI 打分失败：' + e.message, 5000);
         } finally {
@@ -294,7 +294,7 @@
         tab.innerHTML = `
           <div style="display:flex;align-items:center;gap:6px">
             <strong>${h.score_date}</strong>
-            ${ai ? `<span class="badge ${ai.rating || 'N'}">${ai.rating || 'N/A'}</span>` : '<span class="badge N">未评分</span>'}
+            ${ai ? `<span class="badge ${cardGrade(ai) || 'N'}">${cardGrade(ai) || 'N/A'}</span>` : '<span class="badge N">未评分</span>'}
             <span class="grow"></span>
             <span style="font-weight:700">${ai ? (ai.score == null ? '—' : ai.score) : '—'}</span>
           </div>
@@ -336,28 +336,24 @@
       }
       const dir = _day.net_amount >= 0 ? '净买入' : '净卖出';
       const r = _aiReport;
+      const metaLine = `<div class="muted" style="font-size:13px;line-height:1.9;margin-bottom:8px">
+        ${_day.trades_count} 笔交易 · ${dir} ${fmtNum(Math.abs(_day.net_amount))} 元
+      </div>`;
       const header = r ? `
-        <div class="row" style="align-items:center;margin-bottom:14px;gap:12px">
+        <div class="row" style="align-items:center;margin-bottom:10px;gap:12px">
           <h2 style="margin:0">${_day.score_date} AI 综合评分</h2>
-          <span class="grow"></span>
-          <span class="badge ${r.rating || 'N'}">${r.rating || 'N/A'} ${esc(r.rating_name || '')}</span>
         </div>
-        <div class="row" style="align-items:center;gap:28px;margin-bottom:12px">
-          <div style="font-size:52px;font-weight:700;line-height:1">${r.score == null ? '—' : r.score}</div>
-          <div class="muted" style="font-size:13px;line-height:1.9">
-            ${_day.trades_count} 笔交易 · ${dir} ${fmtNum(Math.abs(_day.net_amount))} 元
-          </div>
-        </div>
-        ${aiScoreHeader(r)}
-        ${renderAiReportBlock(r)}` : `
+        ${metaLine}
+        ${renderScoreCard(r, { stale: !!(_aiReport && _aiReport.stale), rescoreLabel: '重新打分' })}` : `
         <div class="row" style="align-items:center;margin-bottom:14px;gap:12px">
           <h2 style="margin:0">${_day.score_date} 交易</h2>
           <span class="grow"></span>
           <span class="badge N">未评分</span>
         </div>
-        <div class="muted" style="font-size:13px;margin-bottom:12px">该日尚未 AI 评分。</div>`;
+        ${metaLine}
+        <div class="muted" style="font-size:13px;margin-bottom:12px">该日尚未 AI 评分。</div>
+        <div style="margin:12px 0">${aiScoreButtonHtml('🤖 AI 打分')}</div>`;
       el.innerHTML = header + `
-        <div style="margin:12px 0">${aiScoreButtonHtml(r ? '重新打分' : '🤖 AI 打分')}</div>
         <h3 style="margin:10px 0 8px">每笔明细</h3>
         ${_dayTableHtml(r)}`;
       const btn = el.querySelector('[data-aiscore-btn]');
@@ -389,7 +385,7 @@
               <td>${fmtNum(d.quantity)}</td>
               <td>${fmtNum(amtCny)}</td>
               <td>${ai ? (ai.score == null ? '—' : fmtNum(ai.score)) : '—'}</td>
-              <td>${ai ? `<span class="badge ${ai.rating || 'N'}">${ai.rating || 'N/A'}</span>` : ''}</td>
+              <td>${ai ? `<span class="badge ${cardGrade(ai) || 'N'}">${cardGrade(ai) || 'N/A'}</span>${ai.action ? `<div class="muted" style="font-size:11px;margin-top:2px">${esc(cardActionName(ai) || ai.action)}</div>` : ''}` : ''}</td>
               <td class="muted ai-comment">${ai ? esc(ai.comment || '') : ''}</td>
             </tr>`;
           }).join('')}</tbody>
