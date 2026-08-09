@@ -135,6 +135,87 @@ def start_simple(kind: str, label: str, fn: Callable[[], object], step: str | No
     return start(kind, label, work, total=1)
 
 
+def start_holdings_import(items: list[dict], skipped: int = 0,
+                          on_finish=None) -> dict:
+    """Excel 持仓导入：按股扇出子任务（写库+同步），收尾统一重算组合与当日打分。
+
+    与全局刷新同口径（enqueue_batch）；返回 {batch_id, job_id, async, total, skipped}。
+    on_finish：收尾 stages 的 finally 回调（清导入锁等），取消导致 stages 未跑时不调用。
+    """
+    from datetime import datetime
+
+    from app.services import holdings as hmod
+
+    children = []
+    for it in items:
+        code = it["code"]
+        name = (it.get("name") or code).strip()
+        label = f"{code} {name}".strip()
+
+        def make_fn(item: dict, n: str):
+            def fn(prog: Progress) -> None:
+                prog.check()
+                prog.set_total(1)
+                prog.step(n)
+                # 只写交易+重放；同步该股数据。组合重算/打分放到收尾，避免 N 次重复。
+                hmod.record_trade(
+                    code=item["code"], side="buy", price=item["price"],
+                    quantity=item["quantity"], fee=item.get("fee", 0.0),
+                    name=item.get("name"), side_effects=False,
+                )
+                prog.check()
+                hmod._sync_stock_data(item["code"])
+                prog.check()
+                prog.complete_step(n)
+
+            return fn
+
+        children.append({
+            "kind": "holdings.import.stock",
+            "label": label,
+            "fn": make_fn(it, label),
+            "meta": {"code": code, "name": name},
+        })
+
+    def stages_fn(prog: Progress) -> None:
+        try:
+            prog.set_total(1)
+            prog.step("重算组合…")
+            prog.check()
+            hmod._rebuild_portfolio()
+            prog.step("触发当日打分…")
+            prog.check()
+            hmod._trigger_ai_daily(datetime.now().strftime("%Y-%m-%d"))
+            prog.complete_step("导入收尾")
+        finally:
+            if on_finish:
+                try:
+                    on_finish()
+                except Exception:  # noqa: BLE001 清锁失败不影响任务结果
+                    pass
+
+    batch_id, child_ids = enqueue_batch(
+        kind="holdings.import",
+        label=f"导入 Excel（{len(items)} 只）",
+        children=children,
+        stages={
+            "kind": "holdings.import.stages",
+            "label": "导入·收尾",
+            "fn": stages_fn,
+            "total": 1,
+        },
+    )
+    return {
+        "batch_id": batch_id,
+        "job_id": batch_id,  # waitForJob / 条上用 batch 维度
+        "async": True,
+        "kind": "holdings.import",
+        "total": len(items),
+        "skipped": skipped,
+        "child_count": len(child_ids),
+    }
+
+
 __all__ = [
     "BusyError",
     "JobCancelled",
@@ -142,4 +223,5 @@ __all__ = [
     "start_global_refresh",
     "start_stock_refresh",
     "start_simple",
+    "start_holdings_import",
 ]

@@ -435,17 +435,19 @@ def test_stock_tag_crud(client):
 
 
 def test_import_excel_holdings(client):
-    """一键导入持仓Excel：同步阻塞流式导入成功，非空仓时拒绝。"""
+    """一键导入持仓Excel：入队扇出子任务，完成后持仓可见；非空仓时拒绝。"""
     import io
-    import json
 
     from openpyxl import Workbook
+
+    from conftest import await_job
 
     wb = Workbook()
     ws = wb.active
     ws.title = "持仓数据"
     ws.append(["代码", "名称", "持有数量", "单位成本", "最新价"])
     ws.append(["600000", "浦发银行", 100, 10.0, 10.0])
+    ws.append(["600001", "邯郸钢铁", 200, 5.0, 5.0])
     buf = io.BytesIO()
     wb.save(buf)
     files = {
@@ -457,11 +459,16 @@ def test_import_excel_holdings(client):
     }
     r = client.post("/api/holdings/import-excel", files=files)
     assert r.status_code == 200
-    # 响应为 NDJSON 流：先 importing（0/1）后 done（1/1）
-    lines = [json.loads(l) for l in r.text.strip().splitlines() if l.strip()]
-    assert lines[0]["status"] == "importing" and lines[0]["done"] == 0 and lines[0]["total"] == 1
-    assert lines[-1]["status"] == "done" and lines[-1]["imported"] == 1
-    assert len(client.get("/api/holdings").json()["data"]) == 1
+    data = r.json()["data"]
+    assert data.get("async") is True and data.get("job_id")
+    assert data.get("batch_id") == data["job_id"]
+    assert data.get("total") == 2 and data.get("child_count") == 2
+    snap = await_job(client, data["job_id"])
+    assert snap.get("ok") is not False and snap.get("status") != "cancelled", snap
+    holdings = client.get("/api/holdings").json()["data"]
+    assert len(holdings) == 2
+    codes = {h["code"] for h in holdings}
+    assert codes == {"600000", "600001"}
 
     r2 = client.post("/api/holdings/import-excel", files=files)
     assert r2.status_code == 400

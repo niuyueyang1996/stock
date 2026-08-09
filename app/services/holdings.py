@@ -213,8 +213,13 @@ def _compute_cny(currency: str, amount: float, trade_date: str) -> tuple[float |
     return round(rate, 6), round(amount * rate, 2)
 
 
-def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=None, name=None) -> dict:
-    """录入交易并重放持仓。返回 {trade_id, holding}。"""
+def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=None, name=None,
+                 *, side_effects: bool = True) -> dict:
+    """录入交易并重放持仓。返回 {trade_id, holding}。
+
+    side_effects=False：只写交易+重放，跳过新股同步 / 组合序列重算 / 当日 AI 打分
+    （批量导入末尾统一触发，避免 N 只重复全量同步）。
+    """
     if not get_instrument(code).can_trade:
         raise ValueError("指数不可交易")
     for f in _REQUIRED:
@@ -241,14 +246,45 @@ def record_trade(code, side, price, quantity, fee=0.0, trade_time=None, note=Non
             holding = rebuild(code, conn)
         except ValueError:
             raise
-    # 新股：先同步数据（否则 AI 打分时无该股缓存因子）
-    if _is_new_stock(code):
-        _sync_stock_data(code)
-    # 开仓/清仓引入新持仓权重 → 重算组合综合 PE/PB 序列缓存
-    _rebuild_portfolio()
-    # 该日 AI 打分失效并后台自动重打分（尽力而为，失败不影响交易录入）
-    _trigger_ai_daily(trade_time[:10])
+    if side_effects:
+        # 新股：先同步数据（否则 AI 打分时无该股缓存因子）
+        if _is_new_stock(code):
+            _sync_stock_data(code)
+        # 开仓/清仓引入新持仓权重 → 重算组合综合 PE/PB 序列缓存
+        _rebuild_portfolio()
+        # 该日 AI 打分失效并后台自动重打分（尽力而为，失败不影响交易录入）
+        _trigger_ai_daily(trade_time[:10])
     return {"trade_id": trade_id, "holding": holding}
+
+
+def import_holdings_items(items: list[dict], on_progress=None) -> dict:
+    """空仓一键导入（同步版，测试/兼容用）：逐只写买入后统一同步/重算/打分。
+
+    生产路径走 job_runners.start_holdings_import（按股扇出子任务）。
+    on_progress(done, total, current_label) 可选。
+    """
+    total = len(items)
+    codes: list[str] = []
+    for i, it in enumerate(items):
+        label = f"{it['code']} {it.get('name') or ''}".strip()
+        if on_progress:
+            on_progress(i, total, label)
+        record_trade(
+            code=it["code"], side="buy", price=it["price"], quantity=it["quantity"],
+            fee=it.get("fee", 0.0), name=it.get("name"),
+            side_effects=False,
+        )
+        codes.append(it["code"])
+        if on_progress:
+            on_progress(i + 1, total, label)
+    for code in codes:
+        if on_progress:
+            on_progress(total, total, f"同步 {code}")
+        _sync_stock_data(code)
+    _rebuild_portfolio()
+    score_date = datetime.now().strftime("%Y-%m-%d")
+    _trigger_ai_daily(score_date)
+    return {"imported": total, "codes": codes, "score_date": score_date}
 
 
 def adjust_cost(code, amount=0.0, delta_qty=0.0, note=None, trade_time=None, name=None,

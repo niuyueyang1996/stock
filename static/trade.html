@@ -35,14 +35,7 @@
       <div class="muted" id="formTip" style="margin-top:8px;line-height:1.55">
         买卖会自动更新持仓。空仓时可用「导入 Excel」：从
         <a href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">同花顺账户页</a>
-        导出「汇总持仓.xlsx」再上传。没有同花顺？直接上方搜索代码，录一笔买入即可。
-      </div>
-      <div id="importProgress" style="display:none;margin-top:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:4px">
-          <span id="importProgressText">正在导入…</span>
-          <span id="importProgressPct" class="muted">0%</span>
-        </div>
-        <div class="progress-track"><div class="progress-fill" id="importProgressBar"></div></div>
+        导出「汇总持仓.xlsx」再上传（后台按股并行导入，进度见顶部）。没有同花顺？直接上方搜索代码，录一笔买入即可。
       </div>
     </div>
 
@@ -192,73 +185,30 @@
       }
     }
 
-    // ============ Excel 导入进度条（同步阻塞 + NDJSON 流式） ============
-    function setImportBar(show, text, pct) {
-      const btn = document.getElementById('importBtn');
-      if (btn) btn.disabled = show;
-      const bar = document.getElementById('importProgress');
-      if (!bar) return;
-      bar.style.display = show ? 'block' : 'none';
-      document.getElementById('importProgressText').textContent = text || '';
-      document.getElementById('importProgressPct').textContent = pct == null ? '' : Math.round(pct) + '%';
-      const fill = document.getElementById('importProgressBar');
-      fill.style.width = (pct == null ? 0 : pct) + '%';
-      fill.classList.remove('error');
-    }
-
+    // ============ Excel 导入（后台 job 扇出，与刷新同口径） ============
     async function importExcel() {
       const input = document.getElementById('importFile');
       const file = input.files && input.files[0];
       if (!file) return;
+      const btn = document.getElementById('importBtn');
+      if (btn) btn.disabled = true;
       const fd = new FormData();
       fd.append('file', file);
-      setImportBar(true, '正在上传解析 Excel…', 0);
       try {
-        const res = await fetch('/api/holdings/import-excel', { method: 'POST', body: fd });
-        if (!res.ok) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error(j.detail || j.msg || `HTTP ${res.status}`);
-        }
-        // 逐行读 NDJSON 流，实时刷新进度（每行一只，done 从 0 数到 total）
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        let doneMsg = null;
-        let errorMsg = null;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 1);
-            if (!line) continue;
-            let m;
-            try { m = JSON.parse(line); } catch (e) { continue; }
-            if (m.status === 'importing') {
-              const pct = m.total ? (m.done / m.total * 100) : 0;
-              setImportBar(true, `正在导入 ${m.done}/${m.total}${m.current ? '：' + m.current : ''}…`, pct);
-            } else if (m.status === 'done') {
-              doneMsg = m;
-            } else if (m.status === 'error') {
-              errorMsg = m;
-            }
-          }
-        }
+        const job = await startBackgroundJob('/holdings/import-excel', fd, {
+          toast: 'Excel 导入已开始，进度见顶部',
+        });
+        await waitForJob(job.job_id);
         input.value = '';
-        setImportBar(false);
-        if (errorMsg) {
-          toast('导入失败：' + errorMsg.error, 5000);
-        } else if (doneMsg) {
-          const imported = doneMsg.imported || 0;
-          toast(`已导入 ${imported} 只持仓` + (doneMsg.skipped ? `，跳过 ${doneMsg.skipped} 只（非A股/无价格）` : ''), 3500);
-        }
+        const skipped = job.skipped || 0;
+        const total = job.total || 0;
+        toast(`已导入 ${total} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''), 3500);
         await loadPage();
       } catch (e) {
-        setImportBar(false);
         input.value = '';
         toast('导入失败：' + e.message, 4000);
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 

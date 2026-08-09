@@ -285,9 +285,9 @@ def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
 def _notify_batch_locked(j: dict) -> None:
     bid = j.get("batch_id")
     if not bid:
-        # 收尾任务完成 → 结束所属 batch
+        # 收尾任务完成 → 结束所属 batch（kind 以 .stages 结尾，如 refresh.stages / holdings.import.stages）
         meta_bid = (j.get("meta") or {}).get("batch_id")
-        if meta_bid and j["kind"] == "refresh.stages":
+        if meta_bid and str(j.get("kind") or "").endswith(".stages"):
             b = _batches.get(meta_bid)
             if b and b["status"] not in ("done", "cancelled"):
                 _finish_batch_locked(b, cancelled=bool(b.get("cancel_requested")))

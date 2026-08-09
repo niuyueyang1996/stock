@@ -1,36 +1,54 @@
 """持仓路由：查询 + 批量初始化。"""
-import json
 import logging
 import threading
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from starlette.concurrency import run_in_threadpool
 
 from app.services import holdings as svc
 
 logger = logging.getLogger("api")
 router = APIRouter()
 
-# 导入互斥标志：同一时刻只允许一个 Excel 导入（防并发重复导入）
+# 导入互斥：同一时刻只允许一个 Excel 导入 batch（防双点叠仓）
 _import_lock = threading.Lock()
 _importing = False
+_import_batch_id: str | None = None
 
 
 def _try_begin_import() -> bool:
-    global _importing
+    """尝试占用导入锁；若上一批已结束（含取消未跑收尾）则自动清锁。"""
+    global _importing, _import_batch_id
     with _import_lock:
+        if _importing and _import_batch_id:
+            from app.jobs import snapshot
+
+            snap = snapshot()
+            # batches 里只保留仍活跃的；不在列表且 recent 已收尾 → 可清锁
+            alive = any(
+                (b.get("batch_id") == _import_batch_id)
+                for b in (snap.get("batches") or [])
+            )
+            if not alive:
+                _importing = False
+                _import_batch_id = None
         if _importing:
             return False
         _importing = True
         return True
 
 
+def _bind_import_batch(batch_id: str) -> None:
+    global _import_batch_id
+    with _import_lock:
+        _import_batch_id = batch_id
+
+
 def _end_import() -> None:
-    global _importing
+    global _importing, _import_batch_id
     with _import_lock:
         _importing = False
+        _import_batch_id = None
 
 
 class InitItem(BaseModel):
@@ -53,26 +71,15 @@ class CostAdjustBody(BaseModel):
     is_dividend: bool = False
 
 
-def _import_one(item: dict) -> None:
-    """录入单只持仓（含新股数据同步、评分快照、组合序列重算），阻塞式。"""
-    svc.record_trade(
-        code=item["code"], side="buy", price=item["price"], quantity=item["quantity"],
-        fee=item.get("fee", 0.0), name=item.get("name"),
-    )
-
-
-def _line(status: str, **kw) -> str:
-    """NDJSON 进度行。"""
-    return json.dumps({"status": status, **kw}, ensure_ascii=False) + "\n"
-
-
 @router.post("/holdings/import-excel")
 async def import_holdings_excel(file: UploadFile = File(...)):
     """一键导入「汇总持仓.xlsx」；仅空仓时允许。
 
-    同步阻塞导入：请求保持打开，逐只录入时流式输出 NDJSON 进度行（done/total/current），
-    前端逐行读实时刷新进度条；流结束即导入完成。阻塞网络同步放线程池，不卡事件循环。
+    与全局刷新同口径：解析校验后按股扇出子任务入队，秒回 {job_id/batch_id, async}；
+    进度见 GET /status/jobs。每股子任务写库+同步；收尾统一重算组合与当日打分。
     """
+    from app.services.job_runners import start_holdings_import
+
     if not _try_begin_import():
         raise HTTPException(409, "已有导入任务进行中，请稍候")
     try:
@@ -85,27 +92,20 @@ async def import_holdings_excel(file: UploadFile = File(...)):
             raise HTTPException(400, "当前非空仓，请先清仓后再一键导入")
         if not items:
             raise HTTPException(400, "Excel 中没有可导入的 A 股持仓")
+
+        result = start_holdings_import(
+            items, skipped=len(skipped), on_finish=_end_import,
+        )
+        _bind_import_batch(result["batch_id"])
+        logger.info("[持仓导入] 已入队 %d 只（跳过 %d），batch=%s",
+                    len(items), len(skipped), result["batch_id"])
+        return {"ok": True, "data": result}
     except HTTPException:
         _end_import()
         raise
-
-    async def gen():
-        total = len(items)
-        try:
-            for i, it in enumerate(items, 1):
-                yield _line("importing", done=i - 1, total=total, current=f"{it['code']} {it.get('name','')}".strip())
-                try:
-                    await run_in_threadpool(_import_one, it)
-                except ValueError as e:
-                    logger.warning("[持仓导入] 第 %d 只 %s 失败：%s", i, it["code"], e)
-                    yield _line("error", done=i - 1, total=total, error=str(e))
-                    return
-            yield _line("done", done=total, total=total, imported=total, skipped=len(skipped))
-            logger.info("[持仓导入] 一键导入 %d 只，跳过 %d 只", total, len(skipped))
-        finally:
-            _end_import()
-
-    return StreamingResponse(gen(), media_type="application/x-ndjson")
+    except Exception:
+        _end_import()
+        raise
 
 
 @router.get("/holdings")
@@ -128,7 +128,7 @@ def adjust_holding_cost(code: str, body: CostAdjustBody):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    logger.info("[持仓调整] %s 成本%s元 股数%+g 除权=%s（%s）",
+    logger.info("[持仓调整] %s 成本%+g 股数%+g 除权=%s（%s）",
                 code, body.amount, body.delta_qty, body.is_dividend, body.note or "")
     return {"ok": True, "data": result}
 
