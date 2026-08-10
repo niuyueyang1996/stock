@@ -55,5 +55,6 @@ tzdata==2025.2
 urllib3==2.7.0
 uvicorn==0.52.1
 webencodings==0.5.1
+websockets==17.0.1
 wheel==0.45.1
 xlrd==2.0.2

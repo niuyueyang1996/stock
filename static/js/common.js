@@ -53,6 +53,15 @@ function toast(msg, ms = 2500, type = '') {
   toast._t = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+// 页面数据重载防抖：ws 推送/任务完成/设置变化可能一瞬触发多次，合并成一次重载，避免接口刷屏
+function schedulePageReload(delay = 400) {
+  clearTimeout(schedulePageReload._t);
+  schedulePageReload._t = setTimeout(() => {
+    schedulePageReload._t = null;
+    if (typeof loadPage === 'function') loadPage();
+  }, delay);
+}
+
 /** 可折叠 panel：标题常显，body 可收起；摘要写在标题旁。不删功能，只改展示密度。 */
 function _foldKey(id) {
   return 'fold:' + (location.pathname || '') + ':' + id;
@@ -245,24 +254,132 @@ function initNav(active) {
   aiBtn.onclick = openAiSettings;
   nav.appendChild(aiBtn);
 
+  const settingsBtn = document.createElement('button');
+  settingsBtn.textContent = '⚙ 设置';
+  settingsBtn.title = '界面模式 / 刷新设置（简单·高级）';
+  settingsBtn.onclick = openSettings;
+  nav.appendChild(settingsBtn);
+
   const dynamic = document.createElement('button');
+  dynamic.className = 'nav-refresh-btn';
   dynamic.textContent = '⚡ 更新行情';
   dynamic.title = '快速更新：现价、估值、今日资金流（大约几十秒）';
   dynamic.onclick = () => doRefresh(dynamic, false);
   nav.appendChild(dynamic);
 
   const full = document.createElement('button');
+  full.className = 'primary nav-refresh-btn';
   full.textContent = '🔄 完整更新';
-  full.className = 'primary';
   full.title = '完整更新：历史行情、财务、估值分位、汇率等（首次或隔很久建议点一次）';
   full.onclick = () => doRefresh(full, true);
   nav.appendChild(full);
+
+  const custom = document.createElement('span');
+  custom.id = 'navCustomRefresh';
+  custom.className = 'link muted nav-refresh-btn';
+  custom.textContent = '自定义';
+  custom.title = '选择要更新的内容';
+  custom.style.cssText = 'font-size:12px;cursor:pointer;margin-left:6px;user-select:none';
+  custom.onclick = () => openCustomRefresh('global');
+  nav.appendChild(custom);
 
   const status = document.createElement('span');
   status.id = 'statusText';
   nav.appendChild(status);
 
   setupPrewarmBar(nav);
+  applyNavMode();
+  refreshAppSettings().then(applyNavMode);
+}
+
+// 全局界面设置（简单/高级模式、静态节流、动态间隔）；页面渲染据此分流
+window.APP_SETTINGS = { mode: 'simple', static_ttl_minutes: 60, dynamic_interval_seconds: 180 };
+
+async function refreshAppSettings() {
+  try {
+    const d = await api('/settings/refresh', { silent: true });
+    if (d) window.APP_SETTINGS = Object.assign({}, window.APP_SETTINGS, d);
+  } catch (e) { /* 读设置失败保持默认 */ }
+  window.dispatchEvent(new CustomEvent('app-settings', { detail: window.APP_SETTINGS }));
+  return window.APP_SETTINGS;
+}
+
+// 简单模式：隐藏刷新按钮（一切自动）；高级模式：显示
+function applyNavMode() {
+  const mode = (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
+  const show = mode === 'advanced';
+  document.querySelectorAll('.nav-refresh-btn').forEach((b) => { b.style.display = show ? '' : 'none'; });
+}
+
+// ⚙ 设置弹窗：界面模式 + 静态节流 + 动态间隔
+function openSettings() {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask';
+  mask.innerHTML = `
+    <div class="modal" style="width:540px;max-width:94vw">
+      <h3>⚙ 设置</h3>
+      <div style="margin-bottom:16px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px">界面模式</div>
+        <label style="display:flex;gap:8px;align-items:center;margin-bottom:6px;cursor:pointer">
+          <input type="radio" name="uiMode" value="simple"> 简单（一切自动，不显示刷新按钮，适合只想看的人）
+        </label>
+        <label style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="radio" name="uiMode" value="advanced"> 高级（显示刷新按钮和更多指标）
+        </label>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px">刷新</div>
+        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="muted" style="font-size:12px">静态数据</span>
+          <input type="number" id="setTtl" min="10" max="1440" step="10" style="width:80px" title="打开个股时，静态数据（日K/财务/估值分位）在此时间内不重复下载">
+          <span class="muted" style="font-size:12px">分钟不重拉</span>
+          <span class="muted" style="font-size:12px;margin-left:8px">动态自动刷新</span>
+          <input type="number" id="setInterval" min="30" max="3600" step="10" style="width:80px" title="现价/资金流在交易时段按此间隔后台自动更新">
+          <span class="muted" style="font-size:12px">秒</span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:8px;line-height:1.6">
+          现价/资金流会在交易时段自动更新，无需手动点刷新；静态数据在打开个股、启动程序、每天收盘后自动同步。
+        </div>
+      </div>
+      <div class="modal-actions">
+        <span class="link muted" id="setCancel">关闭</span>
+        <span class="grow" style="flex:1"></span>
+        <button class="btn primary" id="setSave">保存</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.querySelector('#setCancel').onclick = close;
+  mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+
+  const st = window.APP_SETTINGS || {};
+  const mode = st.mode === 'advanced' ? 'advanced' : 'simple';
+  mask.querySelector('input[name="uiMode"][value="' + mode + '"]').checked = true;
+  mask.querySelector('#setTtl').value = st.static_ttl_minutes || 60;
+  mask.querySelector('#setInterval').value = st.dynamic_interval_seconds || 300;
+
+  mask.querySelector('#setSave').onclick = async () => {
+    const modeV = mask.querySelector('input[name="uiMode"]:checked').value;
+    const ttl = parseInt(mask.querySelector('#setTtl').value, 10);
+    const interval = parseInt(mask.querySelector('#setInterval').value, 10);
+    if (!ttl || !interval) return toast('请填写有效数值');
+    const btn = mask.querySelector('#setSave');
+    btn.disabled = true;
+    try {
+      await api('/settings/refresh', {
+        method: 'PUT',
+        body: { mode: modeV, static_ttl_minutes: ttl, dynamic_interval_seconds: interval },
+      });
+      await refreshAppSettings();
+      applyNavMode();
+      close();
+      toast('设置已保存');
+    } catch (e) {
+      toast('保存失败：' + e.message, 4000);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }
 
 // 统一后台任务条：双车道队列 + 取消；轮询 /status/jobs。
@@ -321,9 +438,15 @@ function setupJobBar(nav) {
   };
   toggleBtn.onclick = () => {
     queueOpen = !queueOpen;
-    qList.style.display = queueOpen ? 'block' : 'none';
-    toggleBtn.classList.toggle('on', queueOpen);
-    tick();
+    if (window._lastJobsData) {
+      // 直接用最近一份快照重绘列表（ws 推送已就绪；避免空白）
+      renderQueueList(window._lastJobsData.jobs || []);
+    } else if (queueOpen) {
+      qList.style.display = 'block';
+      tick();
+    } else {
+      qList.style.display = 'none';
+    }
   };
 
   function fireDone(detail) {
@@ -333,8 +456,10 @@ function setupJobBar(nav) {
     window.dispatchEvent(new CustomEvent('app-job-done', { detail }));
     const kind = detail.kind || '';
     const ok = detail.ok !== false && detail.status !== 'cancelled' && !detail.error;
-    if (ok && (kind.startsWith('refresh') || kind.startsWith('index.refresh'))) {
-      if (typeof loadPage === 'function') loadPage();
+    // 只在整个任务/批次收尾时重载页面（批次子任务逐个完成不触发，否则刷新过程中接口刷屏）
+    const isChild = !!(detail.batch_id && detail.job_id !== detail.batch_id);
+    if (ok && !isChild && (kind.startsWith('refresh') || kind.startsWith('index.refresh'))) {
+      schedulePageReload();
     }
   }
 
@@ -378,111 +503,147 @@ function setupJobBar(nav) {
     qList.style.display = 'block';
   }
 
-  async function tick() {
-    try {
-      const p = await api('/status/jobs', { silent: true });
-      const jobs = p.jobs || [];
-      const batches = p.batches || [];
-      const active = jobs.length > 0 || batches.length > 0;
-      (p.recent || []).slice(0, 8).forEach(r => {
-        if (r && (r.status === 'done' || r.status === 'error' || r.status === 'cancelled')) {
-          fireDone(r);
-        }
-      });
-
-      if (active) {
-        _jobBarActive = true;
-        if (_jobBarHideTimer) { clearTimeout(_jobBarHideTimer); _jobBarHideTimer = null; }
-        bar.classList.remove('done', 'error');
-        bar.style.display = 'block';
-
-        const batch = batches[0];
-        const runJobs = jobs.filter(j => j.status === 'running');
-        const queued = jobs.filter(j => j.status === 'queued');
-        let label, cur, tot, step, pct, cancelId, cancelIsBatch, cancellable = true;
-
-        if (batch) {
-          label = batch.label || '刷新';
-          cur = batch.done_count || 0;
-          tot = batch.total || 1;
-          const runNames = (batch.running || []).slice(0, 3).join('、') || batch.current_label || '进行中';
-          step = runNames;
-          pct = batch.pct != null ? batch.pct : 0;
-          cancelId = batch.batch_id;
-          cancelIsBatch = true;
-          cancellable = true;
-        } else if (runJobs[0]) {
-          const j = runJobs[0];
-          label = j.label || j.kind || '后台任务';
-          cur = j.current || (j.done_count || 0) + (j.step ? 1 : 0);
-          tot = j.total || 1;
-          step = j.step || '进行中';
-          pct = j.pct != null ? j.pct : 0;
-          cancelId = j.job_id;
-          cancelIsBatch = false;
-          cancellable = j.cancellable !== false && j.kind !== 'system.prewarm';
-        } else if (queued[0]) {
-          label = '排队中';
-          cur = 0;
-          tot = queued.length;
-          step = queued.map(j => j.label).slice(0, 4).join('、');
-          pct = 0;
-          cancelId = queued[0].job_id;
-          cancelIsBatch = false;
-          cancellable = queued[0].cancellable !== false && queued[0].kind !== 'system.prewarm';
-        }
-
-        txt.textContent = label;   // 外部只显示任务类型，明细在展开的「任务」列表看
-        pctEl.textContent = (pct != null ? pct : 0) + '%';
-        fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
-        if (cancelId && cancellable) {
-          cancelBtn.style.display = '';
-          cancelBtn.dataset.id = cancelId;
-          cancelBtn.dataset.batch = cancelIsBatch ? '1' : '0';
-          cancelBtn.textContent = cancelIsBatch ? '取消整批' : '取消';
-        } else {
-          cancelBtn.style.display = 'none';
-        }
-
-        renderQueueList(jobs);
-
-        const st = document.getElementById('statusText');
-        if (st) { st.textContent = ''; st.style.display = 'none'; }  // 进度只在任务条，避免双写
-        setTimeout(tick, 1000);
-      } else if (_jobBarActive) {
-        _jobBarActive = false;
-        queueOpen = false;
-        cancelBtn.style.display = 'none';
-        toggleBtn.style.display = 'none';
-        qList.style.display = 'none';
-        qList.innerHTML = '';
-        const last = (p.recent || [])[0];
-        const label = (last && last.label) || p.label || '任务';
-        const ok = last ? (last.ok !== false && last.status !== 'cancelled') : (p.ok !== false);
-        const detail = (last && last.done_count != null && last.total)
-          ? `（${last.done_count}/${last.total}）` : '';
-        bar.classList.toggle('done', ok);
-        bar.classList.toggle('error', !ok);
-        bar.style.display = 'block';
-        txt.textContent = ok ? (label + '完成' + detail) : (label + (last && last.status === 'cancelled' ? '已取消' : '失败'));
-        pctEl.textContent = ok ? '100%' : '';
-        fill.style.width = ok ? '100%' : '0%';
-        if (last && last.status === 'cancelled') toast('已取消：' + label, 4000, 'err');
-        else if (ok) toast('✓ ' + label + '完成' + detail, 5000, 'ok');
-        else toast('✗ ' + ((last && last.error) || label + '失败'), 6000, 'err');
-        const st = document.getElementById('statusText');
-        if (st) { st.style.display = ''; st.textContent = ''; }
-        _jobBarHideTimer = setTimeout(() => { bar.style.display = 'none'; }, 6000);
-        setTimeout(tick, 2000);
-      } else {
-        setTimeout(tick, 2500);
+  // 渲染一份 job 快照（ws 推送或轮询兜底共用）
+  function renderJobSnapshot(p) {
+    if (!p) return;
+    window._lastJobsData = p;   // 存最近快照：点「任务」展开/ waitForJob 立即命中用
+    const jobs = p.jobs || [];
+    const batches = p.batches || [];
+    const active = jobs.length > 0 || batches.length > 0;
+    (p.recent || []).slice(0, 8).forEach(r => {
+      if (r && (r.status === 'done' || r.status === 'error' || r.status === 'cancelled')) {
+        fireDone(r);
       }
-    } catch (e) {
-      setTimeout(tick, 3000);
+    });
+
+    if (active) {
+      _jobBarActive = true;
+      if (_jobBarHideTimer) { clearTimeout(_jobBarHideTimer); _jobBarHideTimer = null; }
+      bar.classList.remove('done', 'error');
+      bar.style.display = 'block';
+
+      const batch = batches[0];
+      const runJobs = jobs.filter(j => j.status === 'running');
+      const queued = jobs.filter(j => j.status === 'queued');
+      let label, cur, tot, step, pct, cancelId, cancelIsBatch, cancellable = true;
+
+      if (batch) {
+        label = batch.label || '刷新';
+        cur = batch.done_count || 0;
+        tot = batch.total || 1;
+        const runNames = (batch.running || []).slice(0, 3).join('、') || batch.current_label || '进行中';
+        step = runNames;
+        pct = batch.pct != null ? batch.pct : 0;
+        cancelId = batch.batch_id;
+        cancelIsBatch = true;
+        cancellable = true;
+      } else if (runJobs[0]) {
+        const j = runJobs[0];
+        label = j.label || j.kind || '后台任务';
+        cur = j.current || (j.done_count || 0) + (j.step ? 1 : 0);
+        tot = j.total || 1;
+        step = j.step || '进行中';
+        pct = j.pct != null ? j.pct : 0;
+        cancelId = j.job_id;
+        cancelIsBatch = false;
+        cancellable = j.cancellable !== false && j.kind !== 'system.prewarm';
+      } else if (queued[0]) {
+        label = '排队中';
+        cur = 0;
+        tot = queued.length;
+        step = queued.map(j => j.label).slice(0, 4).join('、');
+        pct = 0;
+        cancelId = queued[0].job_id;
+        cancelIsBatch = false;
+        cancellable = queued[0].cancellable !== false && queued[0].kind !== 'system.prewarm';
+      }
+
+      txt.textContent = label;   // 外部只显示任务类型，明细在展开的「任务」列表看
+      pctEl.textContent = (pct != null ? pct : 0) + '%';
+      fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+      if (cancelId && cancellable) {
+        cancelBtn.style.display = '';
+        cancelBtn.dataset.id = cancelId;
+        cancelBtn.dataset.batch = cancelIsBatch ? '1' : '0';
+        cancelBtn.textContent = cancelIsBatch ? '取消整批' : '取消';
+      } else {
+        cancelBtn.style.display = 'none';
+      }
+
+      renderQueueList(jobs);
+
+      const st = document.getElementById('statusText');
+      if (st) { st.textContent = ''; st.style.display = 'none'; }  // 进度只在任务条，避免双写
+    } else if (_jobBarActive) {
+      _jobBarActive = false;
+      queueOpen = false;
+      cancelBtn.style.display = 'none';
+      toggleBtn.style.display = 'none';
+      qList.style.display = 'none';
+      qList.innerHTML = '';
+      const last = (p.recent || [])[0];
+      const label = (last && last.label) || p.label || '任务';
+      const ok = last ? (last.ok !== false && last.status !== 'cancelled') : (p.ok !== false);
+      const detail = (last && last.done_count != null && last.total)
+        ? `（${last.done_count}/${last.total}）` : '';
+      bar.classList.toggle('done', ok);
+      bar.classList.toggle('error', !ok);
+      bar.style.display = 'block';
+      txt.textContent = ok ? (label + '完成' + detail) : (label + (last && last.status === 'cancelled' ? '已取消' : '失败'));
+      pctEl.textContent = ok ? '100%' : '';
+      fill.style.width = ok ? '100%' : '0%';
+      if (last && last.status === 'cancelled') toast('已取消：' + label, 4000, 'err');
+      else if (ok) toast('✓ ' + label + '完成' + detail, 5000, 'ok');
+      else toast('✗ ' + ((last && last.error) || label + '失败'), 6000, 'err');
+      const st = document.getElementById('statusText');
+      if (st) { st.style.display = ''; st.textContent = ''; }
+      _jobBarHideTimer = setTimeout(() => { bar.style.display = 'none'; }, 6000);
     }
+  }
+
+  // 进度来源：优先 WebSocket 推送；断线/未连上时回退轮询
+  function tick() {
+    if (window.__wsDown !== false) {
+      api('/status/jobs', { silent: true })
+        .then(renderJobSnapshot)
+        .catch(() => {})
+        .finally(() => { setTimeout(tick, _jobBarActive ? 1000 : 2500); });
+    }
+    // ws 在线：零轮询，完全靠 ws 推送（含重连后的初始快照）
   }
   window.kickJobBar = () => { _jobBarActive = true; tick(); };
   tick();
+
+  // ---- WebSocket：任务进度推送 + 数据更新推送 ----
+  function wsOnMessage(ev) {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+    if (!msg || !msg.type) return;
+    if (msg.type === 'jobs') {
+      renderJobSnapshot(msg.data);
+    } else if (msg.type === 'data_updated') {
+      window.dispatchEvent(new CustomEvent('app-data-updated', { detail: msg }));
+    }
+  }
+  window.connectWs = () => {
+    if (window._ws && (window._ws.readyState === 0 || window._ws.readyState === 1)) return;
+    let ws;
+    try {
+      const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+      ws = new WebSocket(proto + location.host + '/ws');
+    } catch (e) { window.__wsDown = true; return; }
+    window._ws = ws;
+    window.__wsDown = true;
+    ws.onopen = () => { window.__wsDown = false; tick(); };
+    ws.onmessage = wsOnMessage;
+    ws.onclose = () => {
+      window.__wsDown = true;
+      tick();
+      setTimeout(window.connectWs, 3000);
+    };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  };
+  window.connectWs();
 }
 
 /** 启动后台任务（POST 秒回 job_id / batch_id），顶部条跟进度。 */
@@ -502,11 +663,13 @@ async function startBackgroundJob(path, body, opts = {}) {
 function waitForJob(jobId, timeoutMs = 600000) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timer = null;
+    let poll = null;
     const finish = (ok, detail, err) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      clearInterval(poll);
+      if (timer) clearTimeout(timer);
+      if (poll) clearInterval(poll);
       window.removeEventListener('app-job-done', onDone);
       if (ok) resolve(detail || {});
       else reject(new Error(err || '任务失败'));
@@ -525,18 +688,30 @@ function waitForJob(jobId, timeoutMs = 600000) {
       else finish(true, d);
     }
     window.addEventListener('app-job-done', onDone);
-    const timer = setTimeout(() => finish(false, null, '任务超时'), timeoutMs);
-    const poll = setInterval(async () => {
-      try {
-        const p = await api('/status/jobs', { silent: true });
-        const hit = (p.recent || []).find(r => match(r));
-        if (hit) {
-          if (hit.status === 'cancelled' || hit.ok === false || hit.error)
-            finish(false, hit, hit.error || '已取消');
-          else finish(true, hit);
-        }
-      } catch (e) { /* ignore */ }
-    }, 500);
+    // ws 在线且已有快照：任务可能先完成、监听后注册 → 查快照立即命中，避免干等超时
+    if (window.__wsDown === false && window._lastJobsData && !settled) {
+      const hit = (window._lastJobsData.recent || []).find(r => match(r));
+      if (hit) {
+        if (hit.status === 'cancelled' || hit.ok === false || hit.error) finish(false, hit, hit.error || '已取消');
+        else finish(true, hit);
+        return;
+      }
+    }
+    timer = setTimeout(() => finish(false, null, '任务超时'), timeoutMs);
+    // ws 在线靠推送（app-job-done）+ 快照命中，不再轮询刷 /status/jobs；断线才轮询兜底
+    if (window.__wsDown !== false) {
+      poll = setInterval(async () => {
+        try {
+          const p = await api('/status/jobs', { silent: true });
+          const hit = (p.recent || []).find(r => match(r));
+          if (hit) {
+            if (hit.status === 'cancelled' || hit.ok === false || hit.error)
+              finish(false, hit, hit.error || '已取消');
+            else finish(true, hit);
+          }
+        } catch (e) { /* ignore */ }
+      }, 500);
+    }
   });
 }
 
@@ -606,10 +781,15 @@ function chooseRefreshItems(full, scope = 'global') {
   });
 }
 
-async function doRefresh(btn, full, scope = 'global', code) {
-  const items = await chooseRefreshItems(full, scope);
-  if (!items || !items.length) return; // 用户取消或未勾选任何内容
-  btn.disabled = true;
+// 默认刷新项：该 scope/mode 下的全部内容（直接开跑用，不弹勾选框）
+function defaultRefreshItems(full, scope = 'global') {
+  const key = scope === 'stock' ? (full ? 'stock_full' : 'stock_dynamic') : (full ? 'full' : 'dynamic');
+  return (REFRESH_OPTIONS[key] || []).map(([k]) => k);
+}
+
+// 启动刷新任务（直跑或「自定义」勾选后共用）。btn 可为空（提示条等非按钮入口）。
+async function startRefresh(btn, full, scope, code, items) {
+  if (btn) btn.disabled = true;
   const st = document.getElementById('statusText');
   if (st) st.textContent = '已提交刷新…';
   const label = scope === 'stock' ? '个股' : (full ? '完整' : '行情');
@@ -622,8 +802,20 @@ async function doRefresh(btn, full, scope = 'global', code) {
     if (st) st.textContent = '更新失败';
     toast('更新失败：' + e.message, 4000);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
+}
+
+async function doRefresh(btn, full, scope = 'global', code) {
+  // 默认直接开跑（全项），不再弹勾选框；想自定义走 openCustomRefresh
+  return startRefresh(btn, full, scope, code, defaultRefreshItems(full, scope));
+}
+
+// 「自定义」：弹勾选框（完整更新内容）选择后开始；保留按需勾选能力
+async function openCustomRefresh(scope = 'global', code) {
+  const items = await chooseRefreshItems(true, scope);
+  if (!items || !items.length) return; // 用户取消或未勾选任何内容
+  return startRefresh(null, true, scope, code, items);
 }
 
 // 股票搜索控件：返回 {code, name}

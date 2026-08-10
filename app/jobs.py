@@ -3,12 +3,14 @@
 - refresh 车道：全局刷新扇出为每股子任务，有限并发消费；收尾挂 batch 屏障后
 - ai 车道：诊股/打分/资金流，与刷新互不阻塞
 - POST 入队秒回；GET /status/jobs 看当前+排队；DELETE 取消
+- 状态变更经 notify_jobs 推送 WebSocket，前端进度条实时更新
 """
 from __future__ import annotations
 
 import logging
 import queue
 import threading
+import time as _time
 import uuid
 from collections import deque
 from datetime import datetime
@@ -180,6 +182,7 @@ def _recompute_job_pct(j: dict) -> None:
     j["pct"] = min(99, round((done_n + (0.5 if step else 0)) / total * 100))
     j["current"] = min(total, done_n + (1 if step else 0))
     j["done_count"] = done_n
+    notify_jobs()
 
 
 def _ensure_workers() -> None:
@@ -268,6 +271,7 @@ def _finalize_locked(j: dict, ok: bool = True, error: str | None = None,
         "batch_id": j.get("batch_id"),
     })
     logger.info("[任务] %s %s %s", j["status"], j["kind"], j["label"])
+    notify_jobs()
 
 
 def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
@@ -284,6 +288,7 @@ def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
         "done_count": b.get("done_count") or 0,   # 前端完成提示可展示「处理 N 项」
         "total": b.get("total") or 0,
     })
+    notify_jobs()
 
 
 def _notify_batch_locked(j: dict) -> None:
@@ -348,6 +353,7 @@ def _enqueue_locked(spec: dict) -> str:
     }
     _jobs[job_id] = job
     _queues[lane].put(job_id)
+    notify_jobs()
     return job_id
 
 
@@ -629,6 +635,35 @@ def is_running() -> bool:
         return any(j["status"] in ("queued", "running") for j in _jobs.values())
 
 
+def is_refresh_busy() -> bool:
+    """refresh 车道是否有排队/执行中的任务（后台自动刷新据此跳过，避免与手动/个股刷新打架）。"""
+    with _lock:
+        return any(
+            j["status"] in ("queued", "running") and j["lane"] == LANE_REFRESH
+            for j in _jobs.values()
+        )
+
+
+_last_jobs_push = 0.0
+_JOBS_PUSH_INTERVAL = 0.3  # 秒；进度刷新节流，避免每次 advance 都推
+
+
+def notify_jobs() -> None:
+    """广播 job 快照（节流）：WebSocket 客户端据此实时更新顶部进度条，替代 1s 轮询。"""
+    global _last_jobs_push
+    now = _time.monotonic()
+    if now - _last_jobs_push < _JOBS_PUSH_INTERVAL:
+        return
+    _last_jobs_push = now
+    try:
+        from app import ws as ws_manager
+
+        if ws_manager.is_connected():
+            ws_manager.broadcast({"type": "jobs", "data": snapshot()})
+    except Exception:  # noqa: BLE001 推送失败不影响任务
+        pass
+
+
 # ---------- 预热兼容（startup 线程驱动进度，不占 worker） ----------
 
 def prewarm_begin(steps: list[str] | None = None) -> str:
@@ -701,12 +736,13 @@ def prewarm_finish() -> None:
 
 def force_reset() -> None:
     """测试用：清空任务/批次/recent（不停止已在跑的线程内 fn，仅丢状态）。"""
-    global _prewarm_id
+    global _prewarm_id, _last_jobs_push
     with _lock:
         _jobs.clear()
         _batches.clear()
         _recent.clear()
         _prewarm_id = None
+        _last_jobs_push = 0.0   # 节流时间一并重置，避免跨测试吞推送
         # 抽干队列
         for q in _queues.values():
             while True:

@@ -142,22 +142,32 @@
     }
 
     async function submitTrade() {
+      if (submitTrade._busy) return;   // 防双击（首笔新股录入会同步数据）
       const stock = parseStockChoice(sb.querySelector('input').value);
       if (!stock) return toast('请选择股票（代码或 代码 名称）');
       const t = document.getElementById('tradeTime').value;
       // 调整记录：后端只允许改 note/时间，不传 price/quantity/side，避免前端校验卡住
       if (editingId && editingAdjust) {
-        const body = {
-          note: document.getElementById('note').value || null,
-        };
-        if (t) body.trade_time = t.replace('T', ' ') + ':00';
+        submitTrade._busy = true;
+        const btn = document.getElementById('submitBtn');
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '保存中…';
         try {
+          const body = {
+            note: document.getElementById('note').value || null,
+          };
+          if (t) body.trade_time = t.replace('T', ' ') + ':00';
           await api('/trades/' + editingId, { method: 'PUT', body });
           toast('已修改调整记录');
           cancelEdit();
           await loadPage();
         } catch (e) {
           toast('失败：' + e.message, 4000);
+        } finally {
+          submitTrade._busy = false;
+          btn.disabled = false;
+          btn.textContent = orig;
         }
         return;
       }
@@ -171,6 +181,11 @@
       };
       if (!body.price || !body.quantity) return toast('请填写价格与数量');
       if (t) body.trade_time = t.replace('T', ' ') + ':00';
+      submitTrade._busy = true;
+      const btn = document.getElementById('submitBtn');
+      const origBtnText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '提交中…';
       try {
         if (editingId) {
           await api('/trades/' + editingId, { method: 'PUT', body });
@@ -182,6 +197,10 @@
         await loadPage();
       } catch (e) {
         toast('失败：' + e.message, 4000);
+      } finally {
+        submitTrade._busy = false;
+        btn.disabled = false;
+        btn.textContent = origBtnText;
       }
     }
 

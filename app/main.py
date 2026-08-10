@@ -1,8 +1,9 @@
 """FastAPI 应用入口：初始化、路由挂载、静态资源、中文请求日志、全局异常兜底。"""
+import asyncio
 import logging
 import time
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +28,53 @@ _QUIET_PATHS = frozenset({
     "/api/status/prewarm",
     "/api/health",
 })
+
+
+def _dynamic_auto_loop() -> None:
+    """盘中每 N 分钟静默刷新动态数据（现价/资金流）：不走 job 系统，顶部进度条完全静默。"""
+    import time
+
+    from app.services import refresh as rmod
+    from app.services.settings import get_dynamic_interval_seconds
+
+    while True:
+        try:
+            interval = max(30, get_dynamic_interval_seconds())
+        except Exception:  # noqa: BLE001 读配置失败回落
+            interval = 300
+        time.sleep(interval)
+        try:
+            from app.jobs import is_refresh_busy
+
+            if rmod.should_run_dynamic_loop(busy=is_refresh_busy()):
+                codes = rmod.get_holdings_codes()
+                rmod.refresh_dynamic(["price", "flow"])
+                # 推送给已打开的页面：数据已更新，前端据此自动重绘（静默，不占进度条）
+                from app import ws as ws_manager
+
+                ws_manager.broadcast({"type": "data_updated", "codes": codes})
+        except Exception:  # noqa: BLE001 自动刷新失败静默降级
+            logger.exception("[自动刷新] 盘中动态刷新失败（不影响服务）")
+
+
+def _daily_full_sync_loop() -> None:
+    """每日收盘后（港股 16:10）进程在线且当日未全量同步 → 补一次全量（记当日标记防双跑）。"""
+    import time
+
+    from app.services import refresh as rmod
+    from app.services.settings import get_last_full_sync_date
+
+    while True:
+        time.sleep(60)
+        try:
+            from app.jobs import is_refresh_busy
+
+            if rmod.should_run_daily_sync(last_date=get_last_full_sync_date()) \
+                    and not is_refresh_busy():
+                rmod.run_daily_full_sync()
+                logger.info("[自动刷新] 每日收盘后全量同步完成")
+        except Exception:  # noqa: BLE001 每日同步失败不影响服务
+            logger.exception("[自动刷新] 每日全量同步失败（不影响服务）")
 
 
 def create_app() -> FastAPI:
@@ -123,10 +171,23 @@ def create_app() -> FastAPI:
                 logger.warning("[预热] 补打今日 AI 评分失败（不影响服务，可手动重打）")
             complete("今日 AI 评分")
 
+            try:
+                # 静态数据靠启动预热同步（只拉静态项）；若已过收盘还顺带写当日标记，收盘后不再补
+                from app.services.refresh import run_daily_full_sync
+
+                mark("同步持仓数据")
+                run_daily_full_sync(items=["bars", "financials", "valuation"])
+            except Exception:  # noqa: BLE001 持仓数据同步失败不影响服务
+                logger.warning("[预热] 持仓静态数据同步失败（不影响服务，可稍后刷新重试）")
+            complete("同步持仓数据")
+
             finish()
 
         if not SKIP_STARTUP_TASKS:
             threading.Thread(target=_startup_tasks, daemon=True).start()
+            # 后台自动保鲜（测试 SKIP_STARTUP_TASKS 时不启）：盘中动态刷新 + 每日收盘后全量
+            threading.Thread(target=_dynamic_auto_loop, daemon=True).start()
+            threading.Thread(target=_daily_full_sync_loop, daemon=True).start()
     except Exception:  # noqa: BLE001
         pass
 
@@ -187,6 +248,24 @@ def create_app() -> FastAPI:
     @app.get("/")
     def index():
         return FileResponse(STATIC_DIR / "index.html")
+
+    # WebSocket 推送：连接即推一次任务快照；后续由 jobs/刷新循环经 ws.broadcast 推送
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        from app import jobs, ws as ws_manager
+
+        await websocket.accept()
+        ws_manager.set_loop(asyncio.get_running_loop())
+        await ws_manager.connect(websocket)
+        try:
+            await websocket.send_json({"type": "jobs", "data": jobs.snapshot()})
+            # 阻塞读以探测断开；客户端无需主动发数据
+            while True:
+                await websocket.receive_text()
+        except Exception:  # noqa: BLE001 断连/异常统一清理
+            pass
+        finally:
+            await ws_manager.disconnect(websocket)
 
     return app
 

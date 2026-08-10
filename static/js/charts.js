@@ -1016,7 +1016,7 @@ function klineChart(el, bars, opts) {
   const o = opts || {};
   const n = bars.length;
   if (!n) {
-    el.innerHTML = '<div class="empty" style="padding:24px">暂无K线数据 — 点右上角「⚡ 刷新此股」拉取行情。</div>';
+    el.innerHTML = '<div class="empty" style="padding:24px">暂无K线数据 — 打开页面时已自动更新。</div>';
     return null;
   }
   const dates = bars.map((b) => b.date);

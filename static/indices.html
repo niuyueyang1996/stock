@@ -138,8 +138,7 @@
         el2.addEventListener('click', () => {
           const code = allIndices[+el2.dataset.i].code;
           if (selected.has(code)) selected.delete(code); else selected.add(code);
-          renderSidebar();
-          loadPage();
+          renderView();   // 只按选中重渲染 + 拉选中资金流，不重拉全量指数列表
         });
       });
       document.getElementById('indexCount').textContent = `已选 ${selected.size}/${allIndices.length}`;
@@ -147,8 +146,7 @@
 
     document.getElementById('indexAllCard').addEventListener('click', () => {
       selected = selected.size === allIndices.length ? new Set() : new Set(allIndices.map((d) => d.code));
-      renderSidebar();
-      loadPage();
+      renderView();
     });
 
     // 「刷新全部指数」：并发重拉全部指数（日K/点位/估值/资金流），完成后刷新列表
@@ -328,27 +326,27 @@
       }
     }
 
-    async function loadPage() {
-      const right = document.getElementById('rightContent');
-      const noSel = document.getElementById('noSelection');
-      const showEmpty = () => { right.style.display = 'none'; noSel.style.display = 'block'; };
-      const showContent = () => { right.style.display = ''; noSel.style.display = 'none'; };
+    const right = document.getElementById('rightContent');
+    const noSel = document.getElementById('noSelection');
+    const showEmpty = () => { right.style.display = 'none'; noSel.style.display = 'block'; };
+    const showContent = () => { right.style.display = ''; noSel.style.display = 'none'; };
+
+    // 拉全量指数列表（含点位/成交额）：只在首次 / 手动刷新后调用；切换选中不重拉
+    async function loadList() {
       try {
-        // 每次重拉摘要（含成交额较昨）；首次默认不选
-        const data = await api('/indices', { blocking: !loaded, silent: loaded });
-        const keep = loaded ? selected : new Set();
+        const keep = selected;
+        const data = await api('/indices', { blocking: true });
         allIndices = data || [];
-        if (!loaded) {
-          selected = new Set();
-          loaded = true;
-        } else {
-          selected = new Set([...keep].filter((c) => allIndices.some((d) => d.code === c)));
-        }
+        selected = new Set([...keep].filter((c) => allIndices.some((d) => d.code === c)));
+        loaded = true;
       } catch (e) {
         document.getElementById('indexBody').innerHTML =
           '<tr><td colspan="4" class="muted">加载失败：' + esc(e.message) + '</td></tr>';
-        return;
       }
+    }
+
+    // 按当前选中渲染（侧栏/汇总/权重/表格/资金流）；资金流用 ?codes= 只拉选中的指数
+    async function renderView() {
       renderSidebar();
       if (selected.size === 0) { showEmpty(); return; }
       showContent();
@@ -357,6 +355,11 @@
       renderTable();
       await loadAndRender();
       renderPfFlow();
+    }
+
+    async function loadPage() {
+      await loadList();
+      await renderView();
     }
 
     makeFoldable(document.getElementById('fundflowPanel'), { id: 'fundflowPanel', defaultOpen: true });

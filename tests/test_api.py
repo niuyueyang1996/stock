@@ -130,7 +130,7 @@ def test_prewarm_state_machine():
     prewarm.begin()
     s0 = prewarm.snapshot()
     assert s0["running"] is True
-    assert s0["total"] == 5
+    assert s0["total"] == len(prewarm.PREWARM_STEPS) == 6
     assert s0["done_count"] == 0
     prewarm.mark("拉取港股汇率")
     s1 = prewarm.snapshot()

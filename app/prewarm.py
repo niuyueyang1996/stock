@@ -5,7 +5,7 @@
 from app import jobs
 
 # 与 app/main.py _startup_tasks 步骤顺序一致（complete 名）
-PREWARM_STEPS = ["港股汇率", "今日除权", "全市场列表", "指数", "今日 AI 评分"]
+PREWARM_STEPS = ["港股汇率", "今日除权", "全市场列表", "指数", "今日 AI 评分", "同步持仓数据"]
 
 
 def begin(steps: list[str] | None = None) -> None:

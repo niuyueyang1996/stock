@@ -14,13 +14,17 @@ def _tag_list(tags: str | None) -> list[str] | None:
 
 
 @router.get("/portfolio")
-def portfolio(code: str | None = None, tags: str | None = None, as_of: str | None = None):
+def portfolio(code: str | None = None, tags: str | None = None, as_of: str | None = None,
+              lite: bool = False):
     """整体组合分析；tags=标签子集（逗号分隔，缺省全选）；带 code 则返回该股在组合内的贡献与上下文。
 
     as_of：可选历史回看日；仅估值倍数/分位/股息率用该日收盘价，市值/盈亏仍为实时。
+    lite=1：首页用——只回 汇总+持仓表+缺失，省略 series/tags/weights 等大字段（显著减 payload）。
     """
+    if code:
+        lite = False   # 单股贡献路径需要 weights/tags，回退全量
     try:
-        p = compute_portfolio(tags=_tag_list(tags), as_of=as_of)
+        p = compute_portfolio(tags=_tag_list(tags), as_of=as_of, lite=lite)
     except Exception as e:
         raise HTTPException(500, f"组合分析失败: {e}")
 

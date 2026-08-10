@@ -20,6 +20,12 @@ class ResetBody(BaseModel):
     confirm: bool = False
 
 
+class RefreshSettingsBody(BaseModel):
+    mode: str | None = None
+    static_ttl_minutes: int | None = None
+    dynamic_interval_seconds: int | None = None
+
+
 # 一键清空涉及的业务/缓存表（trades 先删，再删引用它的 stocks/holdings）
 # 保留 config（模型配置等）与 trade_calendar（市场日历，静态公开数据）
 _RESET_TABLES = [
@@ -38,6 +44,7 @@ _RESET_TABLES = [
     "valuation_history_cache",
     "portfolio_valuation_cache",
     "fx_rate_cache",
+    "stock_refresh_meta",
     "stock_expected_growth",
     "stock_expected_revenue_growth",
     "stock_expected_payout",
@@ -131,6 +138,41 @@ def refresh_full(body: RefreshBody | None = None):
 
     data = start_global_refresh(full=True, items=body.items if body else None)
     return {"ok": True, "data": data}
+
+
+@router.get("/settings/refresh")
+def get_refresh_settings():
+    """当前刷新/界面配置（简单·高级模式 / 静态节流 / 动态间隔）。"""
+    from app.services import settings as s
+
+    return {"ok": True, "data": {
+        "mode": s.get_ui_mode(),
+        "static_ttl_minutes": s.get_static_ttl_minutes(),
+        "dynamic_interval_seconds": s.get_dynamic_interval_seconds(),
+    }}
+
+
+@router.put("/settings/refresh")
+def put_refresh_settings(body: RefreshSettingsBody):
+    """更新刷新/界面配置（config 表即时生效）。"""
+    from app.services import settings as s
+
+    if body.mode is not None and body.mode not in ("simple", "advanced"):
+        raise HTTPException(400, "mode 需为 simple 或 advanced")
+    if body.static_ttl_minutes is not None and not (10 <= body.static_ttl_minutes <= 1440):
+        raise HTTPException(400, "静态刷新限制需在 10~1440 分钟之间")
+    if body.dynamic_interval_seconds is not None and not (30 <= body.dynamic_interval_seconds <= 3600):
+        raise HTTPException(400, "动态刷新间隔需在 30~3600 秒之间")
+    s.set_refresh_settings(
+        mode=body.mode,
+        static_ttl_minutes=body.static_ttl_minutes,
+        dynamic_interval_seconds=body.dynamic_interval_seconds,
+    )
+    return {"ok": True, "data": {
+        "mode": s.get_ui_mode(),
+        "static_ttl_minutes": s.get_static_ttl_minutes(),
+        "dynamic_interval_seconds": s.get_dynamic_interval_seconds(),
+    }}
 
 
 @router.post("/data/reset")

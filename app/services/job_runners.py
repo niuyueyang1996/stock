@@ -108,10 +108,17 @@ def start_global_refresh(full: bool, items: list[str] | None = None) -> dict:
     }
 
 
-def start_stock_refresh(code: str, items: list[str] | None, full: bool) -> str:
-    """单股刷新入队；进度 label 用名称。"""
+def start_stock_refresh(code: str, items: list[str] | None, full: bool,
+                        auto: bool = False) -> str:
+    """单股刷新入队；进度 label 用名称。
+
+    auto=True（个股页打开自动触发）：静态数据齐全且在配置 ttl 内 → 只刷动态（price/flow），
+    否则全量。手动按钮/批量刷新不传 auto → 不受节流。
+    """
     from app.services import refresh as rmod
 
+    if full and auto:
+        items = rmod.throttle_stock_full_items(code, items)
     name = rmod._stock_name(code)
     kind = "refresh.stock.full" if full else "refresh.stock.dynamic"
     label = f"{'全量' if full else ''}刷新 {name}".strip()

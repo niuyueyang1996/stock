@@ -497,3 +497,26 @@ def test_get_portfolio_unchanged_shape(client):
     assert "total_value" in data["portfolio"]
     assert "pe" in data["portfolio"]
 
+
+
+def test_portfolio_lite_payload(client):
+    """首页用 lite=1：只回 汇总+精简持仓+缺失，省略 series/tags/weights 等大字段（性能优化）。"""
+    _seed_holdings([("600000", 100), ("600519", 10)])
+    _seed_fin("600000")
+    _seed_fin("600519")
+    r = client.get("/api/portfolio?lite=1")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert set(d.keys()) == {"portfolio", "stocks", "missing"}
+    assert d["portfolio"]["stocks_count"] == 2
+    s = d["stocks"][0]
+    for k in ("code", "name", "price", "quantity", "avg_cost", "value",
+              "pnl", "pnl_pct", "day_pnl", "pe", "pb", "pe_pct", "pb_pct",
+              "dv", "roe", "total_dividend", "weight"):
+        assert k in s, k
+    assert "passthrough" not in s and "fwd_pe" not in s and "ps_ttm" not in s
+    # 默认（非 lite）仍返回全量，组合页不受影响
+    r2 = client.get("/api/portfolio")
+    d2 = r2.json()["data"]
+    for key in ("series", "tags", "weights", "tag_cards", "all_tags"):
+        assert key in d2, key

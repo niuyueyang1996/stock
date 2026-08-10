@@ -372,6 +372,11 @@ CREATE TABLE IF NOT EXISTS etf_index_map (
     created_at TEXT,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS stock_refresh_meta (
+    code         TEXT PRIMARY KEY,       -- 股票代码
+    last_full_at TEXT                    -- 最近一次成功全量同步时刻（ISO，个股打开自动刷新的 1h 节流依据）
+);
 """
 
 

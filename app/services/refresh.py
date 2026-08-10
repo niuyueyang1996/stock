@@ -11,7 +11,7 @@ import logging
 import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 
 from app.data.base import Bar, FundflowDay
 from app.data.fundflow import FUNDFLOW_HISTORY_DAYS
@@ -42,6 +42,7 @@ from app.market.calendar import (
     is_market_closed,
     is_trade_day,
     last_trade_date,
+    market_open_time,
     resolve_live_trade_date,
 )
 from app.models.db import get_conn
@@ -59,6 +60,11 @@ FUNDFLOW_HISTORY_MIN_DAYS = 30
 # 首次预热失败/历史缺口时，增量逻辑一旦有少量数据就永远只补今天、缺口永不回填
 # （指数日K缺失的真实教训），判定稀疏后强制回填全量窗口。
 HISTORY_MIN_DAYS = 60
+
+# 盘中动态自动刷新窗口：09:15 开盘后至港股收盘 16:10（A 股 15:00、港股 16:10，取晚者）
+_INTRADAY_END = dtime(16, 10)
+# 每日收盘后全量同步触发点：同样按港股 16:10 收盘（非 15:00，否则港股尾盘数据未定格）
+_CLOSE_SYNC_TIME = dtime(16, 10)
 
 # 刷新互斥（与 Excel 导入同口径：防双点搅进度）
 _refresh_lock = threading.Lock()
@@ -485,6 +491,121 @@ def _today_price(code: str, now: datetime) -> float | None:
     return float(row["close"]) if row and row["close"] else None
 
 
+# ---------- 个股静态数据新鲜度（打开自动刷新的 1h 节流） ----------
+
+def _static_data_complete(code: str) -> bool:
+    """静态数据是否齐全：财务关键字段在、近 HISTORY_DAYS 日K不稀疏、有估值分位。
+
+    与 meta 时间戳组成双闸门：即便 meta 被误标，数据不全也不会跳过全量重拉。
+    """
+    try:
+        from app.data.cache import get_latest_quantile
+
+        fin = get_financials(code)
+        if not fin:
+            return False
+        if any(fin[k] is None for k in ("net_profit", "net_assets", "eps", "total_shares")):
+            return False
+        start = (date.today() - timedelta(days=HISTORY_DAYS)).isoformat()
+        if len(get_daily_prices(code, start, date.today().isoformat())) < HISTORY_MIN_DAYS:
+            return False
+        return get_latest_quantile(code, "1y") is not None
+    except Exception:  # noqa: BLE001 数据判断失败按不齐全处理（宁重拉不跳过）
+        return False
+
+
+def _last_full_at(code: str) -> str | None:
+    try:
+        with get_conn() as c:
+            row = c.execute(
+                "SELECT last_full_at FROM stock_refresh_meta WHERE code=?", (code,)
+            ).fetchone()
+        return row["last_full_at"] if row else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _record_full_sync(code: str, now: datetime | None = None) -> None:
+    """记录该股最近一次成功全量同步时刻（批量/个股全量共用，节流依据）。"""
+    now = now or datetime.now()
+    try:
+        with get_conn() as c:
+            c.execute(
+                "INSERT INTO stock_refresh_meta(code, last_full_at) VALUES(?,?) "
+                "ON CONFLICT(code) DO UPDATE SET last_full_at=excluded.last_full_at",
+                (code, now.strftime("%Y-%m-%d %H:%M:%S")),
+            )
+    except Exception:  # noqa: BLE001 记录失败不影响刷新
+        pass
+
+
+def _static_is_fresh(code: str, now: datetime, ttl_minutes: int) -> bool:
+    """静态数据是否可在 ttl 内跳过重拉：meta 在 ttl 内 且 数据齐全（双闸门）。"""
+    ts = _last_full_at(code)
+    if not ts:
+        return False
+    try:
+        last = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return False
+    if (now - last).total_seconds() > ttl_minutes * 60:
+        return False
+    return _static_data_complete(code)
+
+
+def throttle_stock_full_items(code: str, items: list[str] | None) -> list[str] | None:
+    """个股打开自动刷新（auto）：静态数据齐全且在 ttl 内 → 只保留动态项（price/flow）。
+
+    首次（无 meta）或超时/数据不全 → 返回原 items（走全量）。手动按钮不经过此函数。
+    """
+    from app.services.settings import get_static_ttl_minutes
+
+    if not _static_is_fresh(code, datetime.now(), get_static_ttl_minutes()):
+        return items
+    base = list(items) if items else list(STOCK_FULL_ITEMS)
+    kept = [i for i in base if i in ("price", "flow")]
+    return kept or None
+
+
+# ---------- 后台自动刷新时机（纯函数，便于测试） ----------
+
+def should_run_dynamic_loop(now: datetime | None = None, busy: bool = False) -> bool:
+    """盘中动态自动刷新时机：交易日 09:15 开盘后至港股收盘 16:10，且无刷新任务占用。"""
+    now = now or datetime.now()
+    if busy or not is_trade_day(now.date()):
+        return False
+    if now < market_open_time(now.date()):
+        return False
+    if now.time() >= _INTRADAY_END:
+        return False
+    return True
+
+
+def should_run_daily_sync(now: datetime | None = None, last_date: str | None = None) -> bool:
+    """每日收盘后全量同步时机：交易日且已过港股收盘 16:10，且当日尚未做过全量。"""
+    now = now or datetime.now()
+    if not is_trade_day(now.date()):
+        return False
+    if now.time() < _CLOSE_SYNC_TIME:
+        return False
+    return last_date != now.date().isoformat()
+
+
+def run_daily_full_sync(now: datetime | None = None, items: list[str] | None = None) -> dict:
+    """收盘后 / 启动预热的全量同步。
+
+    启动预热只传静态项（items=['bars','financials','valuation']）；收盘后全量（items=None 全项）。
+    只有当已过港股收盘 16:10 才写「当日已同步」标记——早上启动同步不算数，否则收盘后会被误跳过。
+    """
+    from app.services.settings import set_last_full_sync_date
+
+    now = now or datetime.now()
+    result = refresh_full(items=items)
+    if is_trade_day(now.date()) and now.time() >= _CLOSE_SYNC_TIME:
+        set_last_full_sync_date(now.date().isoformat())
+    return result
+
+
 # 刷新内容项：key → 中文说明（前端弹窗多选 + 后端按需执行）。
 # AI 打分不在此列：由组合页/交易页手动触发（POST /api/ai-scoring/*）。
 DYNAMIC_ITEMS = {
@@ -507,6 +628,7 @@ STOCK_DYNAMIC_ITEMS = {
     "flow": "当日资金流（特大/大/中/小/特小单）",
 }
 STOCK_FULL_ITEMS = {
+    "price": "实时价格（分钟级）",
     "bars": "日K历史（全量重拉覆盖）",
     "financials": "财务数据（净利/净资产/EPS/支付率）",
     "valuation": "估值分位（百度序列 + 1y/3y/5y 分位 + 实时估值）",
@@ -549,7 +671,7 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
                     r1, rk = fd.result(), fk.result()
             elif need_fin:
                 r3 = sync_financials(code, force=True)
-            q = _sync_realtime_quote(code, now) if need_bars else None
+            q = _sync_realtime_quote(code, now) if (need_bars or "price" in items) else None
             price = q.price if q else _today_price(code, now)
             # 估值依赖价格；资金流不依赖估值 → 有价后两者并行
             r2, rf = _skip(code), _skip(code)
@@ -594,6 +716,12 @@ def _process_stock(code: str, now: datetime, full: bool, items: set[str]) -> dic
         entry["fetched"] = entry["daily"]["fetched"] + entry["valuation"]["fetched"] + entry["fundflow"]["fetched"] \
             + (entry["financials"]["fetched"] if "financials" in entry else 0) \
             + (entry["kline"].get("week", 0) + entry["kline"].get("month", 0) if "kline" in entry else 0)
+        # 全量刷新真正跑了静态项（bars/financials/valuation）且成功 → 记录「最后全量同步时刻」，
+        # 供个股打开自动刷新的 1h 节流使用；被节流成只刷动态时不更新（保留旧 meta）。
+        if full and not entry.get("error") and any(
+            k in items for k in ("bars", "financials", "valuation")
+        ):
+            _record_full_sync(code, now)
         return entry
     except Exception as e:  # noqa: BLE001 单只失败不中断整体
         return {"code": code, "error": f"{type(e).__name__}: {e}", "fetched": 0}

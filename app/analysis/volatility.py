@@ -5,11 +5,12 @@
 - 不同市场休市日最多前向填充 3 个自然日。
 - 日覆盖率（有值股票数 / 总数）不足 95% 的日期不纳入样本。
 """
+import bisect
 import math
 import statistics
 from datetime import date, timedelta
 
-from app.data.cache import get_daily_prices_many, get_fx_rate, get_latest_fx_rate
+from app.data.cache import get_daily_prices_many
 
 # 年化交易日数
 TRADING_DAYS = 250
@@ -19,15 +20,45 @@ MAX_FORWARD_FILL_DAYS = 3
 COVERAGE_THRESHOLD = 0.95
 
 
-def _cny_close(currency: str, trade_date: str, close: float) -> float | None:
+def _load_fx_maps(currencies: dict[str, str]) -> dict[str, dict]:
+    """一次查库加载全部非 CNY 币种汇率（date→rate），供逐点折算复用。
+
+    原实现每个价格点都 get_fx_rate → 新开 SQLite 连接 + 查询，波动率成性能热点
+    （14 只持仓 3000+ 次查询）。这里整表加载（数据量小），bisect 取「<=date 最近一条」。
+    """
+    ccy = {v for v in currencies.values() if v and v != "CNY"}
+    out: dict[str, dict] = {}
+    if not ccy:
+        return out
+    from app.models.db import get_conn
+
+    placeholders = ",".join("?" * len(ccy))
+    with get_conn() as c:
+        rows = c.execute(
+            "SELECT currency, rate_date, rate FROM fx_rate_cache "
+            f"WHERE currency IN ({placeholders}) ORDER BY rate_date",
+            tuple(sorted(ccy)),
+        ).fetchall()
+    for r in rows:
+        m = out.setdefault(r["currency"], {"dates": [], "rates": []})
+        m["dates"].append(r["rate_date"])
+        m["rates"].append(float(r["rate"]))
+    return out
+
+
+def _fx_rate_on(fx_map: dict | None, trade_date: str) -> float | None:
+    """汇率 map 中取 <= trade_date 的最近一条；缺省返回 None。"""
+    if not fx_map or not fx_map.get("dates"):
+        return None
+    i = bisect.bisect_right(fx_map["dates"], trade_date) - 1
+    return fx_map["rates"][i] if i >= 0 else None
+
+
+def _cny_close(currency: str, trade_date: str, close: float, fx_map: dict | None) -> float | None:
     """港股价格 × 当日汇率 → 人民币；CNY 股原样返回；汇率缺失返回 None（不按 1:1）。"""
     if currency == "CNY":
         return close
-    row = get_fx_rate("HKD", trade_date)
-    rate = float(row["rate"]) if row and row["rate"] else None
-    if rate is None:
-        row = get_latest_fx_rate("HKD", trade_date)
-        rate = float(row["rate"]) if row and row["rate"] else None
+    rate = _fx_rate_on(fx_map, trade_date)
     return close * rate if rate else None
 
 
@@ -42,6 +73,7 @@ def compute_volatility(codes: list[str], weights: dict[str, float],
     end = date.today()
     start = end - timedelta(days=365)
     currencies = currencies or {}
+    fx_maps = _load_fx_maps(currencies)   # 一次查库预加载汇率，避免逐点开连接
 
     # 加载各股人民币收盘价（一次批量查库）
     data: dict[str, dict[str, float]] = {}
@@ -53,7 +85,7 @@ def compute_volatility(codes: list[str], weights: dict[str, float],
         for r in by_code.get(code, []):
             if not r["close"]:
                 continue
-            v = _cny_close(currency, r["trade_date"], float(r["close"]))
+            v = _cny_close(currency, r["trade_date"], float(r["close"]), fx_maps.get(currency))
             if v is not None:
                 dmap[r["trade_date"]] = v
                 all_dates.add(r["trade_date"])

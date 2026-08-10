@@ -106,7 +106,7 @@
     <div class="panel grow" id="flowBarsPanel">
       <h2>全天五档资金流（最新交易日）</h2>
       <div class="chart sm" id="flowBars"></div>
-      <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 点右上角「⚡ 刷新此股」拉取当日分笔。</div>
+      <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
     <div class="panel" id="newsAiPanel">
@@ -148,7 +148,7 @@
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
       <div class="chart lg" id="flowBandsCum" style="height:300px;display:none"></div>
       <div class="chart lg" id="flowBuySell" style="height:300px"></div>
-      <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。</div>
+      <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
   </div>
@@ -158,6 +158,17 @@
   <script src="/static/js/charts.js"></script>
   <script>
     initNav('stock');
+    // 简单模式隐藏个股页刷新按钮（自动刷新已覆盖）；高级模式显示
+    function applyStockMode() {
+      const mode = (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
+      const show = mode === 'advanced';
+      ['refreshDyn', 'refreshFull'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      });
+    }
+    window.addEventListener('app-settings', applyStockMode);
+    applyStockMode();
     let currentCode = new URLSearchParams(location.search).get('code') || '';
     const isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）
     let lastIsIndex = false;    // 当前标的是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定）
@@ -383,12 +394,12 @@
         mask.className = 'modal-mask';
         mask.innerHTML = `
           <div class="modal">
-            <h3>还没有这只股票的本地数据</h3>
-            <p>「${status.stock}」缺少：${missing}</p>
-            <p class="muted">需要联网下载一次（通常几十秒到一两分钟）。也可以先看已有部分。</p>
+            <h3>第一次看这只股票，要先下载数据</h3>
+            <p>这只股票还没下载过，需要联网拿一次数据（通常一两分钟）。下载完就能看完整页面了。</p>
+            <p class="muted" style="font-size:12px">这次会下载：${missing}</p>
             <div class="modal-actions">
-              <button class="btn" id="dlCancel">取消</button>
-              <button class="btn" id="dlPartial">先看已有的</button>
+              <button class="btn" id="dlCancel">先不看了</button>
+              <button class="btn" id="dlPartial">只看已有部分</button>
               <button class="btn primary" id="dlOk">下载并打开</button>
             </div>
           </div>`;
@@ -472,51 +483,100 @@
       }
     }
 
+    // 页面打开即触发该股全量刷新（静态数据受后端 1h 节流）；同一 code 已在刷新中则跳过
+    const _autoRefreshJobs = new Set();
+    async function startAutoRefreshOnOpen(code) {
+      if (_autoRefreshJobs.has(code)) return null;
+      _autoRefreshJobs.add(code);
+      try {
+        const job = await startBackgroundJob(
+          '/stocks/' + code + '/refresh/full', { auto: true }, { silent: true },
+        );
+        return job.job_id;
+      } catch (e) {
+        _autoRefreshJobs.delete(code);
+        return null;
+      }
+    }
+
     async function openStock() {
-      if (!currentCode) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
+      const code = currentCode;
+      if (!code) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
       clearStockView();
       if (isIndexMode) return openIndex();
-      // 直接调 api 以便捕获 409（loadPage 内部会吞掉错误，不适合这里）
-      // window=1：分时资金流返回 1 分钟基础，前端切换刻度本地重采样
+      // 先读缓存判定是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定），指数不走个股自动刷新
+      let isIndexDetected = false;
+      let d;
       try {
-        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
-        render(d);   // render → renderFlow → draw 会按当前 window 加载落库资金流 AI 结果
+        d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
       } catch (e) {
-        if (e.status === 409) {
-          // 缓存缺失 → 弹窗询问下载
+        // 无缓存：先触发自动全量刷新，等下载后再判
+        const autoJob = await startAutoRefreshOnOpen(code);
+        if (e.status === 409 && autoJob) {
+          document.getElementById('title').textContent = '正在下载数据…';
+          try {
+            await waitForJob(autoJob);
+            _autoRefreshJobs.delete(code);
+            if (currentCode === code) {
+              d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
+            } else {
+              return;
+            }
+          } catch (e2) { _autoRefreshJobs.delete(code); /* 自动下载失败 → 走 fallback 弹窗 */ }
+        }
+        if (!d) {
+          // 缓存缺失 → 弹窗询问下载（fallback）
           let status = (e.body && e.body.code === 'CACHE_MISS') ? e.body : null;
-          try { status = status || await api('/stocks/' + currentCode + '/cache-status'); } catch (e2) { /* 兜底 */ }
+          try { status = status || await api('/stocks/' + code + '/cache-status'); } catch (e2) { /* 兜底 */ }
           if (status) {
             const choice = await showDownloadDialog(status);
             if (choice === 'download') {
               document.getElementById('title').textContent = '下载中…';
               try {
                 const job = await startBackgroundJob(
-                  '/stocks/' + currentCode + '/refresh/full',
+                  '/stocks/' + code + '/refresh/full',
                   { items: ['bars', 'financials', 'valuation', 'flow'] },
                   { toast: '正在下载数据，进度见顶部' },
                 );
                 await waitForJob(job.job_id);
-                location.reload();
-              } catch (e2) {
-                document.getElementById('title').textContent = `下载失败：${e2.message}`;
-                toast('下载失败：' + e2.message, 4000);
+                if (currentCode === code) location.reload();
+              } catch (e3) {
+                document.getElementById('title').textContent = `下载失败：${e3.message}`;
+                toast('下载失败：' + e3.message, 4000);
               }
             } else if (choice === 'open') {
-              // 仅打开已有数据：partial=1 展示部分数据 + 缺失标记
               try {
-                const dp = await api('/stocks/' + currentCode + stockDetailQS({ partial: true }), { blocking: true });
+                const dp = await api('/stocks/' + code + stockDetailQS({ partial: true }), { blocking: true });
                 render(dp);
-              } catch (e2) {
-                document.getElementById('title').textContent = `查询失败：${e2.message}`;
+              } catch (e3) {
+                document.getElementById('title').textContent = `查询失败：${e3.message}`;
               }
             }
-            // choice === 'cancel'：不发起下载，视图已清空，保留搜索选择
             return;
           }
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
+          clearStockView();
+          return;
         }
-        document.getElementById('title').textContent = `查询失败：${e.message}`;
-        clearStockView();
+      }
+      // 有数据：先渲染；非指数才触发该股自动全量刷新（指数走 index 刷新），刷新完自动重绘
+      isIndexDetected = !!d.is_index;
+      if (isIndexDetected) {
+        // 与 openIndex 同口径：指数渲染（隐藏个股专属面板），并触发指数刷新
+        lastIsIndex = true;
+        render(d);
+        try {
+          await startBackgroundJob('/indices/' + code + '/refresh', {}, { silent: true });
+        } catch (e2) { /* 指数刷新失败不阻断查看 */ }
+        return;
+      }
+      render(d);
+      const autoJob = await startAutoRefreshOnOpen(code);
+      if (autoJob) {
+        waitForJob(autoJob).then(() => {
+          _autoRefreshJobs.delete(code);
+          if (currentCode === code) loadPage(true);
+        }).catch(() => { _autoRefreshJobs.delete(code); });
       }
     }
 
@@ -821,6 +881,10 @@
         const quantity = parseFloat(mask.querySelector('#qtQty').value);
         const fee = parseFloat(mask.querySelector('#qtFee').value) || 0;
         if (!price || !quantity) return toast('请填写价格与数量');
+        const okBtn = mask.querySelector('#qtOk');
+        okBtn.disabled = true;
+        const orig = okBtn.textContent;
+        okBtn.textContent = '提交中…';   // 首笔新股录入会同步数据，给个反馈防双击
         try {
           await api('/trades', {
             method: 'POST',
@@ -831,6 +895,8 @@
           await loadPage();
         } catch (e) {
           toast('录入失败：' + e.message, 4000);
+          okBtn.disabled = false;
+          okBtn.textContent = orig;
         }
       };
     }
@@ -903,6 +969,59 @@
         : '资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span>';
     }
 
+    // 行情卡片（现价/市值/涨跌…）；render 与 data_updated 订阅共用，只刷数字不重建图表
+    function renderQuoteCards(d) {
+      const q = d.quote;
+      if (!q) return;
+      const live = d.live || {};
+      const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
+      const dayPnlPrice = (q.price != null && q.prev_close != null) ? q.price - q.prev_close : null;
+      const isHk = d.currency === 'HKD' && d.fx_rate;
+      // 港股：价格旁显示人民币换算
+      const priceCard = isHk
+        ? ['现价', fmtNum(q.price) + ' 港币', (q.pct_chg ?? 0) >= 0 ? 'up' : 'down',
+           '≈ ¥' + fmtNum(q.price * d.fx_rate)]
+        : ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'];
+      const mvCard = isHk && live.total_mv != null
+        ? ['实时市值', mvYi + ' 港币', '', '≈ ¥' + fmtNum(live.total_mv * d.fx_rate / 1e8) + ' 亿']
+        : ['实时市值', mvYi];
+      const cards = [priceCard, ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
+        ['今开', fmtNum(q.open)],
+        ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
+        ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
+        mvCard];
+      document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`).join('');
+      // 同步「数据截至」提示
+      const staleTip = document.getElementById('staleTip');
+      if (staleTip) {
+        staleTip.style.display = q.stale ? 'block' : 'none';
+        staleTip.textContent = q.stale ? '⚠ 数据为最近交易日缓存（今日未开盘/非交易日，打开页面时已自动更新）' : `数据截至 ${q.ts}`;
+      }
+    }
+
+    // WebSocket data_updated：当前股在更新列表内 → 静默拉最新并只刷行情卡（图表不重建）
+    async function updateQuoteOnData(code) {
+      if (!code) return;
+      try {
+        const d = await api('/stocks/' + code + stockDetailQS(), { silent: true });
+        if (currentCode !== code) return;   // 已切股，丢弃过期响应
+        lastQuote = d.quote || lastQuote;
+        lastName = d.name || lastName;
+        lastFx = d.fx_rate != null ? d.fx_rate : lastFx;
+        lastLive = d.live || lastLive;
+        renderQuoteCards(d);
+      } catch (e) { /* 静默：读不到就算了 */ }
+    }
+
+    window.addEventListener('app-data-updated', (e) => {
+      const detail = (e && e.detail) || {};
+      const codes = detail.codes || [];
+      if (currentCode && (!codes.length || codes.indexOf(currentCode) >= 0)) {
+        updateQuoteOnData(currentCode);
+      }
+    });
+
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
       setAsOfHint(document.getElementById('asOfPicker'), d);
@@ -953,7 +1072,7 @@
         return;
       }
       staleTip.style.display = q.stale ? 'block' : 'none';
-      staleTip.textContent = q.stale ? '⚠ 缓存无当日数据，展示最近交易日缓存（点击「⚡ 刷新此股」拉取最新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
+      staleTip.textContent = q.stale ? '⚠ 数据为最近交易日缓存（今日未开盘/非交易日，打开页面时已自动更新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
 
       const live = d.live || {};
       lastLive = live;
@@ -982,26 +1101,7 @@
           : '';
       }
       syncMetaPanel();
-      const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
-      const pe = live.pe != null ? live.pe : d.valuation && d.valuation.pe_ttm;
-      const pb = live.pb != null ? live.pb : d.valuation && d.valuation.pb;
-      const dayPnlPrice = (q.price != null && q.prev_close != null) ? q.price - q.prev_close : null;
-      const isHk = d.currency === 'HKD' && d.fx_rate;
-      // 港股：价格旁显示人民币换算
-      const priceCard = isHk
-        ? ['现价', fmtNum(q.price) + ' 港币', (q.pct_chg ?? 0) >= 0 ? 'up' : 'down',
-           '≈ ¥' + fmtNum(q.price * d.fx_rate)]
-        : ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'];
-      const mvCard = isHk && live.total_mv != null
-        ? ['实时市值', mvYi + ' 港币', '', '≈ ¥' + fmtNum(live.total_mv * d.fx_rate / 1e8) + ' 亿']
-        : ['实时市值', mvYi];
-      const cards = [priceCard, ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
-        ['今开', fmtNum(q.open)],
-        ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
-        ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
-        mvCard];
-      document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
-        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`).join('');
+      renderQuoteCards(d);
 
       if (idxMode) {
         renderFlow(d);   // 指数资金面：量价图（五档/财务面板已隐藏）
@@ -1190,7 +1290,7 @@
         const daily = fd.daily || [];
         if (!intraday.length && !daily.length) {
           intraEmpty.style.display = 'block';
-          intraEmpty.textContent = '暂无分时量价（请先「⚡ 刷新此股」拉取，或今日非交易日）。';
+          intraEmpty.textContent = '暂无分时量价（今日可能未开盘/非交易日，打开页面时已自动更新）。';
           tabsEl.innerHTML = '';
           clearChart(intraEl);
           return;
@@ -1234,7 +1334,7 @@
           ? ''
           : (asOfDate || d.as_of_adjusted
             ? asOfEmptyHint(d, 'flow')
-            : '当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。');
+            : '当日资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。');
       }
       // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
       const bandsEl = document.getElementById('flowBands');

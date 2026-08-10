@@ -45,6 +45,15 @@ def _cny_rate(currency: str | None) -> float | None:
     return get_fx_rate_cny(currency, date.today().isoformat())
 
 
+# 首页（lite 模式）每股只需这些字段：省略 passthrough/fwd/ps/静态等组合页才用的字段，
+# 显著减小 /api/portfolio payload 与序列化成本
+_STOCK_LITE_FIELDS = (
+    "code", "name", "tag", "is_etf", "price", "quantity", "avg_cost",
+    "value", "pnl", "pnl_pct", "day_pnl", "pe", "pb",
+    "pe_pct", "pb_pct", "dv", "roe", "total_dividend", "weight",
+)
+
+
 # ---------- 个股快照 ----------
 
 def _passthrough(code: str, quantity: float, fin=None) -> dict | None:
@@ -399,12 +408,14 @@ def _tag_section(tag: str, stocks, total_value: float) -> dict:
     }
 
 
-def compute_portfolio(tags: list[str] | None = None, as_of: str | None = None) -> dict:
+def compute_portfolio(tags: list[str] | None = None, as_of: str | None = None,
+                      lite: bool = False) -> dict:
     """整体 + 逐股组合分析（人民币口径 + 穿透式基本面）。
 
     tags：标签子集过滤（None=全选/全持仓；[]=空子集）。选中的子集决定全部汇总口径。
     as_of：可选历史回看日。仅覆盖估值倍数/分位/股息率（该日收盘价×当前股数）；
     市值、今日盈亏、持仓权重仍为实时口径，不重放账本。
+    lite：首页用——只返回 汇总+持仓表+缺失（省略 series/tags/weights/tag_cards 与每股穿透字段）。
     """
     all_holdings = [h for h in get_holdings(active_only=True) if h["quantity"] > 0]
     holdings = all_holdings
@@ -664,59 +675,79 @@ def compute_portfolio(tags: list[str] | None = None, as_of: str | None = None) -
         for t, d in sorted(card_map.items(), key=lambda kv: -kv[1]["value"])
     ]
 
-    return {
-        "portfolio": {
-            "total_value": round(total_value, 2),
-            "total_cost": round(total_cost, 2),
-            "pnl": round(total_value - total_cost, 2),
-            "pnl_pct": round((total_value / total_cost - 1) * 100, 2) if total_cost else None,
-            "day_pnl": day_pnl,
-            "day_pnl_pct": day_pnl_pct,
-            "total_dividend": round(total_dividend, 2),
-            "pe": pe,
-            "pb": pb,
+    # 首页(lite)不用 pe_static/pb_static/ps_*：跳过序列读取（94 次 get_valuation_series，性能热点）
+    if lite:
+        combo_series = {k: None for k in ("pe_static", "pb_static", "ps_static", "ps_ttm", "ps_fwd")}
+    else:
+        combo_series = {
             "pe_static": _combo_value(fund_set, "pe_static"),
             "pb_static": _combo_value(fund_set, "pb_static"),
-            "fwd_pe": fwd_pe,
-            "fwd_pb": fwd_pb,
-            "fwd_pb_coverage": round(fwd_value / total_value, 4) if total_value else 0.0,
-            "pe_pct": pe_pct,
-            "pb_pct": pb_pct,
-            "dv": dv,
-            "dv_static": dv_static,
-            "fwd_dv_ratio": fwd_dv_ratio,
-            "roe": roe,
-            "revenue_yoy": revenue_yoy,
-            "profit_yoy": profit_yoy,
-            "roe_ttm": roe,
-            "revenue_yoy_ttm": revenue_yoy,
-            "profit_yoy_ttm": profit_yoy,
-            "roe_static": roe_static,
-            "revenue_yoy_static": revenue_yoy_static,
-            "profit_yoy_static": profit_yoy_static,
-            "fwd_roe": fwd_roe,
-            "fwd_revenue_yoy": fwd_revenue_yoy,
-            "fwd_profit_yoy": fwd_profit_yoy,
             "ps_static": _combo_value(fund_set, "ps_static"),
             "ps_ttm": _combo_value(fund_set, "ps_ttm"),
             "ps_fwd": _combo_value(fund_set, "ps_fwd"),
-            "coverage_weight": coverage_map,
-            "missing_fx": missing_fx,
-            "volatility": vol["annual"],
-            "volatility_sample_days": vol["sample_days"],
-            "stocks_count": len(stocks),
-            "etf_count": sum(1 for s in valid if s["is_etf"]),
-            "as_of": as_of_resolved,
-            "as_of_adjusted": as_of_adjusted,
-            "as_of_requested": as_of,
-            "hist_view": hist_view,
-        },
+        }
+    pf = {
+        "total_value": round(total_value, 2),
+        "total_cost": round(total_cost, 2),
+        "pnl": round(total_value - total_cost, 2),
+        "pnl_pct": round((total_value / total_cost - 1) * 100, 2) if total_cost else None,
+        "day_pnl": day_pnl,
+        "day_pnl_pct": day_pnl_pct,
+        "total_dividend": round(total_dividend, 2),
+        "pe": pe,
+        "pb": pb,
+        "pe_static": combo_series["pe_static"],
+        "pb_static": combo_series["pb_static"],
+        "fwd_pe": fwd_pe,
+        "fwd_pb": fwd_pb,
+        "fwd_pb_coverage": round(fwd_value / total_value, 4) if total_value else 0.0,
+        "pe_pct": pe_pct,
+        "pb_pct": pb_pct,
+        "dv": dv,
+        "dv_static": dv_static,
+        "fwd_dv_ratio": fwd_dv_ratio,
+        "roe": roe,
+        "revenue_yoy": revenue_yoy,
+        "profit_yoy": profit_yoy,
+        "roe_ttm": roe,
+        "revenue_yoy_ttm": revenue_yoy,
+        "profit_yoy_ttm": profit_yoy,
+        "roe_static": roe_static,
+        "revenue_yoy_static": revenue_yoy_static,
+        "profit_yoy_static": profit_yoy_static,
+        "fwd_roe": fwd_roe,
+        "fwd_revenue_yoy": fwd_revenue_yoy,
+        "fwd_profit_yoy": fwd_profit_yoy,
+        "ps_static": combo_series["ps_static"],
+        "ps_ttm": combo_series["ps_ttm"],
+        "ps_fwd": combo_series["ps_fwd"],
+        "coverage_weight": coverage_map,
+        "missing_fx": missing_fx,
+        "volatility": vol["annual"],
+        "volatility_sample_days": vol["sample_days"],
+        "stocks_count": len(stocks),
+        "etf_count": sum(1 for s in valid if s["is_etf"]),
+        "as_of": as_of_resolved,
+        "as_of_adjusted": as_of_adjusted,
+        "as_of_requested": as_of,
+        "hist_view": hist_view,
+    }
+    stocks_sorted = sorted(valid, key=lambda x: -(x["value_cny"] or x["value_native"] or 0))
+    if lite:
+        # 首页：只回 汇总+持仓表(精简字段)+缺失，省略 series/tags/weights/穿透字段
+        return {
+            "portfolio": pf,
+            "stocks": [{k: s[k] for k in _STOCK_LITE_FIELDS} for s in stocks_sorted],
+            "missing": missing,
+        }
+    return {
+        "portfolio": pf,
         "weights": [
             {"code": s["code"], "name": s["name"], "tag": s["tag"], "is_etf": s["is_etf"],
              "currency": s["currency"], "weight": s["weight"], "value": s["value_cny"] or s["value_native"]}
             for s in sorted(cny, key=lambda x: -x["weight"])
         ],
-        "stocks": sorted(valid, key=lambda x: -(x["value_cny"] or x["value_native"] or 0)),
+        "stocks": stocks_sorted,
         "tag_weights": tag_weights,
         "tags": tags,
         "all_tags": all_tags,

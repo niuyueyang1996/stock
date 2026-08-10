@@ -122,6 +122,7 @@ def _resolve_stock_name(code: str) -> str | None:
 
 class StockRefreshBody(BaseModel):
     items: list[str] | None = None
+    auto: bool = False   # 个股页打开自动触发：静态数据齐全且 1h 内 → 只刷动态
 
 
 class ExpectedGrowthBody(BaseModel):
@@ -582,9 +583,14 @@ def stock_refresh(code: str, body: StockRefreshBody | None = None):
 
 @router.post("/stocks/{code}/refresh/full")
 def stock_refresh_full(code: str, body: StockRefreshBody | None = None):
-    """单股全量刷新：后台异步，进度见 GET /status/jobs。"""
+    """单股全量刷新：后台异步，进度见 GET /status/jobs。
+
+    auto=true（页面打开自动触发）→ 后端按 1h 节流：静态数据齐全且 ttl 内只刷动态；
+    手动按钮不传 auto → 总是全量。批量刷新不受此限制。
+    """
     from app.services.job_runners import start_stock_refresh
 
     items = body.items if body else None
-    job_id = start_stock_refresh(code, items, full=True)
+    auto = bool(body.auto) if body else False
+    job_id = start_stock_refresh(code, items, full=True, auto=auto)
     return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code, "kind": "refresh.stock.full"}}
