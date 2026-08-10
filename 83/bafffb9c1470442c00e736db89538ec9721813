@@ -1,0 +1,42 @@
+tests/test_ai_scoring.py
+  s_a414f72547c439::t_6e7ceb9a6f0675 4
+  s_a414f72547c439::t_30e641902d6ff4 370,376-378,380-382,384
+tests/test_ai_news_tech.py
+  s_a414f72547c439::t_c4e31c9e285b04 69-70,72-73
+docs/fundflow-day-week-month.md
+  s_a414f72547c439::t_e1ed7318b0130c 1,3,5,37-76,78
+tests/conftest.py
+  s_cab5f411e6b56d::t_4cf5e1bf307394 9-11,13-21,23-26
+  s_cab5f411e6b56d::t_7fcbf480b471ab 12,22
+tests/test_kline.py
+  s_a414f72547c439::t_561e1521b4214b 178-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "83bafffb9c1470442c00e736db89538ec9721813",
+  "prompts": {},
+  "logical_commit_id": "83bafffb9c1470442c00e736db89538ec9721813",
+  "sessions": {
+    "s_a414f72547c439": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "86e372c7-b8a0-479f-bc64-ec254017a7fa",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 62,
+      "total_deletions": 38
+    },
+    "s_cab5f411e6b56d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "24260bdc-9687-40bf-b954-8b48b46a14c3",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 20,
+      "total_deletions": 2
+    }
+  }
+}
