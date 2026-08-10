@@ -38,7 +38,7 @@ function signed(n) {
   return (n > 0 ? '+' : '') + Number(n).toFixed(2);
 }
 
-function toast(msg, ms = 2500) {
+function toast(msg, ms = 2500, type = '') {
   let el = document.getElementById('toast');
   if (!el) {
     el = document.createElement('div');
@@ -46,6 +46,8 @@ function toast(msg, ms = 2500) {
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  el.classList.remove('ok', 'err');
+  if (type) el.classList.add(type);
   el.classList.add('show');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove('show'), ms);
@@ -291,7 +293,8 @@ function setupJobBar(nav) {
       <div class="progress-fill" id="prewarmFill"></div>
     </div>
     <div id="jobQueueList" class="job-queue-list" style="display:none"></div>`;
-  nav.insertAdjacentElement('afterend', bar);
+  // 进度条放进 nav 内（flex-basis:100% 独占一行），nav 已 sticky top:0 → 滚动时进度条一直可见
+  nav.appendChild(bar);
   const txt = bar.querySelector('#prewarmText');
   const pctEl = bar.querySelector('#prewarmPct');
   const fill = bar.querySelector('#prewarmFill');
@@ -457,18 +460,20 @@ function setupJobBar(nav) {
         const last = (p.recent || [])[0];
         const label = (last && last.label) || p.label || '任务';
         const ok = last ? (last.ok !== false && last.status !== 'cancelled') : (p.ok !== false);
+        const detail = (last && last.done_count != null && last.total)
+          ? `（${last.done_count}/${last.total}）` : '';
         bar.classList.toggle('done', ok);
         bar.classList.toggle('error', !ok);
         bar.style.display = 'block';
-        txt.textContent = ok ? (label + '完成') : (label + (last && last.status === 'cancelled' ? '已取消' : '失败'));
+        txt.textContent = ok ? (label + '完成' + detail) : (label + (last && last.status === 'cancelled' ? '已取消' : '失败'));
         pctEl.textContent = ok ? '100%' : '';
         fill.style.width = ok ? '100%' : '0%';
-        if (last && last.status === 'cancelled') toast(label + '已取消');
-        else if (ok) toast(label + '完成');
-        else toast((last && last.error) || label + '失败', 4000);
+        if (last && last.status === 'cancelled') toast('已取消：' + label, 4000, 'err');
+        else if (ok) toast('✓ ' + label + '完成' + detail, 5000, 'ok');
+        else toast('✗ ' + ((last && last.error) || label + '失败'), 6000, 'err');
         const st = document.getElementById('statusText');
         if (st) { st.style.display = ''; st.textContent = ''; }
-        _jobBarHideTimer = setTimeout(() => { bar.style.display = 'none'; }, 4000);
+        _jobBarHideTimer = setTimeout(() => { bar.style.display = 'none'; }, 6000);
         setTimeout(tick, 2000);
       } else {
         setTimeout(tick, 2500);

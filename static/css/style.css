@@ -283,6 +283,7 @@ a:hover { color: var(--primary-deep); }
 
 /* ============ 启动预热提示条（全页通用，导航下方） ============ */
 .prewarm-bar {
+  flex-basis: 100%;          /* nav 内独占一行，随 sticky nav 一直置顶可见 */
   padding: 8px 16px 10px;
   text-align: center;
   font-size: 13px;
@@ -737,6 +738,8 @@ input:focus, select:focus {
   box-shadow: var(--shadow-lg);
 }
 #toast.show { opacity: 1; }
+#toast.ok { background: #2e7d32; }
+#toast.err { background: #b71c1c; }
 
 /* ============ 弹窗 ============ */
 .modal-mask {

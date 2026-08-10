@@ -281,6 +281,8 @@ def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
         "ok": not cancelled,
         "error": "已取消" if cancelled else None,
         "batch_id": b["batch_id"],
+        "done_count": b.get("done_count") or 0,   # 前端完成提示可展示「处理 N 项」
+        "total": b.get("total") or 0,
     })
 
 
