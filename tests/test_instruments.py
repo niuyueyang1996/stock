@@ -13,15 +13,19 @@ from app.instruments import get_instrument, type_of
 from app.instruments.ashares import AshareInstrument
 from app.instruments.base import Instrument
 from app.instruments.detail import build_detail
-from app.market.calendar import last_trade_date
+from app.market.calendar import resolve_trade_day
 from app.models.db import get_conn
 from app.services import ai as ai_svc
 from tests.mock_instrument import MockInstrument
 
 
 def _trade_day():
-    """有效交易日（周末退到周五），与 combo_fundflow/build_detail 默认口径一致。"""
-    return last_trade_date(date.today()).isoformat()
+    """有效交易日（as-of 锚点，未开盘/周末退到最近交易日）。
+
+    必须与被测代码 resolve_trade_day(None) 同口径：GitHub Action 在 A 股开盘前跑，
+    若用 last_trade_date(date.today()) 写「今天」，被测代码读「上一交易日」会读不到 → 批量/指数资金流测试全红。
+    """
+    return resolve_trade_day(None)[0]
 
 
 def _activate_mock_model():
