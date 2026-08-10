@@ -1,9 +1,7 @@
 """AI 评分测试：标签偏好 draft/confirmed、组合 AI 打分（画像哈希/stale/评级直传）、
 每日 AI 打分（偏好去重/trade_id 对齐/自动触发），全程 mock chat_json、离线。"""
-import threading
-from datetime import date, datetime
-
 import pytest
+from datetime import date, datetime
 
 from app.models.db import get_conn
 from app.services import ai as ai_mod
@@ -369,20 +367,21 @@ def test_score_daily_historical_allowed_intraday(monkeypatch):
 
 
 def test_catchup_pending_daily_spawns_after_close(monkeypatch):
-    # 已收盘 + 当日有交易 + 无报告 → 起后台线程补打一次
+    # 已收盘 + 当日有交易 + 无报告 → 入队 AI 车道补打一次
     monkeypatch.setattr("app.market.calendar.is_market_closed", lambda now: True)
     _seed_trade("600000", qty=100)
     _activate_mock_model()
     calls = []
 
-    class _SyncThread:
-        def __init__(self, target, args=(), daemon=False):
-            self._target, self._args = target, args
+    # 用同步 start_simple 替身（自动打分已改入队 LANE_AI，不再裸起 threading.Thread），
+    # 保证确定性地执行入队任务而不污染全局 worker 线程。
+    from app.services import job_runners
 
-        def start(self):
-            self._target(*self._args)
+    def _sync_start(kind, label, fn, step=None):
+        fn()
+        return "mock-job"
 
-    monkeypatch.setattr(threading, "Thread", _SyncThread)
+    monkeypatch.setattr(job_runners, "start_simple", _sync_start)
     monkeypatch.setattr(svc, "score_daily", lambda d: calls.append(d) or {"score_date": d, "report": {}})
     svc.catchup_pending_daily()
     assert calls == [date.today().isoformat()]

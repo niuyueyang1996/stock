@@ -175,9 +175,11 @@ def test_build_technical_bars_multi_empty():
 
 def test_build_technical_bars_multi_limits():
     """日/周/月各自截尾；周月读 period 缓存。"""
-    anchor = _asof_today()
-    d0 = (date.fromisoformat(anchor) - timedelta(days=2)).isoformat()
-    d1 = (date.fromisoformat(anchor) - timedelta(days=1)).isoformat()
+    # 用最近 3 个真实交易日（避免 anchor-1/-2 落到周末被非交易日过滤剔掉）
+    from conftest import last_n_trade_days
+
+    ds = last_n_trade_days(3)
+    d0, d1, anchor = ds[0], ds[1], ds[2]
     for d, px in ((d0, 9.0), (d1, 9.5), (anchor, 10.0)):
         _seed_daily("600000", d, px)
     _seed_period("weekly_price_cache", "600000", d1, 9.5, None)

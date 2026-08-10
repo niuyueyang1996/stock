@@ -6,6 +6,24 @@ import pytest
 import app.models.db as db
 
 
+def last_n_trade_days(n: int, end: str | None = None) -> list[str]:
+    """最近 n 个真实 A 股交易日（升序，含 end 当天）。测试灌数据用——避免用
+    date.today()±1/2 在周末/月初落到非交易日（周末必红 / 周月度假K被过滤）。"""
+    from datetime import date, timedelta
+
+    from app.market.calendar import is_trade_day, last_trade_date
+
+    end = end or last_trade_date(date.today()).isoformat()
+    days: list[str] = []
+    d = date.fromisoformat(end)
+    while len(days) < n:
+        if is_trade_day(d):
+            days.append(d.isoformat())
+        d -= timedelta(days=1)
+    days.reverse()
+    return days
+
+
 @pytest.fixture(autouse=True)
 def temp_db(monkeypatch, tmp_path):
     """将 db 模块指向临时数据库并初始化建表。"""
