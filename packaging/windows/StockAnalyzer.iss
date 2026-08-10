@@ -50,7 +50,8 @@ Name: "{autoprograms}\股票持仓分析"; Filename: "{app}\{#MyAppExeName}"; Wo
 Name: "{autodesktop}\股票持仓分析"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"; Flags: nowait postinstall skipifsilent
+; 去掉 skipifsilent：静默安装（自动更新）完成后也自动启动新版本，更新即生效无需手动打开
+Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"; Flags: nowait postinstall
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -180,6 +180,18 @@ def show_error(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def ask_confirm(message: str) -> bool:
+    """Windows 是/否确认对话框（用于「是否更新」）。非 Windows 直接放行（便于测试）。"""
+    if os.name != "nt":
+        return True
+    import ctypes
+
+    id_yes = 6
+    return ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+        None, message, APP_NAME, 0x24  # 0x24 = MB_YESNO | MB_ICONQUESTION
+    ) == id_yes
+
+
 def _kernel32():
     import ctypes
 
@@ -434,6 +446,75 @@ def run_primary(mutex_handle: int) -> int:
     restart_event = create_control_event(RESTART_EVENT_NAME)
     shutdown_event = create_control_event(SHUTDOWN_EVENT_NAME)
     icon = None
+    update_state = {"info": None}   # check_for_update 结果：{version, download_url, sha256_url?} | None
+
+    def check_update_silent() -> None:
+        """启动后静默检查：只更新托盘菜单状态，不弹通知打扰。失败静默。"""
+        try:
+            from app import updater
+
+            update_state["info"] = updater.check_for_update()
+            if icon is not None:
+                icon.update_menu()
+        except Exception:  # noqa: BLE001 更新检查失败不影响启动
+            logger.exception("启动更新检查失败")
+
+    def check_update_now() -> None:
+        """托盘「检查更新」：检查 + 刷新菜单 + 气泡通知结果。"""
+        try:
+            from app import updater
+
+            info = updater.check_for_update()
+            update_state["info"] = info
+            if icon is not None:
+                icon.update_menu()
+            if info:
+                icon.notify(
+                    f"发现新版本 v{info['version']}，点击托盘菜单「⬆ 更新」自动安装。",
+                    "发现新版本",
+                )
+            else:
+                icon.notify("当前已是最新版本。", "检查更新")
+        except Exception:  # noqa: BLE001
+            logger.exception("手动检查更新失败")
+            show_error("检查更新失败，请查看日志。")
+
+    def perform_update(info: dict) -> None:
+        """下载 → 校验 → 退出当前实例 → 启动静默安装（新版本由 Inno [Run] 自动启动）。"""
+        from app import updater
+
+        dest = None
+        try:
+            icon.notify(f"正在下载 v{info['version']} 安装包…", "更新")
+            dest = updater.download_installer(info["download_url"])
+            if info.get("sha256_url"):
+                expected = updater.fetch_sha256(info["sha256_url"])
+                if expected and not updater.verify_sha256(dest, expected):
+                    raise RuntimeError("安装包校验失败，已取消更新")
+            icon.notify("下载完成，正在退出并安装…", "更新")
+            if not updater.install_and_restart(dest):
+                raise RuntimeError("无法启动安装程序")
+            controller.stop()
+            icon.stop()   # 退出托盘 → 主进程结束 → setup 后台静默安装并自动启动新版本
+        except Exception as e:  # noqa: BLE001 更新失败不影响当前运行
+            logger.exception("自动更新失败")
+            if dest is not None:
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+            show_error(f"自动更新失败：{e}")
+
+    def update_clicked(_icon, _item) -> None:
+        info = update_state.get("info")
+        if not info:
+            return
+        if not ask_confirm(
+            f"发现新版本 v{info['version']}，是否下载并更新？\n\n"
+            "更新会下载安装包、自动安装并重新启动应用。"
+        ):
+            return
+        background(lambda: perform_update(info))
 
     def background(
         action: Callable[[], object], failure: str = "操作失败，请查看日志。"
@@ -477,8 +558,14 @@ def run_primary(mutex_handle: int) -> int:
             default=True,
         ),
         pystray.MenuItem("重启服务", lambda _icon, _item: background(restart_server)),
-        pystray.MenuItem("打开日志目录", lambda _icon, _item: open_logs_folder()),
+        pystray.MenuItem("检查更新", lambda _icon, _item: background(check_update_now)),
+        pystray.MenuItem(
+            "⬆ 发现新版本 — 点击更新",
+            update_clicked,
+            visible=lambda _item: update_state.get("info") is not None,
+        ),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem("打开日志目录", lambda _icon, _item: open_logs_folder()),
         pystray.MenuItem("退出", lambda _icon, _item: background(exit_app)),
     )
     icon = pystray.Icon(APP_ID, _make_tray_image(), APP_NAME, menu)
@@ -501,6 +588,7 @@ def run_primary(mutex_handle: int) -> int:
     def setup_tray(tray) -> None:  # noqa: ANN001 pystray callback
         tray.visible = True
         background(start_and_open)
+        background(check_update_silent)   # 启动后静默检查新版本
 
     try:
         icon.run(setup=setup_tray)
