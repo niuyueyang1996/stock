@@ -343,20 +343,37 @@ def search_stocks(q: str, limit: int = 10):
     """按代码前缀或名称模糊搜索 A 股/ETF/港股。
 
     只读本地缓存（列表由启动预热维护），绝不联网、不阻塞；缓存缺失时返回空。
-    ``lists_ready=false`` 表示启动预热尚未写入列表，前端可提示用户重启。
+    ``lists_ready=false`` 表示启动预热尚未写入列表缓存；
+    ``hint`` 供前端在无结果时区分：ok=正常 / loading=预热中 / error=预热已结束但列表仍缺失（需重启）。
     """
     q = q.strip()
     ready = market_lists_ready()
     if not q:
-        return {"ok": True, "data": [], "lists_ready": ready}
+        return {"ok": True, "data": [], "lists_ready": ready, "hint": _search_hint(ready, None)}
     hits = [r for r in _read_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     etf_hits = [r for r in _read_etf_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
     hk_hits = [r for r in _read_hk_stock_list_cache() if r["code"].startswith(q) or q in r["name"]]
+    data = (hits + etf_hits + hk_hits)[:limit]
     return {
         "ok": True,
-        "data": (hits + etf_hits + hk_hits)[:limit],
+        "data": data,
         "lists_ready": ready,
+        "hint": _search_hint(ready, data),
     }
+
+
+def _search_hint(ready: bool, data: list | None) -> str:
+    """无结果时的提示依据：ok=正常；loading=市场列表预热中；error=预热已结束但列表仍缺失（需重启）。"""
+    if data:
+        return "ok"
+    if ready:
+        return "ok"  # 列表就绪但确实无匹配 → 正常不提示
+    from app import jobs
+
+    snap = jobs.snapshot()
+    if snap.get("running") and snap.get("kind") == "system.prewarm":
+        return "loading"
+    return "error"
 
 
 @router.get("/stocks/{code}/expected-growth")

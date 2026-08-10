@@ -652,11 +652,15 @@ function stockSearchInput() {
         const rows = json.data || [];
         sug.innerHTML = '';
         if (!rows.length) {
-          if (json.lists_ready === false) {
+          // hint: ok=正常无匹配不提示；loading=预热中；error=预热结束但列表仍缺失（需重启）
+          const h = json.hint || (json.lists_ready === false ? 'error' : 'ok');
+          if (h !== 'ok') {
             const tip = document.createElement('div');
             tip.className = 'stock-sug-item';
             tip.style.cssText = 'color:#888;cursor:default';
-            tip.textContent = '市场列表未就绪：请退出后重新打开应用完成预热';
+            tip.textContent = h === 'loading'
+              ? '市场列表正在加载，请稍后重试…'
+              : '市场列表加载异常，请重新打开应用';
             sug.appendChild(tip);
             sug.style.display = 'block';
           } else {
@@ -1197,43 +1201,14 @@ const FUNDFLOW_CORR = {
   divergence: ['背离', '#f08c00'], neutral: ['中性', '#8792a4'],
 };
 
-// 渲染资金流 AI 分析结果面板（简明快报，无 HTML）
-function renderFundflowAiPanel(el, d) {
-  const a = d.analysis || {};
-  const corrMap = FUNDFLOW_CORR;
-  const corr = corrMap[a.correlation] || corrMap.neutral;
-  const winLabel = /d$/.test(d.window || '')
-    ? parseInt(d.window, 10) + ' 天窗口' : parseInt(d.window, 10) + ' 分钟窗口';
-  const divs = (a.divergence || []).filter((x) => x && typeof x === 'object')
-    .map((x) => `<li><b>${esc(x.ts || '')}</b>：${esc(x.detail || '')}</li>`).join('');
-  const alerts = (a.alerts || []).map((x) => `<li>${esc(x)}</li>`).join('');
-  const rows = [
-    ['💪 主力行为', a.main_force],
-    ['🕐 全天节奏', a.rhythm],
-  ].filter(([, v]) => v).map(([k, v]) =>
-    `<div style="margin:7px 0"><b style="font-size:12.5px">${k}</b><div style="font-size:13px;margin-top:2px">${esc(v)}</div></div>`).join('');
-  el.innerHTML = `
-    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <span class="badge" style="color:#fff;background:${corr[1]}">资金×股价：${corr[0]}</span>
-        <span class="muted" style="font-size:12px">${winLabel} · ${d.points_count} 个点 · ${esc(d.date || '')}</span>
-        ${a.html ? aiHtmlButton() : ''}
-      </div>
-      <div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(a.summary || '')}</div>
-      ${rows}
-      ${divs ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:#f08c00">⚠️ 背离</b><ul style="margin:4px 0 0 18px;font-size:13px">${divs}</ul></div>` : ''}
-      ${alerts ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:var(--red)">🔔 注意</b><ul style="margin:4px 0 0 18px;font-size:13px">${alerts}</ul></div>` : ''}
-      ${a.conclusion ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:var(--radius-xs);background:var(--primary-weak);font-size:13px"><b>结论</b>：${esc(a.conclusion)}</div>` : ''}
-    </div>`;
-  wireAiHtmlButton(el, a);   // 📄 按钮（深入模式 html 非空时绑定）
-}
+// 资金流窗口名 → 中文标签（分钟/天窗口；'day'/'week'/'month' 为后端归一标准名，不能用 parseInt 解析）
+const FLOW_WIN_LABEL = { '1m': '1 分钟', '5m': '5 分钟', '15m': '15 分钟', '30m': '30 分钟', 'day': '日', 'week': '周', 'month': '月' };
 
 // 渲染个股页最近落库资金流 AI 结果（标注来源 组合批量/个股分析 + 日期 + 窗口）
 function renderFundflowPersistedPanel(el, r) {
   const a = r || {};
   const src = a.source === 'batch' ? '组合批量分析' : a.source === 'single' ? '个股分析' : '';
-  const winLabel = /d$/.test(a.window || '')
-    ? parseInt(a.window, 10) + ' 天' : parseInt(a.window, 10) + ' 分钟';
+  const winLabel = (FLOW_WIN_LABEL[a.window] || a.window) + '窗口';
   const divs = (a.divergence || []).filter((x) => x && typeof x === 'object')
     .map((x) => `<li><b>${esc(x.ts || '')}</b>：${esc(x.detail || '')}</li>`).join('');
   const alerts = (a.alerts || []).map((x) => `<li>${esc(x)}</li>`).join('');
@@ -1333,7 +1308,11 @@ async function runFundflowAi({ code, window, btn, panel }) {
       const job = await startBackgroundJob('/ai/fundflow-analysis', body, { toast: '资金流 AI 已开始' });
       await waitForJob(job.job_id);
       const d = await api('/ai/fundflow-report/' + encodeURIComponent(code) + '?window=' + encodeURIComponent(window || '15m'), { silent: true });
-      renderFundflowAiPanel(panel, d);
+      // GET /ai/fundflow-report 返回平铺落库结构（与 loadFlowPersisted 同源），直接用 renderFundflowPersistedPanel 即时渲染
+      renderFundflowPersistedPanel(panel, d);
+      // 通知页面：资金流数据刚刷新（refreshFlowBeforeAnalysis），重绘资金流图，无需手动刷新。
+      // 注意：本函数参数名 window 遮蔽了全局 window，必须用 globalThis 派发事件。
+      globalThis.dispatchEvent(new CustomEvent('app-flow-analyzed', { detail: { code, window } }));
     } catch (e) {
       panel.innerHTML = `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
     } finally {
@@ -1379,8 +1358,7 @@ async function loadCoherence(scope, scopeKey, window) {
 // 渲染组合批量分析结果面板：顶部「组合相关性」块 + 每只一行 代码 名称 [相关性徽章] 结论
 // d.coherence = {correlation,summary,points[],conclusion}；d.mode = 'indices'|'portfolio'
 function renderFundflowBatchPanel(el, d) {
-  const winLabel = /d$/.test(d.window || '')
-    ? parseInt(d.window, 10) + ' 天' : parseInt(d.window, 10) + ' 分钟';
+  const winLabel = FLOW_WIN_LABEL[d.window] || d.window;   // 后面拼「窗口」，此处不带后缀
   const title = d.mode === 'indices' ? '批量分析指数' : '批量分析持仓';
   const coh = d.coherence;
   const cohHtml = coh && coh.correlation

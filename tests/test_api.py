@@ -329,10 +329,11 @@ def test_search_reads_cache_and_never_downloads(client, monkeypatch):
 
 
 def test_search_without_cache_returns_empty(client):
-    """缓存缺失（预热尚未完成）时搜索快速返回空，不阻塞、不报错。"""
+    """缓存缺失（预热尚未完成）时搜索快速返回空，不阻塞、不报错；hint 指引前端提示。"""
     r = client.get("/api/stocks/search?q=600000")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "data": [], "lists_ready": False}
+    # 测试环境无预热任务在跑 → hint='error'（预热已结束但列表仍缺失 → 提示重新打开）
+    assert r.json() == {"ok": True, "data": [], "lists_ready": False, "hint": "error"}
 
 
 def test_preload_market_lists_warms_both(monkeypatch):

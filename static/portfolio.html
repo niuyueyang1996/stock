@@ -166,7 +166,10 @@
           toast('批量分析窗口过小，请选择 15 分钟及以上');
           return;
         }
-        runFundflowBatch({ tags: currentTags(), window: pfFlowWindow, btn: btns.flow, panel: panels.flow, onDone: loadAndRender });
+        runFundflowBatch({
+          tags: currentTags(), window: pfFlowWindow, btn: btns.flow, panel: panels.flow,
+          onDone: async () => { await loadAndRender(); renderPfFlow(); },   // 批量刷新了持仓资金流 → 重绘资金流图（当前窗口）
+        });
       };
     })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集

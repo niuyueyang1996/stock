@@ -142,7 +142,7 @@
         <div style="flex:1"></div>
         <div id="flowAiBtn"></div>
       </div>
-      <div id="flowAiPanel" style="display:none;margin:0 0 10px"></div>
+      <div id="flowAiPanel" style="margin:0 0 10px"><div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div></div>
       <div class="chart lg" id="flowPrice" style="height:200px"></div>
       <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
@@ -204,6 +204,9 @@
         runFundflowAi({ code: currentCode, window: flowWindow, btn: btnEl.querySelector('[data-fundflow-ai]'), panel });
       };
     })();
+
+    // 资金流 AI 分析完成（已刷新资金流缓存）→ 静默重拉详情重绘资金流图，无需手动刷新
+    window.addEventListener('app-flow-analyzed', () => { if (currentCode) loadPage(true); });
 
     // 消息面 / 技术面 AI 按钮（个股模式，指数隐藏消息面）
     (function () {
@@ -426,7 +429,7 @@
       document.getElementById('flowIntradayEmpty').style.display = 'block';
       document.getElementById('aiReportPanel').style.display = 'none';
       const flowAi = document.getElementById('flowAiPanel');
-      if (flowAi) { flowAi.style.display = 'none'; flowAi.innerHTML = ''; }
+      if (flowAi) { flowAi.innerHTML = '<div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div>'; }
       // 消息面/技术面 AI：切股先清空（避免残留上一只的旧报告；index 模式消息面隐藏）
       const newsBody = document.getElementById('newsAiBody');
       const techBody = document.getElementById('techAiBody');
@@ -832,7 +835,7 @@
       };
     }
 
-    async function loadPage() {
+    async function loadPage(noBlocking = false) {
       if (!currentCode) {
         document.getElementById('title').textContent = '请输入股票代码或名称';
         return;
@@ -840,7 +843,7 @@
       try {
         if (isIndexMode) return openIndex();
         // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
-        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), noBlocking ? { silent: true } : { blocking: true });
         render(d);
       } catch (e) {
         document.getElementById('title').textContent = `查询失败：${e.message}`;
@@ -1158,12 +1161,11 @@
       try {
         const rpt = await api('/ai/fundflow-report/' + currentCode + '?window=' + encodeURIComponent(flowWindow), { silent: true });
         if (seq !== flowPersistSeq) return;   // 过期响应丢弃
+        // 面板始终可见（预留窗口，与消息面/技术面一致）：无结果显示空态，不隐藏，避免 AI 分析期间的竞态把面板藏掉
         if (rpt) {
-          panel.style.display = 'block';
           renderFundflowPersistedPanel(panel, rpt);
         } else {
-          panel.style.display = 'none';
-          panel.innerHTML = '';
+          panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div>';
         }
       } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
     }

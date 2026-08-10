@@ -226,7 +226,10 @@
         }
         const codes = [...selected];
         if (!codes.length) return;
-        runFundflowBatch({ codes, window: pfFlowWindow, btn: wrap.querySelector('[data-fundflow-batch]'), panel, onDone: loadAndRender });
+        runFundflowBatch({
+          codes, window: pfFlowWindow, btn: wrap.querySelector('[data-fundflow-batch]'), panel,
+          onDone: async () => { await loadAndRender(); renderPfFlow(); },   // 批量刷新了指数资金流 → 重绘资金流图（当前窗口）
+        });
       };
     })();
 
