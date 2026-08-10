@@ -649,7 +649,8 @@ function bucketFlowDays(hist, bucket) {
     const FIELDS = ['super_large_net', 'large_net', 'medium_net', 'small_net', 'xs_net',
                     'netamount', 'main_net', 'buy_amount', 'sell_amount'];
     for (const rows of groups.values()) {
-      const acc = { trade_date: rows[0].trade_date + (rows.length > 1 ? '~' + rows[rows.length - 1].trade_date.slice(5) : '') };
+      // 周期桶标签用组末交易日（与周/月K trade_date 同口径），不再显示 A~B 范围
+      const acc = { trade_date: rows[rows.length - 1].trade_date };
       for (const k of FIELDS) acc[k] = 0;
       for (const r of rows) for (const k of FIELDS) acc[k] += r[k] || 0;
       const last = rows[rows.length - 1];
@@ -658,7 +659,8 @@ function bucketFlowDays(hist, bucket) {
     }
     return out;
   }
-  if (bucket <= 1) return hist;
+  // day=逐日原样（bucket 是字符串 'day'，不能用数字比较 `bucket <= 1`，否则 NaN 掉进数字聚合循环返回空）
+  if (bucket === 'day' || bucket <= 1) return hist;
   const FIELDS = ['super_large_net', 'large_net', 'medium_net', 'small_net', 'xs_net',
                   'netamount', 'main_net', 'buy_amount', 'sell_amount'];
   const out = [];
@@ -711,6 +713,54 @@ function fundflowStacked(el, days, windowLabel) {
     series,
   }, { notMerge: true });
   applyLegendSolo(chart, ['特大单', '大单', '中单', '小单', '特小单']);
+  return chart;
+}
+
+// 五档【累积】净流入折线（日/周/月窗口）：每档净流入逐期累加，一眼看出各档累计流入还是流出。
+// 与分时 fundflowIntraday 同构，只是输入换成 bucketFlowDays 聚合后的周期桶（trade_date 为桶标签）。
+function fundflowBandsCum(el, days, windowLabel) {
+  const chart = initChart(el);
+  if (!chart) return null;
+  const labels = days.map((d) => d.trade_date);
+  const KEYS = [['super_large_net', '特大单', CHART_COLORS.up],
+                ['large_net', '大单', CHART_COLORS.orange],
+                ['medium_net', '中单', CHART_COLORS.mid],
+                ['small_net', '小单', '#12b886'],
+                ['xs_net', '特小单', CHART_COLORS.purple]];
+  const cum = {};
+  for (const [key] of KEYS) {
+    let s = 0;
+    cum[key] = days.map((d) => (s += Math.round(d[key] || 0)));
+  }
+  const series = KEYS.map(([key, name, color], idx) => ({
+    name, type: 'line', smooth: true, symbol: 'none', data: cum[key],
+    itemStyle: { color }, lineStyle: { width: idx === 0 ? 2.5 : 1.5, color },
+    emphasis: { focus: 'series' },
+    ...(idx === 0 ? { markLine: { data: [{ yAxis: 0 }], lineStyle: { color: '#999', type: 'dashed' } } } : {}),
+  }));
+  const zr = defaultZoomRange(labels.length, 60);
+  chart.setOption({
+    title: { text: '五档累积净流入（' + windowLabel + '）· 正=累计流入 负=累计流出', left: 'center',
+             textStyle: { fontSize: 14 } },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (ps) => {
+        const i = ps[0].dataIndex;
+        return [labels[i], ...KEYS.map(([key, name]) => name + ' ' + fmtFlow(cum[key][i]))].join('<br>');
+      },
+    },
+    legend: { data: KEYS.map((k) => k[1]), top: 26, type: 'scroll',
+              icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
+    grid: { left: 75, right: 30, top: 60, bottom: 56 },
+    xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
+    dataZoom: [
+      { type: 'inside', start: zr.start, end: zr.end },
+      { type: 'slider', start: zr.start, end: zr.end, bottom: 8, height: 16 },
+    ],
+    series,
+  }, { notMerge: true });
+  applyLegendSolo(chart, KEYS.map((k) => k[1]));
   return chart;
 }
 
@@ -937,11 +987,12 @@ function bucketIndexVolume(daily, bucket) {
     for (const g of groups.values()) {
       const last = g[g.length - 1];
       const amt = g.reduce((s, r) => s + (r.amount || 0), 0);
-      out.push({ date: g[0].date + (g.length > 1 ? '~' + last.date.slice(5) : ''), amount: amt, closes: last.closes });
+      out.push({ date: last.date, amount: amt, closes: last.closes });
     }
     return out;
   }
-  if (bucket <= 1) return daily;
+  // day=逐日原样（bucket 是字符串 'day'，不能用数字比较 `bucket <= 1`，否则 NaN 掉进数字聚合循环返回空）
+  if (bucket === 'day' || bucket <= 1) return daily;
   const out = [];
   for (let i = 0; i < daily.length; i += bucket) {
     const g = daily.slice(i, i + bucket);

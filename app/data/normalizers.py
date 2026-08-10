@@ -203,6 +203,11 @@ def normalize_hk_quote(parts: list[str], code: str) -> Quote | None:
     if not price:
         return None
     ts = parts[30].replace("/", "-") if len(parts) > 30 else ""
+    # 腾讯时间戳 'YYYYMMDDHHMMSS'（14 位数字）→ 'YYYY-MM-DD HH:MM:SS'，统一 Quote.ts 格式。
+    # 此前保留腾讯原始格式，导致 _sync_realtime_quote 用 `(q.ts or "")[:10]` 取日期时格式错位
+    # （'2026081014' ≠ '2026-08-10'），指数实时成交额永远不落库、daily_price_cache.amount 恒为 0 —— 踩过。
+    if len(ts) == 14 and ts.isdigit():
+        ts = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]} {ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
     return Quote(
         code=code,
         name=parts[1] if len(parts) > 1 and parts[1] else code,

@@ -146,6 +146,7 @@
       <div class="chart lg" id="flowPrice" style="height:200px"></div>
       <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
       <div class="chart lg" id="flowIntraday" style="height:300px"></div>
+      <div class="chart lg" id="flowBandsCum" style="height:300px;display:none"></div>
       <div class="chart lg" id="flowBuySell" style="height:300px"></div>
       <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 点右上角「⚡ 刷新此股」，弹窗勾选「当日资金流」后开始刷新。</div>
     </div>
@@ -1268,6 +1269,7 @@
       const hist = d.fundflow_history || [];
       const intraEl = document.getElementById('flowIntraday');
       const bsEl = document.getElementById('flowBuySell');
+      const cumEl = document.getElementById('flowBandsCum');
       const priceEl = document.getElementById('flowPrice');
       const intraEmpty = document.getElementById('flowIntradayEmpty');
       const tabsEl = document.getElementById('flowTabs');
@@ -1277,6 +1279,7 @@
         setPanelSummary('flowTrendPanel', sumChip(FLOW_WINDOW_LABEL[w] || w));
         loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
         if (isMin(w)) {
+          cumEl.style.display = 'none';
           if (!base.length) {
             intraEmpty.style.display = 'block';
             clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
@@ -1290,12 +1293,15 @@
         } else {
           const days = bucketFlowDays(hist, flowBucket(w));
           if (!days.length) {
+            cumEl.style.display = 'none';
             intraEmpty.style.display = 'block';
             clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
             return;
           }
           intraEmpty.style.display = 'none';
           fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 股价/净值独立图
+          cumEl.style.display = 'block';
+          fundflowBandsCum(cumEl, days, FLOW_WINDOW_LABEL[w]);  // 五档累积净流入折线
           fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
           fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
         }

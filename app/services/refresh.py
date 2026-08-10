@@ -19,6 +19,7 @@ from app.instruments import get_instrument
 from app.data.cache import (
     get_daily_fundflow,
     get_daily_price,
+    get_daily_prices,
     get_financials,
     get_latest_daily_price,
     get_latest_period_price,
@@ -53,6 +54,11 @@ HISTORY_DAYS = 250
 # 新浪日级资金流回填：窗口内缓存 ≥30 天（覆盖 AI 30日累计 + 前端45日历史）且已覆盖
 # 最近交易日视为回填完成（增量跳过）；不足则每次刷新重试自愈
 FUNDFLOW_HISTORY_MIN_DAYS = 30
+
+# 日K历史稀疏阈值：最近 HISTORY_DAYS 自然日内缓存交易日条数 < 此值判定历史缺口。
+# 首次预热失败/历史缺口时，增量逻辑一旦有少量数据就永远只补今天、缺口永不回填
+# （指数日K缺失的真实教训），判定稀疏后强制回填全量窗口。
+HISTORY_MIN_DAYS = 60
 
 # 刷新互斥（与 Excel 导入同口径：防双点搅进度）
 _refresh_lock = threading.Lock()
@@ -113,6 +119,17 @@ def refresh_index(code: str, now: datetime | None = None) -> dict:
         return out
 
 
+def _daily_history_sparse(code: str, today: str) -> bool:
+    """日K历史是否稀疏：最近 HISTORY_DAYS 自然日内缓存交易日条数 < HISTORY_MIN_DAYS。
+
+    首次预热失败/历史缺口时，一旦缓存里有少量数据（如最近 2 天），增量逻辑就永远只补
+    今天、缺口永不回填（指数日K只有 2 天、其余指数 0 天的真实教训）。稀疏判定用于
+    sync_daily_bars 强制回填全量历史窗口。
+    """
+    start = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
+    return len(get_daily_prices(code, start, today)) < HISTORY_MIN_DAYS
+
+
 def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     """增量同步日K。force=True（全量刷新）时强制重拉全量窗口并覆盖已定格行。"""
     today = now.date().isoformat()
@@ -126,12 +143,18 @@ def sync_daily_bars(code: str, now: datetime, force: bool = False) -> dict:
     elif last_date == today:
         if latest["is_closed"]:
             return {"code": code, "fetched": 0, "reason": "today_closed"}
-        # 盘中刷新今天；但若缓存只有当天快照、缺历史（无昨收），则补拉历史窗口，
-        # 否则昨收/今日盈亏永远算不出来（如首次刷新即落当天快照的 ETF）
-        start = today if get_prev_close(code, today) is not None \
-            else (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
+        # 盘中刷新今天；历史稀疏（预热失败缺口）或缓存只有当天快照、缺历史（无昨收），
+        # 则补拉历史窗口，否则昨收/今日盈亏/历史图永远算不出来（如指数日K、首次落当天快照的 ETF）
+        if _daily_history_sparse(code, today) or get_prev_close(code, today) is None:
+            start = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
+        else:
+            start = today
     elif last_date:
-        start = (date.fromisoformat(last_date) + timedelta(days=1)).isoformat()
+        # 增量补上次缓存后；历史稀疏时只补增量会永远留缺口（指数日K只回填最近几天的教训），
+        # 判定稀疏则回填全量窗口
+        start = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat() \
+            if _daily_history_sparse(code, today) \
+            else (date.fromisoformat(last_date) + timedelta(days=1)).isoformat()
     else:
         start = (date.fromisoformat(today) - timedelta(days=HISTORY_DAYS)).isoformat()
 
@@ -378,12 +401,17 @@ def sync_fundflow(code: str, now: datetime) -> dict:
             upsert_index_intraday(code, today, intraday)
     elif intraday:
         upsert_fundflow_min(code, today, intraday)
-    # 多日窗口：今日之外的历史日一并落库（港股近5日，避免覆盖当日 bands）
+    # 多日窗口：今日之外的历史日一并落库（港股近5日，避免覆盖当日 bands）。
+    # 指数分时（量价 dict）已在上面 try 块按日落库到 index_intraday_cache，这里只回写
+    # 非指数的 FundflowPoint 分时（fundflow_15m_cache）；否则对指数误调 upsert_fundflow_min
+    # 会 AttributeError（'dict' object has no attribute 'ts'）→ 指数预热/刷新整体失败（踩过）。
     for d, f in day_flow_by_date.items():
         if d != today:
             upsert_daily_fundflow(code, d, f, None)
     for d, pts in intraday_by_date.items():
         if d != today and pts:
+            if getattr(inst, "kind", None) == "index":
+                continue
             upsert_fundflow_min(code, d, pts)
     fetched = len(intraday)
     logger.info("[资金流] %s %s：当日分时 %d 个分钟点，总净流入=%s",

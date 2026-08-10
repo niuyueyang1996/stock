@@ -54,7 +54,10 @@
           <h2>组合资金流 <span class="sub" id="pfFlowNote">按持仓汇总：A股个股五档/买卖盘求和 · 分钟=当日分时，天窗=多日聚合</span></h2>
           <div id="pfFlowTabs"></div>
           <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="pfFlowPrice" style="flex:1;min-width:280px;height:280px"></div>
+            <div class="chart lg" id="pfFlowPrice" style="flex:1;min-width:280px;height:340px"></div>
+          </div>
+          <div class="row" style="align-items:stretch">
+            <div class="chart sm" id="pfFlowBandsCum" style="flex:1;min-width:280px;height:280px;display:none"></div>
             <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:280px"></div>
           </div>
           <div class="row" style="align-items:stretch">
@@ -602,6 +605,7 @@
         const intraEl = document.getElementById('pfFlowIntraday');
         const bsEl = document.getElementById('pfFlowBuySell');
         const barsEl = document.getElementById('pfFlowBars');
+        const cumEl = document.getElementById('pfFlowBandsCum');
         const priceEl = document.getElementById('pfFlowPrice');
         if (!base.length && !hist.length && !hasBars) {
           empty.style.display = 'block';
@@ -609,7 +613,7 @@
             ? asOfEmptyHint(d, 'flow')
             : '暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。';
           tabsEl.innerHTML = '';
-          clearChart(intraEl); clearChart(bsEl); clearChart(barsEl); clearChart(priceEl);
+          clearChart(intraEl); clearChart(bsEl); clearChart(barsEl); clearChart(cumEl); clearChart(priceEl);
           return;
         }
         empty.style.display = 'none';
@@ -623,6 +627,7 @@
         const draw = (w) => {
           pfFlowWindow = w;
           if (isMin(w)) {
+            cumEl.style.display = 'none';
             if (!base.length) {
               clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
               empty.style.display = 'block';
@@ -638,12 +643,15 @@
             empty.style.display = 'none';
             const days = bucketFlowDays(hist, flowBucket(w));
             if (!days.length) {
+              cumEl.style.display = 'none';
               clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
               empty.style.display = 'block';
               empty.textContent = asOfEmptyHint(d, 'flow') || '该时间窗暂无日级资金流。';
               return;
             }
             fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 组合净值独立图
+            cumEl.style.display = 'block';
+            fundflowBandsCum(cumEl, days, FLOW_WINDOW_LABEL[w]);  // 五档累积净流入折线
             fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
             fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
           }
