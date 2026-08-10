@@ -1,0 +1,42 @@
+static/stock.html
+  s_c101f626376ccb::t_88a418c537fc79 149
+  s_c101f626376ccb::t_968858b214dc07 1272,1282,1296,1303-1304
+app/services/refresh.py
+  s_c101f626376ccb::t_a06f79fc43290c 122-132
+  s_c101f626376ccb::t_c6f5cbccecc137 58-62
+  s_c101f626376ccb::t_777f01416aa0fb 404-407,413-414
+  s_c101f626376ccb::t_47eaa5de745a7f 146-151,153-157
+  s_c101f626376ccb::t_50f4c66920693d 22
+  s_c101f626376ccb::t_bd7b937e017dfe 120-121
+static/js/charts.js
+  s_c101f626376ccb::t_55feeffd35e4c4 662-663
+  s_c101f626376ccb::t_f741cb6b03b3a5 990
+  s_c101f626376ccb::t_acd97eb839d3be 652-653
+  s_c101f626376ccb::t_8ebbdbb0cc1dba 994-995
+  s_c101f626376ccb::t_dfda414d60a7f3 719-766
+app/data/normalizers.py
+  s_c101f626376ccb::t_9ef9322bac2e0e 206-210
+static/portfolio.html
+  s_c101f626376ccb::t_43109b3395725e 608,616
+  s_c101f626376ccb::t_dd3a4bca99cd2e 57-60
+  s_c101f626376ccb::t_1221bcd93b2062 630,646,653-654
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a18d7d773233529f29ab6b3a03658875fc85b711",
+  "prompts": {},
+  "logical_commit_id": "a18d7d773233529f29ab6b3a03658875fc85b711",
+  "sessions": {
+    "s_c101f626376ccb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4cff3ff3-7a7f-4cb2-8bae-e2883aa7aea5",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 110,
+      "total_deletions": 12
+    }
+  }
+}
