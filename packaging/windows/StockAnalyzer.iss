@@ -51,9 +51,15 @@ Name: "{autodesktop}\股票持仓分析"; Filename: "{app}\{#MyAppExeName}"; Wor
 
 [Run]
 ; 去掉 skipifsilent：静默安装（自动更新）完成后也自动启动新版本，更新即生效无需手动打开
-Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"; Flags: nowait postinstall
+; CI 冒烟测试静默安装带 /NOAUTOLAUNCH 跳过自动启动，避免无交互会话里拉起长驻托盘进程导致安装器不返回
+Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"; Flags: nowait postinstall; Check: ShouldAutoLaunch
 
 [Code]
+function ShouldAutoLaunch(): Boolean;
+begin
+  Result := not CmdLineParamExists('/NOAUTOLAUNCH');
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;

@@ -232,6 +232,26 @@ def test_windows_build_runs_end_to_end_smoke_tests():
     assert "Silent uninstaller smoke test" in script
 
 
+def test_smoke_install_skips_autolaunch():
+    """CI 冒烟测试的静默安装必须跳过 [Run] 自动启动。
+
+    真实安装/自动更新不带 /NOAUTOLAUNCH，安装完成仍自动启动新版本；只有冒烟测试静默
+    安装带此参数，避免在无交互会话里拉起长驻托盘进程导致 setup.exe 不返回（run 42 卡死根因）。
+    """
+    root = Path(__file__).resolve().parent.parent
+    script = (root / "packaging" / "windows" / "build.ps1").read_text(
+        encoding="ascii"
+    )
+    assert "/NOAUTOLAUNCH" in script
+    assert "WaitForExit" in script
+
+    installer = (root / "packaging" / "windows" / "StockAnalyzer.iss").read_text(
+        encoding="utf-8"
+    )
+    assert "CmdLineParamExists('/NOAUTOLAUNCH')" in installer
+    assert "Check: ShouldAutoLaunch" in installer
+
+
 def test_workflow_uploads_failure_diagnostics():
     root = Path(__file__).resolve().parent.parent
     workflow = (root / ".github" / "workflows" / "windows-installer.yml").read_text(

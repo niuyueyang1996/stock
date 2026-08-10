@@ -149,8 +149,15 @@ try {
     if (Test-Path $InstallSmokeHome) { Remove-Item -Recurse -Force $InstallSmokeHome }
     $PreviousAppHome = [Environment]::GetEnvironmentVariable('STOCK_APP_HOME')
     try {
-        $InstallArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR=`"$InstallSmokeDir`""
-        $InstallProcess = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -Wait -PassThru
+        # /NOAUTOLAUNCH: smoke-test silent install must not auto-launch the long-running
+        # tray process (real installs / auto-update omit it, so [Run] still starts the new
+        # version). Add a timeout so a hung installer fails fast instead of wedging the job.
+        $InstallArgs = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /NOAUTOLAUNCH /DIR=`"$InstallSmokeDir`""
+        $InstallProcess = Start-Process -FilePath $Installer -ArgumentList $InstallArgs -PassThru
+        if (-not $InstallProcess.WaitForExit(300000)) {
+            Stop-Process -Id $InstallProcess.Id -Force -ErrorAction SilentlyContinue
+            throw 'Silent installer smoke test timed out after 5 minutes.'
+        }
         if ($InstallProcess.ExitCode -ne 0) {
             throw "Silent installer smoke test failed with exit code $($InstallProcess.ExitCode)."
         }
