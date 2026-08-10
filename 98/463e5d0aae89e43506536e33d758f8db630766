@@ -1,0 +1,23 @@
+tests/test_instruments.py
+  s_c101f626376ccb::t_0550e764b05b71 23-28
+  s_c101f626376ccb::t_6fd6b8a0009a57 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "98463e5d0aae89e43506536e33d758f8db630766",
+  "prompts": {},
+  "logical_commit_id": "98463e5d0aae89e43506536e33d758f8db630766",
+  "sessions": {
+    "s_c101f626376ccb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4cff3ff3-7a7f-4cb2-8bae-e2883aa7aea5",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 7,
+      "total_deletions": 3
+    }
+  }
+}
