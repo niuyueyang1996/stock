@@ -281,33 +281,28 @@ a:hover { color: var(--primary-deep); }
   .day-detail { max-height: none; }
 }
 
-/* ============ 启动预热提示条（全页通用，导航下方） ============ */
+/* ============ 启动预热提示条（融进导航中间，不占新行、不挤动左右元素） ============ */
 .prewarm-bar {
-  flex-basis: 100%;          /* nav 内独占一行，随 sticky nav 一直置顶可见 */
-  padding: 8px 16px 10px;
-  text-align: center;
-  font-size: 13px;
-  background: #fff8e1;
+  flex: 2 1 auto;            /* 占导航中间弹性空间（spacer 之后，比 spacer 更居中） */
+  min-width: 0;
+  display: none;             /* 无任务时隐藏 */
+  padding: 0 10px;
+  font-size: 12.5px;
   color: #7a5b00;
-  border-bottom: 1px solid #f0e0b0;
+  text-align: center;
 }
-.prewarm-bar.done {
-  background: #e8f5e9;
-  color: #1b5e20;
-  border-bottom-color: #c8e6c9;
-}
-.prewarm-bar.error {
-  background: #fdecea;
-  color: #b71c1c;
-  border-bottom-color: #f5c6cb;
-}
+.prewarm-bar.done { color: #1b5e20; }
+.prewarm-bar.error { color: #b71c1c; }
 .prewarm-row {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  margin-bottom: 6px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.prewarm-bar #prewarmText {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .prewarm-pct { font-variant-numeric: tabular-nums; font-weight: 600; opacity: .85; }
-.prewarm-track {
-  max-width: 420px; margin: 0 auto;
+.prewarm-bar .prewarm-track {
+  flex: 0 1 140px;           /* 小进度条：最多 140px，不撑开 */
+  height: 5px; border-radius: 3px;
   background: rgba(122, 91, 0, .15);
 }
 .prewarm-bar.done .prewarm-track { background: rgba(27, 94, 32, .15); }

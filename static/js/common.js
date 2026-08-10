@@ -283,18 +283,17 @@ function setupJobBar(nav) {
   bar.innerHTML = `
     <div class="prewarm-row">
       <span id="prewarmText"></span>
+      <span class="progress-track prewarm-track"><span class="progress-fill" id="prewarmFill"></span></span>
       <span class="prewarm-actions">
         <span id="prewarmPct" class="prewarm-pct"></span>
         <button type="button" class="job-toggle-btn" id="jobQueueToggle" style="display:none">任务</button>
         <button type="button" class="job-cancel-btn" id="jobCancelPrimary" title="取消" style="display:none">取消</button>
       </span>
     </div>
-    <div class="progress-track prewarm-track">
-      <div class="progress-fill" id="prewarmFill"></div>
-    </div>
     <div id="jobQueueList" class="job-queue-list" style="display:none"></div>`;
-  // 进度条放进 nav 内（flex-basis:100% 独占一行），nav 已 sticky top:0 → 滚动时进度条一直可见
-  nav.appendChild(bar);
+  // 进度条融进导航中间（spacer 之后），占导航弹性空间，不挤动左右元素
+  const spacer = nav.querySelector('.spacer');
+  (spacer || nav).insertAdjacentElement('afterend', bar);
   const txt = bar.querySelector('#prewarmText');
   const pctEl = bar.querySelector('#prewarmPct');
   const fill = bar.querySelector('#prewarmFill');
@@ -369,7 +368,7 @@ function setupJobBar(nav) {
           ? `<button type="button" class="job-cancel-btn" data-id="${j.job_id}" title="取消">×</button>`
           : `<span class="job-queue-locked" title="启动预热不可取消">—</span>`;
         return `<div class="job-queue-item">
-          <span class="job-queue-label"><span class="job-queue-st">${st}</span>${j.label || j.kind}</span>
+          <span class="job-queue-label"><span class="job-queue-st">${st}</span>${(j.meta && j.meta.name) || j.label || j.kind}</span>
           ${x}
         </div>`;
       }).join('');
@@ -433,7 +432,7 @@ function setupJobBar(nav) {
           cancellable = queued[0].cancellable !== false && queued[0].kind !== 'system.prewarm';
         }
 
-        txt.textContent = `${label} ${cur}/${tot}：${step}`;
+        txt.textContent = label;   // 外部只显示任务类型，明细在展开的「任务」列表看
         pctEl.textContent = (pct != null ? pct : 0) + '%';
         fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
         if (cancelId && cancellable) {
