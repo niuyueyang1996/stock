@@ -1,0 +1,52 @@
+tests/test_api.py
+  s_c101f626376ccb::t_811d58b9600c8f 332,335-336
+static/indices.html
+  s_10f7d50e5c634d::t_63706b3a4cb705 229-232
+app/api/stocks.py
+  s_c101f626376ccb::t_546ac023ce3110 346-347,352,356,359,361,363-376
+static/js/common.js
+  s_10f7d50e5c634d::t_b063423ba2b80c 1204-1205
+  s_10f7d50e5c634d::t_6ac11e89d76e08 1311
+  s_10f7d50e5c634d::t_860742833c10f9 1313-1315
+  s_10f7d50e5c634d::t_ffd5168b10075d 1361
+  s_10f7d50e5c634d::t_d27e1f3df2474b 1211
+  s_c101f626376ccb::t_85a21e712e1002 655-657,661-663
+  s_10f7d50e5c634d::t_adde10e0fd4b33 1312
+static/stock.html
+  s_10f7d50e5c634d::t_ae3d1a9184b291 145
+  s_10f7d50e5c634d::t_090cd825494c1d 1164,1168
+  s_c101f626376ccb::t_2141a58052aab8 208-210
+  s_10f7d50e5c634d::t_198c8b75a391c3 432
+  s_c101f626376ccb::t_91833ab4d57b72 838,846
+static/portfolio.html
+  s_10f7d50e5c634d::t_0fc5d0c936ed58 169-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e83c357d3801691fdab288f378982fb026357a55",
+  "prompts": {},
+  "logical_commit_id": "e83c357d3801691fdab288f378982fb026357a55",
+  "sessions": {
+    "s_10f7d50e5c634d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ef17e3ae-0904-45b0-9ee3-7c777d7fb25e",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 29,
+      "total_deletions": 52
+    },
+    "s_c101f626376ccb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4cff3ff3-7a7f-4cb2-8bae-e2883aa7aea5",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 36,
+      "total_deletions": 9
+    }
+  }
+}
