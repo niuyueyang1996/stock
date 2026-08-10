@@ -1,0 +1,28 @@
+static/css/style.css
+  s_c101f626376ccb::t_df4bcc6a7b0148 284,287-290,292,294-295,297-300,304-305
+  s_c101f626376ccb::t_ff9f80c77b9a02 303
+  s_c101f626376ccb::t_af50744f86cd31 286
+static/js/common.js
+  s_c101f626376ccb::t_52d0b0e7ebe385 435
+  s_c101f626376ccb::t_1c2458826ef132 286,294-296
+  s_c101f626376ccb::t_e2f48cbf2af703 371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8c0cfb4e68843637e2eea9c0df57a2654249c5ff",
+  "prompts": {},
+  "logical_commit_id": "8c0cfb4e68843637e2eea9c0df57a2654249c5ff",
+  "sessions": {
+    "s_c101f626376ccb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4cff3ff3-7a7f-4cb2-8bae-e2883aa7aea5",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 37,
+      "total_deletions": 43
+    }
+  }
+}
