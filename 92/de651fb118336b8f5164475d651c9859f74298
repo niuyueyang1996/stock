@@ -1,0 +1,31 @@
+app/jobs.py
+  s_ff0c7327b23488::t_98c8d0897b3be0 524
+  s_ff0c7327b23488::t_65decdfc577b58 653-659,662
+  s_ff0c7327b23488::t_6d43a5449f4119 291
+  s_ff0c7327b23488::t_90cf3843db1904 274
+  s_ff0c7327b23488::t_3fb45a86bebfe3 471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "92de651fb118336b8f5164475d651c9859f74298",
+  "prompts": {},
+  "logical_commit_id": "92de651fb118336b8f5164475d651c9859f74298",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  },
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 96,
+      "total_deletions": 15
+    }
+  }
+}
