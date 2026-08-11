@@ -57,8 +57,8 @@ Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"
 [Code]
 function ShouldAutoLaunch(): Boolean;
 begin
-  ; Inno 6 移除了 CmdLineParamExists，用 FindCmdLineSwitch（Inno 5/6 兼容）。
-  ; CompareCase=True 大小写不敏感，ComparePrefix=True 接受 / 或 - 前缀。
+  // Inno 6 移除了 CmdLineParamExists，用 FindCmdLineSwitch（Inno 5/6 兼容）。
+  // CompareCase=True 大小写不敏感，ComparePrefix=True 接受 / 或 - 前缀。
   Result := not FindCmdLineSwitch('NOAUTOLAUNCH', True, True);
 end;
 
