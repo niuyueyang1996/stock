@@ -1829,9 +1829,9 @@ def build_fundflow_analysis_context(code: str, window: int | str = "15m",
     if not series:
         return out
     if with_price:
-        pmap = _minute_price_map(code, int(w[:-1]))
+        pmap = _minute_price_map(code, int(w[:-1]))   # 兜底：缓存无价时新浪分时补
         out["points"] = [
-            {**p, **({"price": pmap[p["ts"]]} if p["ts"] in pmap else {})}
+            {**p, **({"price": pmap[p["ts"]]} if p["ts"] in pmap and p.get("price") is None else {})}
             for p in series
         ]
     else:
@@ -1963,7 +1963,8 @@ def build_batch_fundflow_context(tags: list[str] | None = None, window: int | st
     """批量资金流上下文：组合内（或直接指定 codes）每只有资金流数据的标的，按统一窗口的紧凑序列列表。
 
     窗口入口已保证 ≥15m；每只复用 build_fundflow_analysis_context(with_price=True)，
-    批量与个股一致带上 window 匹配的股价序列（分钟模式逐股拉新浪分时价，失败的点内无 price 不崩）。
+    批量与个股一致带上 window 匹配的股价序列（分钟模式用 fundflow_15m_cache 缓存末笔价，
+    离线稳定；缓存无价才新浪兜底，仍无则该点不带 price 不崩）。
     - tags 模式：读持仓组合（portfolio），港股无资金流跳过（A股/ETF 参与）。
     - codes 模式：直接指定标代码（指数页多指数相关性用），按 participates_fundflow 过滤；
       weights 与 codes 对齐（等权可传 None，AI 侧按 100/n 记）。

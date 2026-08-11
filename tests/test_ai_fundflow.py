@@ -39,16 +39,16 @@ def _asof_today_date():
     return date.fromisoformat(_asof_today())
 
 
-def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net):
-    """插入 1 条分时资金流分钟点（trade_date=当前 as-of 交易日）。"""
+def _seed_flow(code, ts, super_net, large_net, medium_net, small_net, xs_net, price=None):
+    """插入 1 条分时资金流分钟点（trade_date=当前 as-of 交易日）。price 模拟腾讯末笔缓存价。"""
     with get_conn() as c:
         c.execute(
             """INSERT OR REPLACE INTO fundflow_15m_cache
                (code, trade_date, ts, main_net, super_large_net, large_net, medium_net, small_net, xs_net,
-                buy_amount, sell_amount)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                buy_amount, sell_amount, price)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
             (code, _asof_today(), ts,
-             super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0),
+             super_net + large_net, super_net, large_net, medium_net, small_net, xs_net, 0, 0, price),
         )
 
 
@@ -136,6 +136,22 @@ def test_build_fundflow_context_no_intraday_returns_empty(monkeypatch):
 
 
 # ============================================================ 天窗口（多日逐日五档 + 日K收盘价）
+
+def test_build_fundflow_context_stock_uses_cached_price(monkeypatch):
+    """缓存带价（腾讯末笔）时优先用缓存价，新浪兜底为空也不丢价（AI 量价分析必需）。"""
+    _seed_flow("600000", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6, price=10.5)
+    _seed_flow("600000", "09:44", 0.5e6, 0.1e6, 0.0, 0.0, 0.0, price=10.8)
+    _seed_day("600000")
+    monkeypatch.setattr(ai_svc, "_minute_price_map", lambda code, w: {})   # 新浪兜底为空
+    ctx = ai_svc.build_fundflow_analysis_context("600000", "15m", with_price=True)
+    assert len(ctx["points"]) == 1
+    assert ctx["points"][0]["price"] == 10.8          # 窗口末笔价（09:44 后到覆盖）
+    # 缓存无价 + with_price=False：点内不带 price 键（不依赖新浪）
+    _seed_flow("600001", "09:31", 1.0e6, 0.2e6, -0.1e6, -0.05e6, 0.02e6)
+    _seed_day("600001")
+    ctx2 = ai_svc.build_fundflow_analysis_context("600001", "15m", with_price=False)
+    assert "price" not in ctx2["points"][0]
+
 
 def test_build_fundflow_context_stock_day_1d():
     from datetime import timedelta

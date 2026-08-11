@@ -155,14 +155,17 @@ def intraday_window_series(rows: list[dict], window_min: int = 15) -> list[dict]
     """分时资金流 dict 行（1 分钟基础，含 ts 'HH:MM'、五档净流入与买卖盘）→ 指定窗口序列。
 
     返回 [{ts, super(超大单), large(大单), medium(中单), small(小单), xs(特小单),
-           main(主力=超大+大), cum(截至该窗口累计主力净流入), buy(买盘成交额), sell(卖盘成交额)}]，
+           main(主力=超大+大), cum(截至该窗口累计主力净流入), buy(买盘成交额), sell(卖盘成交额),
+           price(窗口末笔价，来自分钟点 price；无则 None)}]，
     按 ts 升序。
     读取侧/AI 打分用：把分钟点重聚合到 5/15/30 窗口，供 AI 看全天各档资金节奏；
     buy/sell 与天窗口 buy_amount/sell_amount 同义（同窗口求和，识别拆单/对倒）。
+    price 取窗口内最后一笔价（与资金流同源缓存，AI 量价分析用，避免额外联网拉股价）。
     window_min<=1 时退化为 1 分钟原样（每个 ts 独立）。
     """
     w = max(1, int(window_min or 15))
     agg: dict[str, list[float]] = {}
+    last_price: dict[str, float] = {}
     for r in rows:
         hm = str(r["ts"])
         minute = int(hm[:2]) * 60 + int(hm[3:5])
@@ -176,19 +179,26 @@ def intraday_window_series(rows: list[dict], window_min: int = 15) -> list[dict]
         b[4] += float(r.get("xs_net") or 0.0)
         b[5] += float(r.get("buy_amount") or 0.0)
         b[6] += float(r.get("sell_amount") or 0.0)
+        p = r.get("price")
+        if p is not None:
+            last_price[ts] = float(p)   # rows 按 ts 升序，后到覆盖 → 窗口末笔价
     out = []
     cum = 0.0
     for ts in sorted(agg):
         sp, lg, md, sm, xs, buy, sell = agg[ts]
         main = sp + lg
         cum += main
-        out.append({
+        d = {
             "ts": ts,
             "super": round(sp, 0), "large": round(lg, 0), "medium": round(md, 0),
             "small": round(sm, 0), "xs": round(xs, 0),
             "main": round(main, 0), "cum": round(cum, 0),
             "buy": round(buy, 0), "sell": round(sell, 0),
-        })
+        }
+        p = last_price.get(ts)
+        if p is not None:
+            d["price"] = p          # 窗口末笔价（缓存带价才输出，无价不出现该键）
+        out.append(d)
     return out
 
 
