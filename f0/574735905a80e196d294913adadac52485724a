@@ -1,0 +1,32 @@
+README.md
+  s_ff0c7327b23488::t_95536d8ca12c51 82-88
+scripts/req_fingerprint.py
+  s_ff0c7327b23488::t_f4d5b62e87f6e4 1-57
+run.sh
+  s_ff0c7327b23488::t_b5857f35257323 28-31,39,44-48,50
+start.cmd
+  s_ff0c7327b23488::t_f6900e375cf3e8 66-69
+  s_ff0c7327b23488::t_fc30c1d5f6de07 23-25
+  s_ff0c7327b23488::t_a588882c41ecb0 65
+.gitignore
+  s_ff0c7327b23488::t_56f3addb18f126 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f0574735905a80e196d294913adadac52485724a",
+  "prompts": {},
+  "logical_commit_id": "f0574735905a80e196d294913adadac52485724a",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 96,
+      "total_deletions": 15
+    }
+  }
+}
