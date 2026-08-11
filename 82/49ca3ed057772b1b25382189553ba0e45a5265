@@ -1,0 +1,25 @@
+app/api/ai.py
+  s_ff0c7327b23488::t_d73b1ffe30d04a 319,325
+  s_ff0c7327b23488::t_86669f2b61953d 210,216
+  s_ff0c7327b23488::t_d12c233e04ab67 380,386
+  s_ff0c7327b23488::t_47dfc9766df0a4 193,199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8249ca3ed057772b1b25382189553ba0e45a5265",
+  "prompts": {},
+  "logical_commit_id": "8249ca3ed057772b1b25382189553ba0e45a5265",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 8,
+      "total_deletions": 4
+    }
+  }
+}
