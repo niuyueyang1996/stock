@@ -248,7 +248,7 @@ def test_smoke_install_skips_autolaunch():
     installer = (root / "packaging" / "windows" / "StockAnalyzer.iss").read_text(
         encoding="utf-8"
     )
-    assert "CmdLineParamExists('/NOAUTOLAUNCH')" in installer
+    assert "Result := not FindCmdLineSwitch('NOAUTOLAUNCH', True, True)" in installer
     assert "Check: ShouldAutoLaunch" in installer
 
 
