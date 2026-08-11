@@ -1,0 +1,24 @@
+tests/test_packaging.py
+  s_ff0c7327b23488::t_668dd2ad27643f 251-253
+packaging/windows/StockAnalyzer.iss
+  s_ff0c7327b23488::t_7569d3a967abec 59-60,62-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1dbe6543088975a2ba36d09ded27893b584a90bd",
+  "prompts": {},
+  "logical_commit_id": "1dbe6543088975a2ba36d09ded27893b584a90bd",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 17,
+      "total_deletions": 4
+    }
+  }
+}
