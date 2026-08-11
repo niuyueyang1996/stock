@@ -67,7 +67,11 @@
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
         </div>
         <div class="panel" id="aiExtPanel">
-          <h2>AI 扩展分析 <span class="sub">消息面（自动抓取个股新闻） / 技术面（日/周/月K结构） / 资金流 · 批量分析跟随当前标签筛选</span></h2>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <h2 style="margin:0">AI 扩展分析 <span class="sub">消息面（自动抓取个股新闻） / 技术面（日/周/月K结构） / 资金流 · 批量分析跟随当前标签筛选</span></h2>
+            <span class="grow"></span>
+            <button class="btn primary" id="extAllBtn">🤖 一键分析</button>
+          </div>
           <div class="period-tabs" id="aiExtTabs"></div>
           <div id="newsBatchWrap" style="display:none;margin-top:10px">
             <button class="btn primary" id="newsBatchBtn">🤖 批量分析消息面</button>
@@ -171,6 +175,35 @@
           onDone: async () => { await loadAndRender(); renderPfFlow(); },   // 批量刷新了持仓资金流 → 重绘资金流图（当前窗口）
         });
       };
+      // AI 扩展分析一键按钮：勾选默认全选，逐个分析消息面/技术面/资金流（跟随当前标签筛选）
+      const extAllBtn = document.getElementById('extAllBtn');
+      if (extAllBtn) {
+        extAllBtn.onclick = () => {
+          openAiExtPicker({
+            items: [
+              { key: 'news', label: '批量消息面' },
+              { key: 'tech', label: '批量技术面' },
+              { key: 'flow', label: '批量资金流' },
+            ],
+            onRun: async (keys) => {
+              const tags = currentTags();
+              for (const k of keys) {
+                if (k === 'news') {
+                  await runNewsBatch({ tags, btn: extAllBtn, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true });
+                } else if (k === 'tech') {
+                  await runTechBatch({ tags, btn: extAllBtn, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true });
+                } else if (k === 'flow') {
+                  if (/^(1|5)m$/.test(pfFlowWindow)) { toast('批量分析窗口过小，请选择 15 分钟及以上'); continue; }
+                  await runFundflowBatch({
+                    tags, window: pfFlowWindow, btn: extAllBtn, panel: panels.flow,
+                    onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true,
+                  });
+                }
+              }
+            },
+          });
+        };
+      }
     })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
     let allTags = [];
