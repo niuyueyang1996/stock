@@ -1,0 +1,47 @@
+app/api/ai.py
+  s_ff0c7327b23488::t_d70bba08702bc9 205,210-211,214
+  s_ff0c7327b23488::t_31ab0efc5352ae 370,378-379,382
+  s_ff0c7327b23488::t_7ee5ceb7da5f54 310,318-319,322
+  s_ff0c7327b23488::t_39723422f11f5d 187,194-195,198
+tests/test_ai.py
+  s_ff0c7327b23488::t_4baa3cd4408659 313-333
+app/services/ai.py
+  s_ff0c7327b23488::t_e3c8180932cb5a 1874
+  s_ff0c7327b23488::t_92745503a6bc61 1323
+  s_ff0c7327b23488::t_80274241fd853c 2629
+  s_ff0c7327b23488::t_55934dce584427 1298-1312,1314
+  s_ff0c7327b23488::t_f78d7131f09e49 1902,1907
+  s_ff0c7327b23488::t_2157acd6b53f94 2580
+  s_ff0c7327b23488::t_b3d6c257e364c4 1336,1341
+  s_ff0c7327b23488::t_3b7c9cbfc30b56 2620-2621
+  s_ff0c7327b23488::t_3ff64514addd9d 2569-2570
+  s_ff0c7327b23488::t_d7a925943e7211 2599,2604
+  s_ff0c7327b23488::t_15a5ffb76f6d5a 2654
+  s_ff0c7327b23488::t_c8fbf6ce0878c3 1909
+  s_ff0c7327b23488::t_0dd98a91d452f9 1344
+  s_ff0c7327b23488::t_7eefd20fe8904d 2647,2652
+  s_ff0c7327b23488::t_b4acccbf8bddec 1885
+  s_ff0c7327b23488::t_7d4ba1118662c9 2606
+static/js/common.js
+  s_ff0c7327b23488::t_07408a3b69287d 561
+  s_ff0c7327b23488::t_ef054114dec676 614-624
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "02bfcfff2debbe7d350aefddb47339571910b3be",
+  "prompts": {},
+  "logical_commit_id": "02bfcfff2debbe7d350aefddb47339571910b3be",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 86,
+      "total_deletions": 25
+    }
+  }
+}
