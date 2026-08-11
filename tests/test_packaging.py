@@ -248,7 +248,9 @@ def test_smoke_install_skips_autolaunch():
     installer = (root / "packaging" / "windows" / "StockAnalyzer.iss").read_text(
         encoding="utf-8"
     )
-    assert "Result := not FindCmdLineSwitch('NOAUTOLAUNCH', True, True)" in installer
+    assert "CompareText(ParamStr(i), '/NOAUTOLAUNCH')" in installer
+    assert "FindCmdLineSwitch" not in installer  # 非 Inno Setup 函数，防止误用回归
+    assert "CmdLineParamExists(" not in installer  # Inno 6 已移除的旧 API
     assert "Check: ShouldAutoLaunch" in installer
 
 

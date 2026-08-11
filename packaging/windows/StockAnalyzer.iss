@@ -56,10 +56,21 @@ Filename: "{app}\{#MyAppExeName}"; Description: "立即启动股票持仓分析"
 
 [Code]
 function ShouldAutoLaunch(): Boolean;
+var
+  i: Integer;
 begin
-  // Inno 6 移除了 CmdLineParamExists，用 FindCmdLineSwitch（Inno 5/6 兼容）。
-  // CompareCase=True 大小写不敏感，ComparePrefix=True 接受 / 或 - 前缀。
-  Result := not FindCmdLineSwitch('NOAUTOLAUNCH', True, True);
+  // 判断命令行是否带 /NOAUTOLAUNCH（静默安装冒烟测试用，跳过自动启动）。
+  // Inno 5 的 CmdLineParamExists 在 Inno 6 已移除；ParamStr/ParamCount 在
+  // Inno 5/6 均为标准函数，逐参数比较最稳妥。
+  Result := True;
+  for i := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(i), '/NOAUTOLAUNCH') = 0 then
+    begin
+      Result := False;
+      Exit;
+    end;
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
