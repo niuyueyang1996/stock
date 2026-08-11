@@ -271,7 +271,7 @@ def _finalize_locked(j: dict, ok: bool = True, error: str | None = None,
         "batch_id": j.get("batch_id"),
     })
     logger.info("[任务] %s %s %s", j["status"], j["kind"], j["label"])
-    notify_jobs()
+    notify_jobs(force=True)
 
 
 def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
@@ -288,7 +288,7 @@ def _finish_batch_locked(b: dict, *, cancelled: bool) -> None:
         "done_count": b.get("done_count") or 0,   # 前端完成提示可展示「处理 N 项」
         "total": b.get("total") or 0,
     })
-    notify_jobs()
+    notify_jobs(force=True)
 
 
 def _notify_batch_locked(j: dict) -> None:
@@ -468,6 +468,7 @@ def cancel(job_id: str) -> bool:
                 "batch_id": j.get("batch_id"),
             })
             _notify_batch_locked(j)
+            notify_jobs(force=True)   # 取消是终态，须送达前端
         return True
 
 
@@ -520,6 +521,7 @@ def cancel_batch(batch_id: str) -> bool:
             stages_busy = bool(sj and sj["status"] in ("queued", "running"))
         if not children_busy and not stages_busy:
             _finish_batch_locked(b, cancelled=True)
+        notify_jobs(force=True)   # 取消的 queued 子任务是终态，须送达前端
         return True
 
 
@@ -648,11 +650,16 @@ _last_jobs_push = 0.0
 _JOBS_PUSH_INTERVAL = 0.3  # 秒；进度刷新节流，避免每次 advance 都推
 
 
-def notify_jobs() -> None:
-    """广播 job 快照（节流）：WebSocket 客户端据此实时更新顶部进度条，替代 1s 轮询。"""
+def notify_jobs(*, force: bool = False) -> None:
+    """广播 job 快照（节流）：WebSocket 客户端据此实时更新顶部进度条，替代 1s 轮询。
+
+    force=True：任务终态（完成/失败/取消）必须送达前端，跳过节流——进度推到 99 后
+    任务几乎立刻结束，完成推送若被 0.3s 节流吞掉，前端 waitForJob（ws 在线时不轮询）
+    将永远等不到 app-job-done 而卡死。
+    """
     global _last_jobs_push
     now = _time.monotonic()
-    if now - _last_jobs_push < _JOBS_PUSH_INTERVAL:
+    if not force and now - _last_jobs_push < _JOBS_PUSH_INTERVAL:
         return
     _last_jobs_push = now
     try:
