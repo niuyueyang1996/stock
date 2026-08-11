@@ -558,7 +558,7 @@ function setupJobBar(nav) {
         cancellable = queued[0].cancellable !== false && queued[0].kind !== 'system.prewarm';
       }
 
-      txt.textContent = label;   // 外部只显示任务类型，明细在展开的「任务」列表看
+      txt.textContent = label + (step ? ' · ' + step : '');   // 任务类型 + 当前阶段（分步进度）
       pctEl.textContent = (pct != null ? pct : 0) + '%';
       fill.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
       if (cancelId && cancellable) {
@@ -611,7 +611,17 @@ function setupJobBar(nav) {
     }
     // ws 在线：零轮询，完全靠 ws 推送（含重连后的初始快照）
   }
-  window.kickJobBar = () => { _jobBarActive = true; tick(); };
+  // 任务入队后调用：确保进度条立即显示新任务。
+  // 注意：ws 在线时 tick 不轮询，新任务入队的 ws 推送可能被后端 0.3s 节流吞掉
+  // （如紧接上个任务完成推送之后入队），导致进度条停留在旧状态、几秒后消失。
+  // 因此这里主动拉一次快照，不依赖推送时序。
+  window.kickJobBar = () => {
+    _jobBarActive = true;
+    api('/status/jobs', { silent: true })
+      .then(renderJobSnapshot)
+      .catch(() => {});
+    tick();
+  };
   tick();
 
   // ---- WebSocket：任务进度推送 + 数据更新推送 ----

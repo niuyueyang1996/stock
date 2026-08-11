@@ -310,6 +310,27 @@ def test_analyze_stock_persists_report(monkeypatch):
     assert saved["model_name"] == "DeepSeek"
 
 
+def test_analyze_stock_reports_progress(monkeypatch):
+    """诊股分步进度：汇总→调用模型→解析→保存，逐阶段 advance 上报（修复进度条不动）。"""
+    class _FakeProg:
+        def __init__(self):
+            self.calls = []
+
+        def advance(self, done, total, label):
+            self.calls.append((done, total, label))
+
+    _add_active_model()
+    monkeypatch.setattr(ai_svc, "chat_json", lambda *a, **k: _FAKE_AI_OUTPUT)
+    prog = _FakeProg()
+    ai_svc.analyze_stock("600000", prog=prog)
+    assert [c[0] for c in prog.calls] == [1, 2, 3, 4]
+    assert all(c[1] == 4 for c in prog.calls)
+    assert [c[2] for c in prog.calls] == \
+        ["汇总个股数据", "调用 AI 模型分析", "解析分析结果", "保存报告"]
+    # prog=None（后端兼容调用）时静默跳过，不报错
+    ai_svc.analyze_stock("600000")
+
+
 def test_analyze_no_active_model():
     with pytest.raises(ValueError):
         ai_svc.analyze_stock("600000")

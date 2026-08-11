@@ -184,37 +184,34 @@ def get_ai_report(code: str):
 @router.post("/stocks/{code}/ai-report")
 def analyze_ai(code: str, body: ReportBody | None = None):
     """触发诊股：后台异步，进度见 GET /status/jobs；完成后 GET 读报告。"""
-    from app.services.job_runners import start_simple
+    from app.services.job_runners import start
 
     if not ai_svc.get_active_model():
         raise HTTPException(400, "未配置 AI 模型")
     prompt = body.system_prompt if body else None
     intensity = body.intensity if body else "normal"
 
-    def work():
-        ai_svc.analyze_stock(code, prompt, intensity)
+    def work(prog):
+        ai_svc.analyze_stock(code, prompt, intensity, prog)
         logger.info("[AI诊股] %s 完成", code)
 
-    job_id = start_simple("ai.stock_report", f"AI 诊股 {code}", work, step=f"诊股 {code}…")
+    job_id = start("ai.stock_report", f"AI 诊股 {code}", work, total=4)
     return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
 
 
 @router.post("/ai/fundflow-analysis")
 def fundflow_analysis(body: FundflowAnalysisBody):
     """个股 AI 资金流分析：后台异步，进度见 GET /status/jobs。"""
-    from app.services.job_runners import start_simple
+    from app.services.job_runners import start
 
     if not ai_svc.get_active_model():
         raise HTTPException(400, "未配置 AI 模型")
 
-    def work():
-        ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt, body.intensity)
+    def work(prog):
+        ai_svc.analyze_fundflow(body.code, body.window, body.system_prompt, body.intensity, prog)
         logger.info("[AI资金流] %s %s分析完成", body.code, body.window)
 
-    job_id = start_simple(
-        "ai.fundflow", f"资金流 AI {body.code}",
-        work, step=f"资金流分析 {body.code}…",
-    )
+    job_id = start("ai.fundflow", f"资金流 AI {body.code}", work, total=4)
     return {"ok": True, "data": {"job_id": job_id, "async": True, "code": body.code}}
 
 @router.get("/ai/prompts")
@@ -310,7 +307,7 @@ def _news_tech_batch_body(body: NewsTechAnalysisBody) -> tuple[list[str] | None,
 @router.post("/ai/news-analysis")
 def news_analysis(body: NewsTechAnalysisBody):
     """个股 AI 消息面分析：后台异步，进度见 GET /status/jobs。"""
-    from app.services.job_runners import start_simple
+    from app.services.job_runners import start
 
     if not ai_svc.get_active_model():
         raise HTTPException(400, "未配置 AI 模型")
@@ -318,11 +315,11 @@ def news_analysis(body: NewsTechAnalysisBody):
     if not code:
         raise HTTPException(400, "缺少 code")
 
-    def work():
-        ai_svc.analyze_news(code, body.system_prompt, body.intensity)
+    def work(prog):
+        ai_svc.analyze_news(code, body.system_prompt, body.intensity, prog)
         logger.info("[AI消息面] %s 完成", code)
 
-    job_id = start_simple("ai.news", f"消息面 AI {code}", work, step=f"消息面分析 {code}…")
+    job_id = start("ai.news", f"消息面 AI {code}", work, total=4)
     return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
 
 
@@ -370,7 +367,7 @@ def news_batch(body: NewsTechAnalysisBody):
 @router.post("/ai/tech-analysis")
 def tech_analysis(body: NewsTechAnalysisBody):
     """个股 AI 技术面分析：后台异步，进度见 GET /status/jobs。"""
-    from app.services.job_runners import start_simple
+    from app.services.job_runners import start
 
     if not ai_svc.get_active_model():
         raise HTTPException(400, "未配置 AI 模型")
@@ -378,11 +375,11 @@ def tech_analysis(body: NewsTechAnalysisBody):
     if not code:
         raise HTTPException(400, "缺少 code")
 
-    def work():
-        ai_svc.analyze_technical(code, body.system_prompt, body.intensity)
+    def work(prog):
+        ai_svc.analyze_technical(code, body.system_prompt, body.intensity, prog)
         logger.info("[AI技术面] %s 完成", code)
 
-    job_id = start_simple("ai.tech", f"技术面 AI {code}", work, step=f"技术面分析 {code}…")
+    job_id = start("ai.tech", f"技术面 AI {code}", work, total=4)
     return {"ok": True, "data": {"job_id": job_id, "async": True, "code": code}}
 
 

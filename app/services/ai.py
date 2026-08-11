@@ -1295,8 +1295,23 @@ def _normalize_report(data: dict) -> dict:
     }
 
 
+def _prog_advance(prog, done: int, total: int, label: str) -> None:
+    """AI 分析分步进度上报（可选；prog 为 None 时静默跳过）。
+
+    阶段推进让顶部进度条真实反映 AI 分析过程（汇总→调用模型→解析→保存），
+    避免整个调用期间进度条停在 0/50% 不变、观感「进度条一下就没了」。
+    上报失败不影响分析本身。
+    """
+    if prog is None:
+        return
+    try:
+        prog.advance(done, total, label)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def analyze_stock(code: str, system_prompt: str | None = None,
-                  intensity: str = "normal") -> dict:
+                  intensity: str = "normal", prog: object | None = None) -> dict:
     """触发诊股：用激活模型分析并落库，返回规整报告 + 元信息。
 
     system_prompt 非 None 时作为「用户附加要求」追加到默认指令后（前端弹窗可编辑）。
@@ -1305,6 +1320,7 @@ def analyze_stock(code: str, system_prompt: str | None = None,
     model_cfg = get_active_model()
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    _prog_advance(prog, 1, 4, "汇总个股数据")
     ctx = build_stock_context(code)
     # 输出 schema：仅「深入」保留 html 字段（快速/普通不要求 HTML 报告）
     schema = {k: v for k, v in _OUTPUT_SCHEMA.items() if intensity == "deep" or k != "html"}
@@ -1317,12 +1333,15 @@ def analyze_stock(code: str, system_prompt: str | None = None,
     inst = _intensity_instruction(intensity)
     if inst:
         system = f"{system}\n\n[分析强度]\n{inst}"
+    _prog_advance(prog, 2, 4, "调用 AI 模型分析")
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
         raise ValueError(str(e))
+    _prog_advance(prog, 3, 4, "解析分析结果")
     report = _normalize_report(raw)
     report["as_of"] = ctx.get("as_of_datetime") or now_as_of_datetime()
+    _prog_advance(prog, 4, 4, "保存报告")
     report["snapshot_hash"] = stock_report_snapshot_hash(code, model_cfg["name"])
     from app.data.cache import get_financials
 
@@ -1852,7 +1871,7 @@ def _normalize_fundflow_analysis(data: dict) -> dict:
 
 
 def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | None = None,
-                     intensity: str = "normal") -> dict:
+                     intensity: str = "normal", prog: object | None = None) -> dict:
     """个股 AI 资金流实时分析（带资金×股价相关性/背离），统一时间窗。
 
     无激活模型 → ValueError；选定窗口无资金流数据 → ValueError。
@@ -1863,6 +1882,7 @@ def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | 
     model_cfg = get_active_model()
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    _prog_advance(prog, 1, 4, "汇总资金流数据")
     ctx = build_fundflow_analysis_context(code, window)
     if not ctx["points"]:
         raise ValueError("该时间窗资金流数据为空，请先刷新资金流")
@@ -1879,11 +1899,14 @@ def analyze_fundflow(code: str, window: int | str = "15m", system_prompt: str | 
     inst = _intensity_instruction(intensity)
     if inst:
         system = f"{system}\n\n[分析强度]\n{inst}"
+    _prog_advance(prog, 2, 4, "调用 AI 模型分析")
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
         raise ValueError(str(e))
+    _prog_advance(prog, 3, 4, "解析分析结果")
     analysis = _normalize_fundflow_analysis(raw)
+    _prog_advance(prog, 4, 4, "保存报告")
     # 落库 source='single'：按 code+window 覆盖重落库，F5 不丢；不同 window 各存一份
     try:
         _upsert_fundflow_report(code, ctx["date"], "single", ctx["window"],
@@ -2543,7 +2566,8 @@ def _upsert_tech_report(code: str, as_of: str, source: str, report: dict, model_
         )
 
 
-def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
+def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "normal",
+                 prog: object | None = None) -> dict:
     """个股 AI 消息面分析：akshare 抓取近期新闻注入 + 公开知识 + 时效规则，落库 ai_news_reports。
 
     无激活模型 → ValueError。items 为空（AI 因时效放弃）也是合法结果，照常落库。
@@ -2553,6 +2577,7 @@ def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "
     model_cfg = get_active_model()
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    _prog_advance(prog, 1, 4, "汇总消息面数据")
     as_of = now_as_of_datetime()
     ctx = {
         "code": code, "name": _stock_display_name(code), "as_of_datetime": as_of,
@@ -2571,11 +2596,14 @@ def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "
     inst = _intensity_instruction(intensity)
     if inst:
         system = f"{system}\n\n[分析强度]\n{inst}"
+    _prog_advance(prog, 2, 4, "调用 AI 模型分析")
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
         raise ValueError(str(e))
+    _prog_advance(prog, 3, 4, "解析分析结果")
     report = _normalize_news(raw)
+    _prog_advance(prog, 4, 4, "保存报告")
     try:
         _upsert_news_report(code, as_of, "single", report,
                             model_cfg.get("model") or model_cfg.get("name", ""))
@@ -2589,7 +2617,8 @@ def analyze_news(code: str, system_prompt: str | None = None, intensity: str = "
     }
 
 
-def analyze_technical(code: str, system_prompt: str | None = None, intensity: str = "normal") -> dict:
+def analyze_technical(code: str, system_prompt: str | None = None, intensity: str = "normal",
+                      prog: object | None = None) -> dict:
     """个股 AI 技术面分析：基于截至 as_of 的日/周/月K结构，落库 ai_tech_reports。
 
     无激活模型 → ValueError。无日K（bars 为空）时 AI 明说不下结论，照常落库。
@@ -2597,6 +2626,7 @@ def analyze_technical(code: str, system_prompt: str | None = None, intensity: st
     model_cfg = get_active_model()
     if not model_cfg:
         raise ValueError("尚未配置/启用任何 AI 模型（点右上角「🤖 AI」配置）")
+    _prog_advance(prog, 1, 4, "汇总技术面数据")
     as_of = now_as_of_datetime()
     _ensure_tech_kline(code)
     ctx = {
@@ -2614,11 +2644,14 @@ def analyze_technical(code: str, system_prompt: str | None = None, intensity: st
     inst = _intensity_instruction(intensity)
     if inst:
         system = f"{system}\n\n[分析强度]\n{inst}"
+    _prog_advance(prog, 2, 4, "调用 AI 模型分析")
     try:
         raw = chat_json(model_cfg, system, user)
     except Exception as e:  # noqa: BLE001
         raise ValueError(str(e))
+    _prog_advance(prog, 3, 4, "解析分析结果")
     report = _normalize_technical(raw)
+    _prog_advance(prog, 4, 4, "保存报告")
     try:
         _upsert_tech_report(code, as_of, "single", report,
                             model_cfg.get("model") or model_cfg.get("name", ""))
