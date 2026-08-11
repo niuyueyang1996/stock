@@ -20,6 +20,9 @@ rem ---------- use ready .venv directly ----------
 if not exist ".venv\Scripts\python.exe" goto :need_python
 .venv\Scripts\python.exe -c "import sys;sys.exit(0 if sys.version_info>=(3,10) else 1)" >nul 2>&1
 if errorlevel 1 goto :need_python
+rem auto-reinstall when requirements files changed (fingerprint in .venv)
+.venv\Scripts\python.exe scripts\req_fingerprint.py check >nul 2>&1
+if errorlevel 1 goto :install_deps
 if exist ".venv\Scripts\uvicorn.exe" goto :start
 goto :install_deps
 
@@ -59,6 +62,11 @@ if errorlevel 1 (
     echo [ERROR] Failed to install dependencies. Please check your network and rerun.
     pause
     exit /b 1
+)
+rem record dependency fingerprint so future runs skip reinstall
+.venv\Scripts\python.exe scripts\req_fingerprint.py write
+if errorlevel 1 (
+    echo [WARN] Failed to record dependency fingerprint; next run will reinstall.
 )
 
 :start

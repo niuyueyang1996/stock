@@ -25,9 +25,10 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 # 决定是否需要创建/重建/补装依赖：
-#   - .venv 不存在            -> 创建
-#   - .venv 版本低于 3.10     -> 用 $PYTHON_BIN 重建
-#   - .venv 版本正常但缺依赖  -> 只安装依赖
+#   - .venv 不存在             -> 创建
+#   - .venv 版本低于 3.10      -> 用 $PYTHON_BIN 重建
+#   - 缺 uvicorn / 依赖指纹变了 -> 补装依赖（指纹见 scripts/req_fingerprint.py，
+#     requirements 任一文件变更后自动触发，无需手工干预）
 NEED_SETUP=0
 if [ ! -x ".venv/bin/python" ]; then
     NEED_SETUP=1
@@ -35,15 +36,18 @@ elif ! .venv/bin/python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10
     echo "[WARN] .venv 的 Python 版本过低（需 3.10+），正在用 $PYTHON_BIN 重建..."
     rm -rf .venv
     NEED_SETUP=1
-elif [ ! -x ".venv/bin/uvicorn" ]; then
+elif [ ! -x ".venv/bin/uvicorn" ] || ! .venv/bin/python scripts/req_fingerprint.py check >/dev/null 2>&1; then
     NEED_SETUP=1
 fi
 
 if [ "$NEED_SETUP" = "1" ]; then
-    echo "[INFO] 正在用 $PYTHON_BIN 创建虚拟环境..."
-    "$PYTHON_BIN" -m venv .venv || { echo "[ERROR] 创建虚拟环境失败，请检查 Python 安装"; exit 1; }
-    echo "[INFO] 正在安装依赖（首次运行需要一点时间）..."
+    if [ ! -x ".venv/bin/python" ]; then
+        echo "[INFO] 正在用 $PYTHON_BIN 创建虚拟环境..."
+        "$PYTHON_BIN" -m venv .venv || { echo "[ERROR] 创建虚拟环境失败，请检查 Python 安装"; exit 1; }
+    fi
+    echo "[INFO] 正在安装依赖（首次运行/依赖变更后）..."
     .venv/bin/pip install -r requirements.txt || { echo "[ERROR] 依赖安装失败，请检查网络后重新运行"; exit 1; }
+    .venv/bin/python scripts/req_fingerprint.py write
 fi
 
 exec .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port "$PORT"

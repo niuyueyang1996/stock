@@ -79,14 +79,18 @@
 ### 源码运行
 
 ```bash
+# 推荐：直接运行启动脚本。首次运行或 requirements 变更后会自动装依赖，
+# 无需手动创建 venv / pip install（依赖指纹存 .venv/.req.sha256）。
+./run.sh            # macOS / Linux（默认 127.0.0.1:8000）
+./run.sh 9000       # 或指定端口
+start.cmd           # Windows
+
+# 手动方式（等价）：
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
 pip install -r requirements.txt
-
-# 启动（默认 127.0.0.1:8000）
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-# 或 start.cmd
 ```
 
 首次：交易页录入 →「全量」刷新 → 看持仓 / 组合。清空库可删 `data/etf.db` 后重启。
