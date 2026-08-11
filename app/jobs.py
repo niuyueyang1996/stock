@@ -169,7 +169,7 @@ class Progress:
             j["updated_at"] = _now()
 
 
-def _recompute_job_pct(j: dict) -> None:
+def _recompute_job_pct(j: dict, *, force: bool = False) -> None:
     total = max(1, int(j.get("total") or 1))
     done_n = len(j.get("done") or [])
     step = j.get("step")
@@ -182,7 +182,7 @@ def _recompute_job_pct(j: dict) -> None:
     j["pct"] = min(99, round((done_n + (0.5 if step else 0)) / total * 100))
     j["current"] = min(total, done_n + (1 if step else 0))
     j["done_count"] = done_n
-    notify_jobs()
+    notify_jobs(force=force)
 
 
 def _ensure_workers() -> None:
@@ -712,7 +712,9 @@ def prewarm_mark(step_name: str) -> None:
         if j.get("cancel_requested"):
             return
         j["step"] = step_name
-        _recompute_job_pct(j)
+        # force：预热步骤之间常 <0.3s（多数步骤秒回跳过），0.3s 节流会吞掉
+        # step 推送，而 ws 在线时前端零轮询 → 用户只看到 pct 在涨、看不到「正在预热哪一项」。
+        _recompute_job_pct(j, force=True)
         j["updated_at"] = _now()
 
 
