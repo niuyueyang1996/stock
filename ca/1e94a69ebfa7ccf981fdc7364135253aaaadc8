@@ -1,0 +1,34 @@
+static/js/common.js
+  s_ff0c7327b23488::t_690676fdbdfaab 1801-1838,1858-1860
+  s_ff0c7327b23488::t_10bda845810f4d 1499-1501,1523-1525
+  s_ff0c7327b23488::t_68b0bba0b88d50 1604-1605,1630-1632
+  s_ff0c7327b23488::t_dd29482ed5ded4 1863-1865,1885-1887
+static/portfolio.html
+  s_ff0c7327b23488::t_43314a5d65428b 178-206
+  s_ff0c7327b23488::t_1d697839c8f044 70-74
+static/stock.html
+  s_ff0c7327b23488::t_878328c8006720 276-278,299-301
+  s_ff0c7327b23488::t_615a041f2b4eaf 223,304-306,327-329
+  s_ff0c7327b23488::t_31821c399e9f1f 226-249,252
+  s_ff0c7327b23488::t_1eee05575bb1bb 112-118
+  s_ff0c7327b23488::t_824c356e13f06a 224-225
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ca1e94a69ebfa7ccf981fdc7364135253aaaadc8",
+  "prompts": {},
+  "logical_commit_id": "ca1e94a69ebfa7ccf981fdc7364135253aaaadc8",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 138,
+      "total_deletions": 23
+    }
+  }
+}
