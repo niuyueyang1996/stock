@@ -1,0 +1,30 @@
+app/services/ai.py
+  s_ff0c7327b23488::t_9b0821340a0b91 1832,1834
+  s_ff0c7327b23488::t_c5cfab17ad5340 1966-1967
+app/data/fundflow.py
+  s_ff0c7327b23488::t_d822ecd0cd94c9 191,197-201
+  s_ff0c7327b23488::t_8c3a6d61c38a4f 158-159,163,168,182-184
+tests/test_ai_fundflow.py
+  s_ff0c7327b23488::t_ddde5a7a3f74d4 140-155
+  s_ff0c7327b23488::t_045ec34d98b6b5 42-43,48-49,51
+  s_ff0c7327b23488::t_d0f847886d4449 139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d90ae270cf152f3e94efd23206e6333d71186a21",
+  "prompts": {},
+  "logical_commit_id": "d90ae270cf152f3e94efd23206e6333d71186a21",
+  "sessions": {
+    "s_ff0c7327b23488": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "33989b74-efa9-4cb7-8274-04a38a399b8f",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 39,
+      "total_deletions": 12
+    }
+  }
+}
