@@ -1,0 +1,23 @@
+app/jobs.py
+  s_f29066af32bbbf::t_52226ed2888de6 715-717
+  s_f29066af32bbbf::t_cf01d4b1fa397a 172,185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "14fb4e3e7f611be0ffb1d15297f907a60312e27e",
+  "prompts": {},
+  "logical_commit_id": "14fb4e3e7f611be0ffb1d15297f907a60312e27e",
+  "sessions": {
+    "s_f29066af32bbbf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bdf8dcc7-9d1e-4493-87a3-f05d89584e19",
+        "model": "deepseek-v4-flash"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>",
+      "total_additions": 5,
+      "total_deletions": 3
+    }
+  }
+}
