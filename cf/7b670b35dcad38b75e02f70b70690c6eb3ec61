@@ -1,0 +1,32 @@
+CLAUDE.md
+  s_b2869fccf4a95f::t_bc1abe44040003 79-80
+app/api/ai.py
+  s_b2869fccf4a95f::t_f5eff9efdb20f3 35-38,225-239
+app/services/ai.py
+  s_b2869fccf4a95f::t_61ab4f83b84064 3083-3118
+app/services/ai_scoring.py
+  s_b2869fccf4a95f::t_8369f9f67650f2 352,358-366
+static/js/common.js
+  s_b2869fccf4a95f::t_d36a0864d64aed 1449,1451,1454-1462,1466-1467,1469,1472-1474,1480-1481,1491,1505-1515
+tests/test_ai.py
+  s_b2869fccf4a95f::t_c84b2420194609 532,536-541,544-567
+tests/test_ai_scoring.py
+  s_b2869fccf4a95f::t_03f4f4554d9177 560-562
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cf7b670b35dcad38b75e02f70b70690c6eb3ec61",
+  "prompts": {},
+  "logical_commit_id": "cf7b670b35dcad38b75e02f70b70690c6eb3ec61",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
