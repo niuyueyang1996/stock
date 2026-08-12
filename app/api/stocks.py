@@ -276,10 +276,38 @@ def _read_etf_stock_list_cache() -> list[dict]:
     return []
 
 
-def _load_etf_list() -> list[dict]:
-    """场内 ETF 代码+名称（东财 fund_etf_spot_em）。本地文件缓存每日刷新。
+def _merge_etf_lists() -> dict[str, str]:
+    """东财两源合并：code → name（保序去重，spot_em 名称优先）。任一源失败另一源兜底，全失败空 dict。
 
-    仅启动预热时联网下载；搜索 / 名称回填只读缓存（GET 零网络）。
+    fund_etf_spot_em（实时行情）有货币 ETF 但漏「指数型-固收」债券 ETF（511010–5115xx 全缺），
+    fund_etf_fund_daily_em（日行情）反之有债券 ETF 但缺货币 ETF——取并集补齐。
+    """
+    import akshare as ak
+
+    merged: dict[str, str] = {}
+    try:
+        df = ak.fund_etf_spot_em()
+        for _, r in df.iterrows():
+            code = str(r["代码"]).strip()
+            if code:
+                merged.setdefault(code.zfill(6), str(r["名称"]))
+    except Exception:  # noqa: BLE001 单源失败继续，另一源兜底
+        logger.exception("[市场列表] ETF 实时行情源失败，尝试日行情源补齐")
+    try:
+        df = ak.fund_etf_fund_daily_em()
+        for _, r in df.iterrows():
+            code = str(r["基金代码"]).strip()
+            if code:
+                merged.setdefault(code.zfill(6), str(r["基金简称"]))
+    except Exception:  # noqa: BLE001 ETF 列表失败不影响 A 股/港股搜索
+        logger.exception("[市场列表] ETF 日行情源失败")
+    return merged
+
+
+def _load_etf_list() -> list[dict]:
+    """场内 ETF 代码+名称（东财两源合并：fund_etf_spot_em + fund_etf_fund_daily_em）。
+
+    本地文件缓存每日刷新；仅启动预热时联网下载；搜索 / 名称回填只读缓存（GET 零网络）。
     A股列表 stock_info_a_code_name 不含 ETF，单独拉取。
     """
     path = _etf_stock_list_path()
@@ -288,11 +316,10 @@ def _load_etf_list() -> list[dict]:
         if (date.today() - date.fromtimestamp(mtime)).days < 1:
             return _read_etf_stock_list_cache()
     try:
-        import akshare as ak
-
-        df = ak.fund_etf_spot_em()
-        rows = [{"code": str(r["代码"]).zfill(6), "name": str(r["名称"]), "market": "etf"}
-                for _, r in df.iterrows() if str(r["代码"]).strip()]
+        merged = _merge_etf_lists()
+        if not merged:
+            return _read_etf_stock_list_cache()
+        rows = [{"code": c, "name": n, "market": "etf"} for c, n in merged.items()]
     except Exception:  # noqa: BLE001 ETF 列表失败不影响 A 股/港股搜索
         logger.exception("[市场列表] ETF 列表下载失败")
         return _read_etf_stock_list_cache()

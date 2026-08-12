@@ -405,6 +405,41 @@ def test_ensure_stdio_noop_when_present():
     assert sys.stderr is err
 
 
+def test_load_etf_list_merges_bond_etf(monkeypatch):
+    """ETF 列表两源合并：fund_etf_spot_em 缺债券 ETF、fund_etf_fund_daily_em 缺货币 ETF → 并集补齐。
+
+    东财实时行情源（spot_em）漏「指数型-固收」债券 ETF（511270 十年地方债等 511010–5115xx 全缺），
+    日行情源（fund_etf_fund_daily_em）反之缺货币 ETF；合并后债券/货币都要能搜到。
+    """
+    import akshare as ak
+
+    import pandas as pd
+
+    from app.api import stocks as stocks_api
+
+    spot = pd.DataFrame({"代码": ["510300", "511600"], "名称": ["沪深300ETF", "华安日日鑫ETF"]})
+    daily = pd.DataFrame({"基金代码": ["510300", "511270"], "基金简称": ["沪深300ETF", "10年地方债ETF海"]})
+
+    # 1) 正常合并：债券 ETF 补入，名称 spot_em 优先，按代码并集去重
+    monkeypatch.setattr(ak, "fund_etf_spot_em", lambda: spot)
+    monkeypatch.setattr(ak, "fund_etf_fund_daily_em", lambda: daily)
+    merged = stocks_api._merge_etf_lists()
+    assert set(merged) == {"510300", "511600", "511270"}
+    assert merged["511270"] == "10年地方债ETF海"   # 来自日行情源
+    assert merged["510300"] == "沪深300ETF"        # spot 优先
+    # 2) spot_em 失败 → 日行情源兜底，债券 ETF 仍在
+    monkeypatch.setattr(ak, "fund_etf_spot_em", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert set(stocks_api._merge_etf_lists()) == {"510300", "511270"}
+    # 3) 日行情源失败 → spot 兜底，货币 ETF 不受影响
+    monkeypatch.setattr(ak, "fund_etf_spot_em", lambda: spot)
+    monkeypatch.setattr(ak, "fund_etf_fund_daily_em",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert set(stocks_api._merge_etf_lists()) == {"510300", "511600"}
+    # 4) 两源全失败 → 空 dict（调用方回退旧缓存）
+    monkeypatch.setattr(ak, "fund_etf_spot_em", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert stocks_api._merge_etf_lists() == {}
+
+
 def test_expected_growth_crud(client):
     """预期年同比增速可保存并读取。"""
     r = client.put("/api/stocks/600000/expected-growth", json={"growth": -15.0})
