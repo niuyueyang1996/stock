@@ -1,0 +1,22 @@
+app/api/stocks.py
+  s_b2869fccf4a95f::t_d1a7d5d05b1842 279-306,308,310,319-322
+tests/test_api.py
+  s_b2869fccf4a95f::t_6d7685610496bc 408-442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "215eddfe4fb09a9df71026c6ba8e43901d86870e",
+  "prompts": {},
+  "logical_commit_id": "215eddfe4fb09a9df71026c6ba8e43901d86870e",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
