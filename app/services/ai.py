@@ -3080,6 +3080,42 @@ def get_default_prompts() -> dict:
     return dict(_EDITABLE_PROMPTS)
 
 
+# 用户自定义提示词覆盖：config 表 ai_prompt_overrides 存 {kind: 自定义文本}。
+# 空/None 表示该项未覆盖（用默认）。仅保存用户真正改过的项，恢复默认即清除该项。
+_PROMPT_OVERRIDES_KEY = "ai_prompt_overrides"
+
+
+def get_prompt_overrides() -> dict:
+    """已保存的用户自定义提示词 {kind: 文本}；无则空 dict。读失败不影响调用。"""
+    try:
+        with get_conn() as c:
+            row = c.execute("SELECT value FROM config WHERE key=?", (_PROMPT_OVERRIDES_KEY,)).fetchone()
+        if row and str(row["value"] or "").strip():
+            d = json.loads(row["value"])
+            if isinstance(d, dict):
+                return {k: str(v).strip() for k, v in d.items() if str(v or "").strip()}
+    except Exception:  # noqa: BLE001 读配置失败不影响调用
+        pass
+    return {}
+
+
+def save_prompt_overrides(overrides: dict) -> dict:
+    """保存用户自定义提示词：{kind: 文本} 覆盖/新增，None 或空串清除该项。返回保存后的完整覆盖。"""
+    cur = get_prompt_overrides()
+    for kind, text in (overrides or {}).items():
+        if text is None or not str(text).strip():
+            cur.pop(kind, None)
+        else:
+            cur[kind] = str(text).strip()
+    with get_conn() as c:
+        c.execute(
+            "INSERT INTO config(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_PROMPT_OVERRIDES_KEY, json.dumps(cur, ensure_ascii=False)),
+        )
+    return dict(cur)
+
+
 def get_stock_fundflow_report(code: str, window: str | None = None) -> dict | None:
     """该股最近落库资金流结果（跨 batch/single 取最新）。
 

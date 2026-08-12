@@ -529,20 +529,42 @@ def test_reasoning_api(client):
 
 
 def test_ai_prompts_api(client):
-    """GET /ai/prompts：返回 9 个入口的可编辑重点要求块（非完整 system，不含 JSON schema）。"""
+    """GET /ai/prompts：defaults=9 个入口的可编辑重点要求块（非完整 system，不含 JSON schema）+ saved=用户自定义覆盖。"""
     r = client.get("/api/ai/prompts")
     assert r.status_code == 200
     d = r.json()["data"]
-    assert set(d) == {"stock", "fundflow", "batch", "portfolio", "daily",
-                      "news", "technical", "news_batch", "tech_batch"}
-    for k, v in d.items():
+    assert set(d) == {"defaults", "saved"}
+    assert d["saved"] == {}            # 尚未保存自定义覆盖
+    defs = d["defaults"]
+    assert set(defs) == {"stock", "fundflow", "batch", "portfolio", "daily",
+                         "news", "technical", "news_batch", "tech_batch"}
+    for k, v in defs.items():
         assert isinstance(v, str) and v
         assert "请输出严格 JSON" not in v      # 不含 schema 结构，用户只看可编辑要求
-    assert "共振" in d["batch"]                # 批量块保留共振/虹吸/分化措辞
-    assert "消息面" in d["news"] and "证伪条件" in d["technical"]
-    assert "十个维度" in d["stock"] and "消息面" in d["stock"] and "技术面" in d["stock"]
-    assert "结构集中度" in d["portfolio"] and "标签契合" in d["portfolio"]
-    assert "可复制" in d["daily"]
+    assert "共振" in defs["batch"]             # 批量块保留共振/虹吸/分化措辞
+    assert "消息面" in defs["news"] and "证伪条件" in defs["technical"]
+    assert "十个维度" in defs["stock"] and "消息面" in defs["stock"] and "技术面" in defs["stock"]
+    assert "结构集中度" in defs["portfolio"] and "标签契合" in defs["portfolio"]
+    assert "可复制" in defs["daily"]
+
+
+def test_ai_prompts_save_override(client):
+    """PUT /ai/prompts：保存/清除用户自定义提示词覆盖；GET 后 saved 反映覆盖，defaults 不变。"""
+    r = client.put("/api/ai/prompts", json={"overrides": {"portfolio": "重点看红利板块均衡度"}})
+    assert r.status_code == 200
+    assert r.json()["data"]["saved"] == {"portfolio": "重点看红利板块均衡度"}
+    d = client.get("/api/ai/prompts").json()["data"]
+    assert d["saved"]["portfolio"] == "重点看红利板块均衡度"
+    assert "红利" not in d["defaults"]["portfolio"]     # 默认不被覆盖
+    # 空串/None → 清除该项恢复默认
+    for clear in ("", None):
+        client.put("/api/ai/prompts", json={"overrides": {"portfolio": clear}})
+        d = client.get("/api/ai/prompts").json()["data"]
+        assert d["saved"] == {}
+    # 非法 kind 也保存（后端只当键值存；弹窗只传合法 kind）
+    client.put("/api/ai/prompts", json={"overrides": {"daily": "  ", "news": "只看公告"}})
+    d = client.get("/api/ai/prompts").json()["data"]
+    assert d["saved"] == {"news": "只看公告"}           # 空白串被剥离
 
 
 def test_ai_report_custom_prompt(client, monkeypatch):

@@ -32,6 +32,10 @@ class RuntimeBody(BaseModel):
     request_timeout: int | None = None   # AI 请求超时（秒）
 
 
+class PromptOverridesBody(BaseModel):
+    overrides: dict[str, str | None] = {}   # {kind: 自定义提示词}；null/空串=清除该项恢复默认
+
+
 class ReportBody(BaseModel):
     system_prompt: str | None = None   # 覆盖默认诊股指令（前端弹窗可编辑后透传）
     intensity: str = "normal"   # 分析强度 fast/normal/deep（弹窗可选，追加强度指令）
@@ -218,8 +222,21 @@ def fundflow_analysis(body: FundflowAnalysisBody):
 
 @router.get("/ai/prompts")
 def default_prompts():
-    """各 AI 分析入口默认 system prompt（前端弹窗预览/编辑，单一来源）。纯常量零网络。"""
-    return {"ok": True, "data": ai_svc.get_default_prompts()}
+    """各 AI 分析入口的可编辑重点要求：defaults=系统默认（单一来源，纯常量零网络），
+    saved=用户已保存的自定义覆盖（弹窗默认显示；未保存则用 defaults）。"""
+    return {"ok": True, "data": {
+        "defaults": ai_svc.get_default_prompts(),
+        "saved": ai_svc.get_prompt_overrides(),
+    }}
+
+
+@router.put("/ai/prompts")
+def save_prompts(body: PromptOverridesBody):
+    """保存用户自定义 AI 提示词覆盖（{kind: 文本}）；null/空串=清除该项恢复默认。
+
+    用户在弹窗改过才保存，弹窗下一次打开默认显示已保存版本，不用每次重改。
+    """
+    return {"ok": True, "data": {"saved": ai_svc.save_prompt_overrides(body.overrides)}}
 
 
 @router.post("/ai/fundflow-batch")

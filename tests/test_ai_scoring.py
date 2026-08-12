@@ -557,6 +557,9 @@ def test_score_portfolio_intensity_html_gating(monkeypatch):
     svc.score_portfolio(intensity="deep")
     assert "HTML 深度分析强制规范" in captured["system"]
     assert '"html"' in captured["user"]
+    # 深入 HTML 规范必须要求输出逐标的「组合调仓指引」（含关键价格/目标仓位）
+    assert "组合调仓指引" in captured["system"]
+    assert "关键价格" in captured["system"] and "目标仓位" in captured["system"]
 
 
 def test_score_daily_intensity_html_gating(monkeypatch):

@@ -1446,29 +1446,39 @@ async function refreshFlowBeforeAnalysis(code) {
   } catch (e) { /* 刷新失败不阻断，分析用缓存数据 */ }
 }
 
-// ============ AI 指令预览/编辑弹窗（5 个分析入口共用） ============
+// ============ AI 指令预览/编辑弹窗（9 个分析入口共用） ============
 let _promptsCache = null;
-// 各 AI 分析入口默认 system prompt（后端单一来源，前端只读缓存）
+// 各 AI 分析入口默认 system prompt + 用户已保存的自定义覆盖（后端单一来源，前端只读缓存）
 async function getDefaultPrompts() {
   if (_promptsCache) return _promptsCache;
-  try { const d = await api('/ai/prompts', { silent: true }); _promptsCache = d || {}; }
-  catch (e) { _promptsCache = {}; }
+  try {
+    const d = await api('/ai/prompts', { silent: true });
+    _promptsCache = {
+      defaults: (d && d.defaults) || {},
+      saved: (d && d.saved) || {},
+    };
+  } catch (e) {
+    _promptsCache = { defaults: {}, saved: {} };
+  }
   return _promptsCache;
 }
 
-// 弹窗展示某入口的默认指令，用户可编辑/恢复默认/取消 + 选分析强度（快速/普通/深入）。
+// 弹窗展示某入口的提示词（有已保存的自定义版本则默认显示它，否则显示默认），
+// 用户可编辑/恢复默认/取消 + 选分析强度（快速/普通/深入）。
 // 确定后 onConfirm(customPrompt|null, intensity)：内容与默认一致 → null（后端用默认）；
-// 修改 → 自定义文本。数据点不展示。
+// 修改 → 自定义文本，并自动持久化（下次打开默认沿用，不用每次重改）。
 async function openPromptEditor(kind, onConfirm) {
   const prompts = await getDefaultPrompts();
-  const def = prompts[kind] || '';
+  const def = prompts.defaults[kind] || '';
+  const savedVal = prompts.saved[kind] || '';
+  const init = savedVal || def;
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
   mask.innerHTML = `
     <div class="modal" style="width:680px;max-width:94vw">
       <h3>🤖 AI 要求</h3>
-      <div class="muted" style="font-size:12px;margin-bottom:8px">以下是要发给 AI 的重点要求，可修改后确认；系统完整指令与分析数据会自动附加，不在弹窗展示。</div>
-      <textarea rows="6" spellcheck="false" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;line-height:1.7;padding:8px">${esc(def)}</textarea>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">以下是要发给 AI 的重点要求，可修改后确认；系统完整指令与分析数据会自动附加，不在弹窗展示。修改后的内容会自动保存，下次打开沿用。</div>
+      <textarea rows="6" spellcheck="false" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;line-height:1.7;padding:8px">${esc(init)}</textarea>
       <div style="display:flex;align-items:center;gap:4px;margin:8px 0 4px;font-size:13px">
         <span class="muted" style="font-size:12px;margin-right:6px">分析强度</span>
         <label><input type="radio" name="peIntensity" value="fast"> 快速</label>
@@ -1478,7 +1488,7 @@ async function openPromptEditor(kind, onConfirm) {
       <div class="modal-actions">
         <span class="link muted" id="peCancel">取消</span>
         <span class="grow" style="flex:1"></span>
-        <button class="btn" id="peReset" title="恢复为系统默认指令">恢复默认</button>
+        <button class="btn" id="peReset" title="恢复为系统默认指令（同时清除已保存的自定义版本）">恢复默认</button>
         <button class="btn primary" id="peOk">确定并发送</button>
       </div>
     </div>`;
@@ -1492,7 +1502,17 @@ async function openPromptEditor(kind, onConfirm) {
     const v = ta.value.trim();
     const inten = mask.querySelector('input[name="peIntensity"]:checked').value;
     close();
-    onConfirm(v && v !== def ? v : null, inten);
+    // 与默认一致（或清空）→ 用默认并清除已保存；不同 → 保存自定义版本（静默，失败不阻断分析）
+    const custom = (v && v !== def) ? v : null;
+    const ov = {};
+    if (custom) { if (v !== savedVal) ov[kind] = v; }
+    else if (savedVal) { ov[kind] = null; }
+    if (Object.keys(ov).length) {
+      api('/ai/prompts', { method: 'PUT', body: { overrides: ov } }).then(() => {
+        prompts.saved[kind] = custom ? v : undefined;
+      }).catch(() => {});
+    }
+    onConfirm(custom, inten);
   };
 }
 
