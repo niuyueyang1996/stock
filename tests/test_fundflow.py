@@ -233,6 +233,86 @@ def test_sync_fundflow_skips_weekend():
     assert sync_fundflow("600036", datetime(2026, 8, 8, 10, 0))["reason"] == "skipped"  # 周六
 
 
+def test_sync_fundflow_filters_future_minutes(monkeypatch):
+    """盘前误拉昨日全天分笔：只写不超前当前时刻的点，并清理今日 trade_date 下的超前残留。
+
+    腾讯分笔无日期，盘前刷新会把昨日全天分笔标今日落库 → 上午却看到下午数据。
+    sync_fundflow 落库前按「ts <= 当前时刻」过滤超前点，并 DELETE 掉今日 trade_date 下超前的残留。
+    """
+    from app.data.base import FundflowDay
+    from app.data.cache import get_fundflow_min
+    from app.data.fundflow import FundflowPoint
+    from app.models.db import get_conn
+    from app.services import refresh as rmod
+
+    # 预置残留：今日 trade_date 下有 15:28 的点（昨日污染），应被清理
+    with get_conn() as c:
+        c.execute(
+            """INSERT INTO fundflow_15m_cache(code, trade_date, ts, main_net, super_large_net,
+                 large_net, medium_net, small_net, xs_net, buy_amount, sell_amount)
+               VALUES('X999','2026-08-06','15:28',20,10,10,0,0,0,0,0)""")
+
+    class _FakeInst:
+        kind = "ashare"
+        has_fundflow = True
+        has_intraday_quote = False
+        has_multi_day_fundflow = False
+
+        def daily_fundflow(self):
+            return [FundflowDay(date="2026-08-06", netamount=100, main_net=60,
+                                super_large_net=30, large_net=30, medium_net=20,
+                                small_net=10, main_net_pct=60.0)]
+
+        def fundflow_intraday(self):
+            # 模拟盘前拉到昨日全天：含未发生的下午点 15:28
+            return [FundflowPoint(ts="09:30", main_net=10, super_large_net=5, large_net=5,
+                                  medium_net=3, small_net=2),
+                    FundflowPoint(ts="15:28", main_net=20, super_large_net=10, large_net=10,
+                                  medium_net=0, small_net=0)]
+
+        def fundflow_bands(self):
+            return None
+
+    monkeypatch.setattr(rmod, "get_instrument", lambda code: _FakeInst())
+    r = rmod.sync_fundflow("X999", datetime(2026, 8, 6, 10, 0))
+    assert r["reason"] == "ok"
+    rows = get_fundflow_min("X999", "2026-08-06")
+    ts = [p["ts"] for p in rows]
+    assert ts == ["09:30"]         # 已发生时段写入；15:28 超前点被过滤且残留被清理
+
+
+def test_fetch_ticks_resets_stale_cursor(monkeypatch):
+    """游标末笔时间超前于当前时刻（盘前误拉昨日分笔）→ 重置快照全量重拉。
+
+    不重置的话盘中增量刷新会被 after_ts 过滤掉今日全部分笔，永远停在昨日污染数据。
+    """
+    from datetime import date
+
+    from app.data.raw import raw_tencent
+
+    # 用独立 dict 避免污染其它测试（monkeypatch teardown 自动还原）
+    monkeypatch.setattr(raw_tencent, "_TICK_SNAPSHOT", {})
+    monkeypatch.setattr(raw_tencent, "_TICK_CURSOR", {})
+    today = date.today().isoformat()
+    key = ("600036", today)
+    # 预置被污染的游标与快照：末笔 15:28（昨日残留）
+    raw_tencent._TICK_SNAPSHOT[key] = [("15:28:00", 100.0, 1, 10.0)]
+    raw_tencent._TICK_CURSOR[key] = {"page": 36, "ts": "15:28:00"}
+
+    class _FixedNow:
+        @staticmethod
+        def now():
+            return datetime(2026, 8, 13, 10, 0)   # 当前上午
+
+    monkeypatch.setattr(raw_tencent, "datetime", _FixedNow)
+    # 全量重拉：p=0 返回今日上午分笔，p=1 空页结束
+    monkeypatch.setattr(raw_tencent, "_fetch_tick_page",
+                        lambda sym, pg: [("09:30:05", 10.0, 1, 9.9)] if pg == 0 else [])
+    ticks = raw_tencent.fetch_ticks("600036")
+    assert ticks and ticks[0][0].startswith("09:")           # 拉到了今日上午分笔
+    assert raw_tencent._TICK_CURSOR[key]["ts"].startswith("09:")   # 新游标末笔不再超前
+
+
 def _hk_days_sample():
     """模拟腾讯港股 day/query 近3日分时（时间 HHMM、累计量额）。"""
     return [

@@ -61,9 +61,9 @@ FUNDFLOW_HISTORY_MIN_DAYS = 30
 # （指数日K缺失的真实教训），判定稀疏后强制回填全量窗口。
 HISTORY_MIN_DAYS = 60
 
-# 盘中动态自动刷新窗口：09:15 开盘后至港股收盘 16:10（A 股 15:00、港股 16:10，取晚者）
-_INTRADAY_END = dtime(16, 10)
-# 每日收盘后全量同步触发点：同样按港股 16:10 收盘（非 15:00，否则港股尾盘数据未定格）
+# 盘中动态自动刷新窗口：09:15 开盘后至 16:30（用户确认：16:30 后收盘不再刷动态数据）
+_INTRADAY_END = dtime(16, 30)
+# 每日收盘后全量同步触发点：按港股 16:10 收盘（非 15:00，否则港股尾盘数据未定格）
 _CLOSE_SYNC_TIME = dtime(16, 10)
 
 # 刷新互斥（与 Excel 导入同口径：防双点搅进度）
@@ -400,13 +400,25 @@ def sync_fundflow(code: str, now: datetime) -> dict:
         pass
     day_flow = [day_flow_by_date[today]] if today in day_flow_by_date else []
     intraday = intraday_by_date.get(today) or []
+    # 分笔接口不返回日期：盘前首次拉取会拿到「昨日全天分笔」（09:25~15:xx），不校验就会把
+    # 昨日数据标今日落库，盘中上午却看到下午数据（踩过）。只认「不超前于当前时刻」的点为今日，
+    # 并清理今日 trade_date 下超前的残留；当日五档同理——分笔超前说明非今日，不写。
+    # 指数走 index_intraday_cache（mkline 带日期），不适用此过滤。
+    is_index_intraday = inst.has_intraday_quote and getattr(inst, "kind", None) == "index"
+    now_hm = now.strftime("%H:%M")
+    intraday_ok = intraday if is_index_intraday else [p for p in intraday if p.ts <= now_hm]
+    if day_flow and not intraday_ok and not is_index_intraday:
+        day_flow = []
     if day_flow:
         upsert_daily_fundflow(code, today, day_flow[0], bands)
     if inst.has_intraday_quote:
-        if getattr(inst, "kind", None) != "index":
+        if not is_index_intraday:
             upsert_index_intraday(code, today, intraday)
-    elif intraday:
-        upsert_fundflow_min(code, today, intraday)
+    elif intraday_ok:
+        with get_conn() as c:
+            c.execute("DELETE FROM fundflow_15m_cache WHERE code=? AND trade_date=? AND ts>?",
+                      (code, today, now_hm))
+        upsert_fundflow_min(code, today, intraday_ok)
     # 多日窗口：今日之外的历史日一并落库（港股近5日，避免覆盖当日 bands）。
     # 指数分时（量价 dict）已在上面 try 块按日落库到 index_intraday_cache，这里只回写
     # 非指数的 FundflowPoint 分时（fundflow_15m_cache）；否则对指数误调 upsert_fundflow_min
@@ -570,7 +582,7 @@ def throttle_stock_full_items(code: str, items: list[str] | None) -> list[str] |
 # ---------- 后台自动刷新时机（纯函数，便于测试） ----------
 
 def should_run_dynamic_loop(now: datetime | None = None, busy: bool = False) -> bool:
-    """盘中动态自动刷新时机：交易日 09:15 开盘后至港股收盘 16:10，且无刷新任务占用。"""
+    """盘中动态自动刷新时机：交易日 09:15 开盘后至 16:30（收盘后不再刷），且无刷新任务占用。"""
     now = now or datetime.now()
     if busy or not is_trade_day(now.date()):
         return False

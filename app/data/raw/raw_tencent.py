@@ -5,7 +5,7 @@ normalizers 与 app/data/fundflow.py。
 """
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import requests
@@ -83,6 +83,16 @@ def fetch_ticks(code: str) -> list[tuple[str, float, int]]:
         cursor = _TICK_CURSOR.get(key)
         start_page = cursor["page"] if cursor else 0
         after_ts = cursor["ts"] if cursor else None
+
+    # 自愈：分笔接口不返回日期，盘前首次拉取会把「昨日全天分笔」当作今日缓存
+    # （key 标了今天）。若游标末笔时间超前于当前时刻，说明快照是昨日残留——
+    # 盘中增量刷新会被 after_ts 过滤掉今日全部分笔、永远并入不了。重置快照全量重拉。
+    if after_ts and after_ts[:5] > datetime.now().strftime("%H:%M"):
+        with _TICK_LOCK:
+            _TICK_SNAPSHOT.pop(key, None)
+            _TICK_CURSOR.pop(key, None)
+        start_page = 0
+        after_ts = None
 
     rows_by_page: dict[int, list] = {}
     if start_page == 0:

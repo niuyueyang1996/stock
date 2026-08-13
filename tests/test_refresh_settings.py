@@ -144,14 +144,16 @@ def test_should_run_daily_sync():
 
 
 def test_should_run_dynamic_loop():
-    """交易日盘中（09:15~16:10）且无刷新任务 → True；否则 False。"""
+    """交易日盘中（09:15~16:30）且无刷新任务 → True；否则 False。"""
     from app.services import refresh as rmod
 
     mon10 = datetime(2026, 8, 10, 10, 0)
     assert rmod.should_run_dynamic_loop(mon10, busy=False) is True
     assert rmod.should_run_dynamic_loop(mon10, busy=True) is False
     assert rmod.should_run_dynamic_loop(datetime(2026, 8, 10, 8, 0)) is False    # 开盘前
-    assert rmod.should_run_dynamic_loop(datetime(2026, 8, 10, 16, 20)) is False  # 收盘后（港股16:10）
+    assert rmod.should_run_dynamic_loop(datetime(2026, 8, 10, 16, 20)) is True   # 收盘缓冲段仍刷
+    assert rmod.should_run_dynamic_loop(datetime(2026, 8, 10, 16, 30)) is False  # 16:30 后停刷
+    assert rmod.should_run_dynamic_loop(datetime(2026, 8, 10, 17, 0)) is False   # 收盘后（16:30）
     assert rmod.should_run_dynamic_loop(datetime(2026, 8, 8, 10, 0)) is False     # 周六
 
 

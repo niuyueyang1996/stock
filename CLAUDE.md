@@ -143,7 +143,9 @@ tests/             pytest（含 Windows 打包支持测试，全程离线，conf
 - `_MIGRATE_COLUMNS` 加新列后，旧库需手动 `ALTER TABLE`（migrate 只在版本落后时跑；已到目标版本不会重跑）。
 - **v5 迁移彻底移除公式评分**：`_drop_formula_scoring` DROP `trade_score_snapshots`/`daily_scores`；历史 v2 迁移里的 `_recreate_daily_scores_nullable` 保留只为旧库升级（新库该表未建，`PRAGMA table_info` 空表早退）。
 - AI 打分是慢操作：`chat_json` 最长 180s；后台自动打分失败只记日志，当日保持"未评分"（`maybe_auto_score_daily` 先同步 invalidate）。`_trigger_ai_daily`/`_invalidate_portfolio_ai` 必须放在写事务外调用。
-- 全市场列表（A股 `stock_info_a_code_name` + 场内 ETF `fund_etf_spot_em` 存 `etf_list.json` + 港股）只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
+- 全市场列表（A股 `stock_info_a_code_name` + 场内 ETF **两源合并** `fund_etf_spot_em`（实时行情，缺「指数型-固收」债券 ETF 511010–5115xx）∪ `fund_etf_fund_daily_em`（日行情，缺货币 ETF）取代码并集、`_merge_etf_lists` 抽函数，存 `etf_list.json` + 港股）只在**启动后台预热**时联网下载（`preload_market_lists`，幂等：缓存新鲜读文件不发网络）；`/stocks/search` 与名称回填只读本地缓存（GET 零网络、绝不阻塞）；测试在 conftest mock 为空防联网。
+- **资金流分时盘前污染**：腾讯分笔接口（stock.gtimg.cn detail）**不返回日期**，盘前刷新会拉到**昨日全天分笔** → `sync_fundflow` 用 `today=now.date()` 把昨日数据标今日落库，盘中上午却见下午 15:xx（踩过）。修复双保险：①`sync_fundflow` 落库前按 `p.ts <= now` 过滤超前点 + `DELETE fundflow_15m_cache` 今日 trade_date 下超前残留（指数走 index_intraday_cache 带日期，跳过）；②`fetch_ticks` 检测游标末笔时间超前于当前时刻 → 自愈重置快照全量重拉（否则盘中增量被 `after_ts` 过滤、永远停在污染数据，须重启进程才恢复）。测试 `test_sync_fundflow_filters_future_minutes`/`test_fetch_ticks_resets_stale_cursor`。
+- **动态刷新窗口**：盘中自动刷新 `_INTRADAY_END=16:30`（用户确认 16:30 后收盘不再刷动态数据，`should_run_dynamic_loop`）；每日收盘后全量同步 `_CLOSE_SYNC_TIME` 仍 16:10（港股尾盘数据定格）。
 - Windows 跑 pytest 需 `--basetemp`（默认临时目录权限失败）。
 - `_ensure_stock` 写 name；`stock_detail` 名称缺失时从列表回填到 stocks 表。
 - **送转/拆股后总股本会变（公司玩送转），季报 EPS 与雪球 reg_asset 都是旧股本基准**：`net_profit/EPS` 兜底只会还原旧股数 → 市值/PE/PB 全错（伯特利 603596 6.06亿→8.97亿，市值 161亿 vs 真实 239亿）。A 股总股本一律优先取腾讯实时「总市值÷现价」（`AshareInstrument.total_shares`，当天股数），雪球降级；净利/每股净资产折算时须用「每股净资产_最新股数」（当前股本口径）×当前股本，禁止报告期口径「每股净资产」×当前股本（虚高）。改完需全量刷新才更新 `financial_cache.total_shares`。
