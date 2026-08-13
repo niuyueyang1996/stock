@@ -1,0 +1,28 @@
+CLAUDE.md
+  s_b2869fccf4a95f::t_624f802acfaad5 146-148
+app/data/raw/raw_tencent.py
+  s_b2869fccf4a95f::t_67a736dba59362 8,86-95
+app/services/refresh.py
+  s_b2869fccf4a95f::t_6f69079ab404ab 64-66,403-411,415,417-421,585
+tests/test_fundflow.py
+  s_b2869fccf4a95f::t_ee163d39309e54 236-315
+tests/test_refresh_settings.py
+  s_b2869fccf4a95f::t_d8f0e0ba17c302 147,154-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "847ac8fc8f20a2abfd8779dceb678173ccc9cbd7",
+  "prompts": {},
+  "logical_commit_id": "847ac8fc8f20a2abfd8779dceb678173ccc9cbd7",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
