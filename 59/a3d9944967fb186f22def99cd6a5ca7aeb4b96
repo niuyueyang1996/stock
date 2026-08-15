@@ -1,0 +1,19 @@
+backend/internal/service/ai/ai_test.go
+  h_07352c0544a725 1-138
+backend/internal/service/ai/client.go
+  h_07352c0544a725 1-217
+backend/internal/service/ai/scorecard.go
+  h_07352c0544a725 1-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "59a3d9944967fb186f22def99cd6a5ca7aeb4b96",
+  "prompts": {},
+  "logical_commit_id": "59a3d9944967fb186f22def99cd6a5ca7aeb4b96",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
