@@ -9,15 +9,16 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
 )
 
 // fakeQuote 固定行情
-type fakeQuote struct{ q *CachedQuote }
+type fakeQuote struct{ q *quote.CachedQuote }
 
-func (f *fakeQuote) Get(code string) *CachedQuote {
+func (f *fakeQuote) Get(code string) *quote.CachedQuote {
 	if f.q == nil {
-		return &CachedQuote{Price: fptr(10.0), PrevClose: fptr(9.5)}
+		return &quote.CachedQuote{Price: fptr(10.0), PrevClose: fptr(9.5)}
 	}
 	return f.q
 }

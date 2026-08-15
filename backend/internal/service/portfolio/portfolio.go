@@ -12,19 +12,13 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
 )
 
 // QuoteReader 行情读取（注入 quote.Service 缓存行情）
 type QuoteReader interface {
-	Get(code string) *CachedQuote
-}
-
-// CachedQuote 与 quote 包对齐的最小接口
-type CachedQuote struct {
-	Price     *float64
-	PrevClose *float64
-	PctChange *float64
+	Get(code string) *quote.CachedQuote
 }
 
 // FxGetter 汇率读取

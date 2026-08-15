@@ -5,6 +5,7 @@ package holdings
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"stockanalyzer/internal/db/dao"
@@ -162,23 +163,61 @@ func (s *Service) RecordTrade(code, side string, price, quantity, fee float64, t
 	return id, h, err
 }
 
-// GetHoldings 持仓列表（含币种/缺失汇率标记）
+// GetHoldings 持仓列表（含名称/标签/币种/人民币成本/累计分红；按数量降序，对齐 Python）
 func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
-	rows := s.DB.GetHoldings(activeOnly)
+	var rows []struct {
+		dao.Holding
+		Name string  `gorm:"column:name"`
+		Tag  *string `gorm:"column:tag"`
+	}
+	q := s.DB.DB.Table("holdings h").
+		Select("h.*, COALESCE(s.name,'') AS name, s.tag").
+		Joins("LEFT JOIN stocks s ON h.code=s.code")
+	if activeOnly {
+		q = q.Where("h.status = ?", "active")
+	}
+	q.Order("h.quantity DESC").Scan(&rows)
+	// 累计分红一次查库
+	type divRow struct {
+		Code string
+		Sum  float64
+	}
+	var divs []divRow
+	s.DB.DB.Raw("SELECT code, COALESCE(SUM(-amount),0) AS sum FROM trades WHERE side='adjust' AND is_dividend=1 GROUP BY code").Scan(&divs)
+	divMap := map[string]float64{}
+	for _, d := range divs {
+		divMap[d.Code] = d.Sum
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, h := range rows {
 		currency := "CNY"
 		if h.Currency != nil {
 			currency = *h.Currency
 		}
+		tag := ""
+		if h.Tag != nil {
+			tag = *h.Tag
+		}
+		avgCostCny := h.AvgCostCny
+		if avgCostCny == nil && currency == "CNY" {
+			avgCostCny = &h.AvgCost
+		}
+		isETF := isETFCode(h.Code) || tag == "ETF"
 		out = append(out, map[string]any{
 			"code": h.Code, "quantity": h.Quantity, "avg_cost": h.AvgCost,
-			"avg_cost_cny": h.AvgCostCny, "total_buy": h.TotalBuy, "total_buy_cny": h.TotalBuyCny,
-			"currency": currency, "status": h.Status,
-			"missing_fx": h.AvgCostCny == nil && currency != "CNY",
+			"avg_cost_cny": avgCostCny, "total_buy": h.TotalBuy, "total_buy_cny": h.TotalBuyCny,
+			"currency": currency, "status": h.Status, "name": h.Name, "tag": tag,
+			"is_etf": isETF, "total_dividend": round(divMap[h.Code], 2),
+			"missing_fx": avgCostCny == nil && currency != "CNY",
 		})
 	}
 	return out
+}
+
+// isETFCode 场内 ETF 代码判定（51/56/58/15/16 开头）
+func isETFCode(code string) bool {
+	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
+		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
 }
 
 func strptr(s string) *string {
