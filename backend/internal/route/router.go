@@ -14,6 +14,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/ai"
+	"stockanalyzer/internal/service/dividend"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
@@ -40,6 +41,7 @@ type Services struct {
 	Jobs      *jobs.Manager
 	ConfigDAO *dao.ConfigDAO
 	AI        *ai.Service
+	Dividend  *dividend.Service
 }
 
 // Setup 注册全部路由
@@ -47,6 +49,10 @@ func Setup(r *gin.Engine, s *Services) {
 	api := r.Group("/api")
 
 	setupAIRoutes(api, s)
+	setupStockExtra2Routes(api, s)
+	setupIndicesExtraRoutes(api, s)
+	setupPortfolioExtraRoutes(api, s)
+	setupHoldingsImportRoutes(api, s)
 
 	// ---- system ----
 	api.GET("/health", func(c *gin.Context) {
@@ -110,7 +116,7 @@ func Setup(r *gin.Engine, s *Services) {
 			}
 			item["quote"] = indexQuoteOut(s, d.Code)
 			item["turnover"] = map[string]any{
-				"amount": nil, "prev_amount": nil, "chg_pct": nil, "state": nil, "as_of": nil, "basis": nil,
+				"amount": 0.0, "prev_amount": nil, "chg_pct": nil, "state": nil, "as_of": nil, "basis": nil,
 			}
 			out = append(out, item)
 		}
@@ -185,27 +191,8 @@ func Setup(r *gin.Engine, s *Services) {
 			tags = strings.Split(tagsQS, ",")
 		}
 		out := s.Portfolio.ComputePortfolio(tags)
-		// 权重：每股市值占比
-		stocks, _ := out["stocks"].([]map[string]any)
-		total := 0.0
-		for _, st := range stocks {
-			if v, ok := st["value_cny"].(*float64); ok && v != nil {
-				total += *v
-			}
-		}
-		var weights []map[string]any
-		for _, st := range stocks {
-			code, _ := st["code"].(string)
-			name, _ := st["name"].(string)
-			v := 0.0
-			if vv, ok := st["value_cny"].(*float64); ok && vv != nil {
-				v = *vv
-			}
-			weights = append(weights, map[string]any{
-				"code": code, "name": name, "value": v,
-				"weight": roundPct(v / total),
-			})
-		}
+		// 对齐 Python：直接返回 compute_portfolio 的 weights（含 tag/is_etf/currency/weight/value）
+		weights, _ := out["weights"].([]map[string]any)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": weights})
 	})
 
@@ -271,16 +258,15 @@ func Setup(r *gin.Engine, s *Services) {
 		kw := strings.TrimSpace(c.Query("keyword"))
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": searchStocks(s.DB, kw)})
 	})
-	// 预期增速/营收增速/支付率
+	// 预期增速/营收增速/支付率（对齐 Python：GET 返回 {code, growth, updated_at}）
 	api.GET("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		var g db.StockExpectedGrowth
-		err := s.DB.Where("code = ?", code).First(&g).Error
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": true, "data": nil})
+		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": nil, "updated_at": nil}})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": g.Growth})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g.Growth, "updated_at": g.UpdatedAt}})
 	})
 	api.PUT("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
@@ -289,7 +275,43 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		_ = c.ShouldBindJSON(&body)
 		_ = s.DB.Exec("INSERT INTO stock_expected_growth(code, growth, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET growth=excluded.growth, updated_at=excluded.updated_at", code, body.Growth).Error
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": body.Growth})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": body.Growth}})
+	})
+	api.GET("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
+		code := c.Param("code")
+		var g db.StockExpectedRevenueGrowth
+		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": nil, "updated_at": nil}})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g.Growth, "updated_at": g.UpdatedAt}})
+	})
+	api.PUT("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
+		code := c.Param("code")
+		var body struct {
+			Growth float64 `json:"growth"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		_ = s.DB.Exec("INSERT INTO stock_expected_revenue_growth(code, growth, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET growth=excluded.growth, updated_at=excluded.updated_at", code, body.Growth).Error
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": body.Growth}})
+	})
+	api.GET("/stocks/:code/expected-payout", func(c *gin.Context) {
+		code := c.Param("code")
+		var g db.StockExpectedPayout
+		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": nil, "updated_at": nil}})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": g.Payout, "updated_at": g.UpdatedAt}})
+	})
+	api.PUT("/stocks/:code/expected-payout", func(c *gin.Context) {
+		code := c.Param("code")
+		var body struct {
+			Growth float64 `json:"growth"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		_ = s.DB.Exec("INSERT INTO stock_expected_payout(code, payout, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET payout=excluded.payout, updated_at=excluded.updated_at", code, body.Growth).Error
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": body.Growth}})
 	})
 
 	// ---- trades ----

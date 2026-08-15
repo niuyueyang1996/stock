@@ -20,6 +20,7 @@ import (
 type LatestDividend struct {
 	ExDate     string
 	ReportDate string
+	Per10Share float64
 	PerShare   float64
 	Source     string
 }
@@ -56,7 +57,7 @@ func (s *Service) FetchLatestDividend(ctx context.Context, code string) *LatestD
 		last := ds[len(ds)-1]
 		return &LatestDividend{
 			ExDate: last.exDate, ReportDate: last.report,
-			PerShare: round4(last.per10 / 10), Source: "em",
+			Per10Share: round4(last.per10), PerShare: round4(last.per10 / 10), Source: "em",
 		}
 	}
 	// 降级：巨潮分红（无除权除息日 → 自动除权跳过，手动按钮仍可用）
@@ -69,7 +70,7 @@ func (s *Service) FetchLatestDividend(ctx context.Context, code string) *LatestD
 			}
 		}
 		if total > 0 {
-			return &LatestDividend{ExDate: "", ReportDate: "年报", PerShare: round4(total / 10), Source: "cninfo"}
+			return &LatestDividend{ExDate: "", ReportDate: "年报", Per10Share: round4(total), PerShare: round4(total / 10), Source: "cninfo"}
 		}
 	}
 	return nil

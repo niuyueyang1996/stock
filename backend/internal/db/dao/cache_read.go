@@ -43,7 +43,13 @@ func (d *CacheDAO) GetQuantiles(code string, asOf string) map[string]any {
 // GetDailyFundflow 指定日五档资金流
 func (d *CacheDAO) GetDailyFundflow(code, date string) *db.DailyFundflowCache {
 	var r db.DailyFundflowCache
-	if err := d.DB.Where("code = ? AND trade_date = ?", code, date).First(&r).Error; err != nil {
+	q := d.DB.Where("code = ?", code)
+	if date != "" {
+		q = q.Where("trade_date = ?", date)
+	} else {
+		q = q.Order("trade_date DESC")
+	}
+	if err := q.First(&r).Error; err != nil {
 		return nil
 	}
 	return &r

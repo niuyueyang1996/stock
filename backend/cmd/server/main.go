@@ -159,9 +159,8 @@ func main() {
 	svcs := &route.Services{
 		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
-		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc, AI: aiSvc,
+		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
 	}
-	_ = divSvc
 	_ = settingsSvc
 	_ = nw
 

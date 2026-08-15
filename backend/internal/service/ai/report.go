@@ -331,17 +331,22 @@ func (s *Service) StockReportSnapshotHash(code, modelName string) string {
 	if q := s.Quote.Get(code); q != nil {
 		price = q.Price
 	}
-	var reportDate string
-	if fin := s.Cache.GetFinancials(code); fin != nil {
-		reportDate = fin.ReportDate
+	// 对齐 Python：缺失字段用 null（Go 空串会与 Python 的 None 产生不同 hash）
+	var bucket any
+	if price != nil {
+		bucket = PriceBucket(price)
 	}
-	var flowDate string
+	var finDate any
+	if fin := s.Cache.GetFinancials(code); fin != nil {
+		finDate = fin.ReportDate
+	}
+	var flowDate any
 	if flow := s.Cache.GetDailyFundflow(code, ""); flow != nil {
 		flowDate = flow.TradeDate
 	}
 	payload := map[string]any{
-		"code": code, "price_bucket": PriceBucket(price),
-		"fin_report_date": reportDate, "fundflow_date": flowDate, "model": modelName,
+		"code": code, "price_bucket": bucket,
+		"fin_report_date": finDate, "fundflow_date": flowDate, "model": modelName,
 	}
 	b, _ := json.Marshal(payload)
 	sum := sha256.Sum256(b)
