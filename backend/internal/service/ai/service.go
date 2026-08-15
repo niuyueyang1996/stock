@@ -70,6 +70,7 @@ type Service struct {
 	SyncKline func(code string)
 }
 
+// New 构建 AI Service，注入 DB、AI 客户端、配置/缓存/模型/报告等 DAO 与行情/估值/组合/汇率依赖
 func New(g *gorm.DB, client AIClient, config *dao.ConfigDAO, cache *dao.CacheDAO,
 	models *dao.AIModelDAO, reports *dao.AIReportDAO, tagPrefs *dao.TagPrefDAO,
 	quoteSvc QuoteReader, live LiveComputer, pf PortfolioComputer, fx FxGetter) *Service {

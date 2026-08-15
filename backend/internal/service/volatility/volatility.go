@@ -25,6 +25,7 @@ type Service struct {
 	DB *gorm.DB
 }
 
+// New 构建波动率服务，注入数据库连接。
 func New(g *gorm.DB) *Service { return &Service{DB: g} }
 
 // fxMaps 汇率表 {currency: {dates, rates}}（升序）
@@ -219,6 +220,7 @@ func (s *Service) Compute(codes []string, weights map[string]float64, currencies
 	return map[string]any{"annual": annual, "per_stock": perStock, "sample_days": len(keep)}
 }
 
+// stdev 样本标准差（除数 n-1），样本数不足 2 返回 0。
 func stdev(xs []float64) float64 {
 	if len(xs) < 2 {
 		return 0
@@ -236,4 +238,5 @@ func stdev(xs []float64) float64 {
 	return math.Sqrt(s / float64(len(xs)-1))
 }
 
+// round2 保留 2 位小数的四舍五入。
 func round2(v float64) float64 { return math.Round(v*100) / 100 }

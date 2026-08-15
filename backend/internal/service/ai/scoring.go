@@ -37,6 +37,7 @@ func (s *Service) ListTagPrefs() []map[string]any {
 	return out
 }
 
+// tagPrefRow 把单条标签偏好记录 curd 为响应行
 func tagPrefRow(t *db.TagPref) map[string]any {
 	return map[string]any{
 		"tag": t.Tag, "raw_pref": t.RawPref, "prompt": daoStr(t.Prompt),
@@ -276,6 +277,7 @@ func (s *Service) BuildPortfolioContext(tags []string) map[string]any {
 	}
 }
 
+// stocksMeta 把 code 列表转成 [{code}] 元信息（供消息面批量上下文占位）
 func stocksMeta(codes []string) []map[string]any {
 	out := make([]map[string]any, 0, len(codes))
 	for _, c := range codes {
@@ -397,6 +399,7 @@ func (s *Service) GetPortfolioReport(tags []string) map[string]any {
 	return nil
 }
 
+// portfolioReportRow 把组合报告记录 curd 为响应行（报告先经 UpgradeLegacyCard）
 func portfolioReportRow(r *db.AIPortfolioReport) map[string]any {
 	report := UpgradeLegacyCard(daoJSONMap(r.ReportJSON))
 	tags := []string{}
@@ -440,6 +443,7 @@ func pySeedJSON(holdings [][]any, prefs [][2]string, tags []string, modelKey str
 }
 
 // jsonStr 转义 JSON 字符串内的引号/反斜杠（与 json.dumps ensure_ascii=False 一致）
+// jsonStr 转义字符串内的引号/反斜杠成 JSON 字面量（与 json.dumps ensure_ascii=False 一致）
 func jsonStr(s string) string {
 	if !strings.ContainsAny(s, "\\\"") {
 		return s
@@ -450,6 +454,7 @@ func jsonStr(s string) string {
 }
 
 // pyFloat Python repr(float)：整数保留 .0（300 → 300.0；300.5 → 300.5；科学计数一致）
+// pyFloat 按 Python repr(float) 输出：整数补 .0（300→300.0），与 json.dumps 保持一致
 func pyFloat(v float64) string {
 	s := strconv.FormatFloat(v, 'g', -1, 64)
 	if !strings.ContainsAny(s, ".eE") {
@@ -469,6 +474,7 @@ func autoTag(code, name string) string {
 	return "个股"
 }
 
+// isHKCodeL 是否港股代码（5 位纯数字）
 func isHKCodeL(code string) bool {
 	if len(code) != 5 {
 		return false
@@ -481,11 +487,13 @@ func isHKCodeL(code string) bool {
 	return true
 }
 
+// isETFCodeL 是否场内基金代码前缀（51/56/58/15/16）
 func isETFCodeL(code string) bool {
 	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
 		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
 }
 
+// slicesEq 两个字符串切片顺序、逐元素是否相等
 func slicesEq(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -924,6 +932,7 @@ func (s *Service) ListDailyDays() []map[string]any {
 	return out
 }
 
+// intOf int 指针取值；nil 返回 0
 func intOf(p *int) int {
 	if p == nil {
 		return 0
@@ -931,6 +940,7 @@ func intOf(p *int) int {
 	return *p
 }
 
+// daoJSONMap 把 JSON 字符串反序列化为 map；失败返回空 map
 func daoJSONMap(s string) map[string]any {
 	var v map[string]any
 	if err := json.Unmarshal([]byte(s), &v); err != nil {

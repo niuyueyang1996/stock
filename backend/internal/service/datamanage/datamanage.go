@@ -132,6 +132,7 @@ func holdingMap(h *holdings.HoldingResult) map[string]any {
 	}
 }
 
+// roundP 指针值四舍五入保留指定小数位数（nil 保持 nil）
 func roundP(v *float64, digits int) *float64 {
 	if v == nil {
 		return nil
@@ -140,6 +141,7 @@ func roundP(v *float64, digits int) *float64 {
 	return &r
 }
 
+// round 四舍五入保留指定小数位数
 func round(v float64, digits int) float64 {
 	p := 1.0
 	for i := 0; i < digits; i++ {

@@ -11,6 +11,7 @@ import (
 	"stockanalyzer/internal/db"
 )
 
+// requestCtx 返回无超时/取消的后台 context（供列模型等同步调用使用）
 func requestCtx() context.Context { return context.Background() }
 
 const (
@@ -35,6 +36,7 @@ func modelRow(m *db.AIModel) map[string]any {
 	}
 }
 
+// daoStr 取字符串指针的值，nil 返回空串（用于取出 DAO 中可空的时间/字符串字段）。
 func daoStr(p *string) string {
 	if p == nil {
 		return ""

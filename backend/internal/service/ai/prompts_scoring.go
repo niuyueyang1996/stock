@@ -7,6 +7,7 @@ func tagPrefSystemPrompt() string {
 	return `你是投资偏好提炼助手。用户给出一段简短的投资偏好，请扩展成一份完整、自洽的「评分指引」，供 AI 给该标签下的股票/交易打分时作为准则。要求覆盖：估值态度、质量/成长、股息、风险偏好、加分项与回避项。全简体中文；输出严格 JSON。`
 }
 
+// tagExpandSchemaText 标签偏好补全的 JSON schema 文本（prompt + data_received 用于核对输入）
 func tagExpandSchemaText() string {
 	return `
 
@@ -76,6 +77,7 @@ func dailySystemPrompt(intensity, systemPrompt string) string {
 	return appendExtras(sys, systemPrompt, intensity)
 }
 
+// portfolioSchemaText 组合打分输出 JSON schema 文本，深入强度增补含调仓指引表的 html 字段
 func portfolioSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"score": 0-100, "grade": "A|B|C|D", "action": "add|hold|watch|reduce|exit", "risk": 0-100, "risk_level": "low|medium|high", "confidence": "high|medium|low", "dimensions": {"fundamentals": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "valuation": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "fundflow": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "news": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "technical": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "structure": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "tag_fit": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}}, "summary": "一句话", "advice": ["建议"], "risks": ["风险"], "reasons": ["核心理由"]`
 	if intensity == "deep" {
@@ -85,6 +87,7 @@ func portfolioSchemaText(intensity string) string {
 只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。`
 }
 
+// dailySchemaText 每日交易打分输出 JSON schema 文本，深入强度增补 html 字段
 func dailySchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"score": 0-100, "grade": "A|B|C|D", "action": "repeat|cautious|avoid", "risk": 0-100, "risk_level": "low|medium|high", "confidence": "high|medium|low", "dimensions": {"timing": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "execution": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "sizing": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}, "discipline": {"score": 0-100, "grade": "A|B|C|D", "analysis": "中文"}}, "summary": "当日一句话", "advice": ["建议"], "risks": ["风险"], "reasons": ["核心理由"], "trades": [{"trade_id": 整数, "score": 0-100, "grade": "A|B|C|D", "action": "repeat|cautious|avoid", "comment": "一句话点评"}]`
 	if intensity == "deep" {

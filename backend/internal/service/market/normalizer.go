@@ -15,6 +15,7 @@ import (
 	"stockanalyzer/internal/service/model"
 )
 
+// round2 两位小数
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 // fnum 解析字段为 float；空/非法返回 nil
@@ -68,6 +69,7 @@ func normalizeHkQuote(parts []string, code string) *model.Quote {
 	}
 }
 
+// isDigits 字符串是否全为数字
 func isDigits(s string) bool {
 	for _, c := range s {
 		if c < '0' || c > '9' {
@@ -124,6 +126,7 @@ func normalizeBars(rows [][]string, code, start, end string) []model.Bar {
 	return bars
 }
 
+// pf 行内第 i 列转 float；越界/非法返回 0
 func pf(row []string, i int) float64 {
 	if i < len(row) {
 		if v, err := strconv.ParseFloat(row[i], 64); err == nil {
@@ -250,6 +253,7 @@ func AggregateTicks(ticks []raw.TickRow, windowMin int) []model.FundflowPoint {
 	return out
 }
 
+// fmt2 时:分格式化（%02d:%02d）
 func fmt2(h, m int) string {
 	return fmt.Sprintf("%02d:%02d", h, m)
 }

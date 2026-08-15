@@ -101,6 +101,7 @@ func ttmFromRows(rows []map[string]any) *float64 {
 	return &out
 }
 
+// prevYear 年份字符串减一（如 "2025"→"2024"）
 func prevYear(y string) string {
 	n, err := strconv.Atoi(y)
 	if err != nil {

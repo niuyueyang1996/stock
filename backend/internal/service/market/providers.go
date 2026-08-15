@@ -14,10 +14,13 @@ import (
 // TencentMarket 腾讯行情（A股/港股/ETF/指数通用，GBK 解码）
 type TencentMarket struct{ raw *raw.Tencent }
 
+// NewTencentMarket 构造腾讯行情源
 func NewTencentMarket(r *raw.Tencent) *TencentMarket { return &TencentMarket{raw: r} }
 
+// Name 源标识
 func (t *TencentMarket) Name() string { return "tencent" }
 
+// Quote 拉取实时行情（腾讯字段 → Quote）
 func (t *TencentMarket) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	sym := toSymbol(code)
 	parts := t.raw.QuoteRaw(ctx, sym)
@@ -31,6 +34,7 @@ func (t *TencentMarket) Quote(ctx context.Context, code string) (*model.Quote, e
 	return q, nil
 }
 
+// DailyBars 拉取日K（[start,end]，升序）
 func (t *TencentMarket) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
 	rows := t.raw.Kline(ctx, toSymbol(code), "day", start, end, 800)
 	if len(rows) == 0 {
@@ -39,6 +43,7 @@ func (t *TencentMarket) DailyBars(ctx context.Context, code, start, end string) 
 	return normalizeBars(rows, code, start, end), nil
 }
 
+// Ticks 取当日分笔；港股无逐笔返回 nil（由分时派生）
 func (t *TencentMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	if isHKCode(code) {
 		return nil, nil // 港股无逐笔，由港股分时派生
@@ -49,18 +54,23 @@ func (t *TencentMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, 
 // SinaMarket 新浪：资金流历史回填（行情/日K 由腾讯主源覆盖）
 type SinaMarket struct{ raw *raw.Sina }
 
+// NewSinaMarket 构造新浪行情源（仅资金流回填用）
 func NewSinaMarket(r *raw.Sina) *SinaMarket { return &SinaMarket{raw: r} }
 
+// Name 源标识
 func (s *SinaMarket) Name() string { return "sina" }
 
+// Quote 新浪不提供行情，恒不支持
 func (s *SinaMarket) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	return nil, ErrNotSupported
 }
 
+// DailyBars 新浪不提供日K，恒不支持
 func (s *SinaMarket) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
 	return nil, ErrNotSupported
 }
 
+// Ticks 新浪不提供分笔，返回 nil
 func (s *SinaMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	return nil, nil
 }
@@ -117,10 +127,13 @@ func (s *SinaMarket) FundflowHistory(ctx context.Context, code string, count int
 // EMMarket 东财：ETF 日K（腾讯不覆盖时降级）
 type EMMarket struct{ raw *raw.EM }
 
+// NewEMMarket 构造东财行情源（ETF 日K 降级用）
 func NewEMMarket(r *raw.EM) *EMMarket { return &EMMarket{raw: r} }
 
+// Name 源标识
 func (e *EMMarket) Name() string { return "em" }
 
+// Quote 东财不提供行情，恒不支持
 func (e *EMMarket) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	return nil, ErrNotSupported
 }
@@ -158,6 +171,7 @@ func (e *EMMarket) DailyBars(ctx context.Context, code, start, end string) ([]mo
 	return bars, nil
 }
 
+// Ticks 东财不提供分笔，返回 nil
 func (e *EMMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	return nil, nil
 }
@@ -171,8 +185,10 @@ type MockMarket struct {
 	Handle func(code string) bool
 }
 
+// Name 源标识
 func (m *MockMarket) Name() string { return "mock" }
 
+// Quote 返回预设行情或错误（可选按代码筛选）
 func (m *MockMarket) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
@@ -180,6 +196,7 @@ func (m *MockMarket) Quote(ctx context.Context, code string) (*model.Quote, erro
 	return m.Q, nil
 }
 
+// DailyBars 返回预设日K或错误（可选按代码筛选）
 func (m *MockMarket) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
@@ -187,6 +204,7 @@ func (m *MockMarket) DailyBars(ctx context.Context, code, start, end string) ([]
 	return m.Bars, nil
 }
 
+// Ticks 返回预设分笔或 nil（可选按代码筛选）
 func (m *MockMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, nil
@@ -196,6 +214,7 @@ func (m *MockMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, err
 
 // ============ helpers ============
 
+// strF 字符串转 float；空/非法返回 0
 func strF(s string) float64 {
 	if v, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
 		return v
@@ -203,6 +222,7 @@ func strF(s string) float64 {
 	return 0
 }
 
+// toSymbol 代码→行情符号（港股 hk 前缀，沪市 sh，深市 sz）
 func toSymbol(code string) string {
 	if isHKCode(code) {
 		return "hk" + code
@@ -213,6 +233,7 @@ func toSymbol(code string) string {
 	return "sz" + code
 }
 
+// isHKCode 五位纯数字代码为港股
 func isHKCode(code string) bool {
 	if len(code) != 5 {
 		return false
@@ -225,6 +246,7 @@ func isHKCode(code string) bool {
 	return true
 }
 
+// isETFCode 场内 ETF 代码前缀判断：沪市 51/56/58，深市 15/16
 func isETFCode(code string) bool {
 	// 场内 ETF：沪市 51/56/58，深市 15/16
 	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||

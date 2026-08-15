@@ -127,6 +127,7 @@ func (s *Service) RefreshHKFX(ctx context.Context, now string, force bool) map[s
 	return map[string]any{"currency": "HKD", "fetched": fetched, "range": []string{today, today}}
 }
 
+// round2 四舍五入保留两位小数
 func round2(v float64) float64 {
 	return float64(int(v*100+0.5)) / 100
 }

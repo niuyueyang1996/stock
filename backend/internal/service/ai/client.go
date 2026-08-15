@@ -32,10 +32,12 @@ type OpenAICompatClient struct {
 	HTTP *http.Client
 }
 
+// NewOpenAICompatClient 构造 OpenAI 兼容客户端，HTTP 超时取 RequestTimeout（300s）
 func NewOpenAICompatClient() *OpenAICompatClient {
 	return &OpenAICompatClient{HTTP: &http.Client{Timeout: RequestTimeout}}
 }
 
+// openaiCompatURL 拼接 OpenAI 兼容接口 URL（baseURL 去尾斜杠，缺 /v1 时自动补）
 func openaiCompatURL(baseURL, path string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.HasSuffix(base, "/v1") {
@@ -60,6 +62,7 @@ type chatPayload struct {
 	ReasoningEffort *string "json:\"reasoning_effort,omitempty\""
 }
 
+// postChatCompletion 发送一次 /chat/completions 请求；返回模型输出 content 与 finish_reason
 func (c *OpenAICompatClient) postChatCompletion(ctx context.Context, baseURL, apiKey, model string, payload chatPayload) (string, string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -111,6 +114,7 @@ func ParseJSONContent(content string) (map[string]any, error) {
 	return out, nil
 }
 
+// repairJSON 本地修复不合法 JSON（去除尾逗号 ",}" / ",]"）
 func repairJSON(s string) string {
 	for strings.Contains(s, ",}") || strings.Contains(s, ",]") {
 		s = strings.ReplaceAll(s, ",}", "}")
@@ -209,6 +213,7 @@ func (c *OpenAICompatClient) ListModels(ctx context.Context, baseURL, apiKey str
 	return out, nil
 }
 
+// truncStr 截断字符串到前 n 字节，用于错误信息/重发内容裁剪
 func truncStr(s string, n int) string {
 	if len(s) <= n {
 		return s

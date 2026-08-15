@@ -159,6 +159,7 @@ func UpgradeLegacyCard(report map[string]any) map[string]any {
 	return out
 }
 
+// strv 把值转字符串（nil 返回空串）；仅支持基础类型
 func strv(v any) string {
 	if v == nil {
 		return ""
@@ -181,6 +182,7 @@ func strv(v any) string {
 	}
 }
 
+// firstNonNil 依次返回第一个非 nil 值；全为 nil 返回 nil
 func firstNonNil(vals ...any) any {
 	for _, v := range vals {
 		if v != nil {

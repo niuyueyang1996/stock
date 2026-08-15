@@ -17,6 +17,7 @@ type Service struct {
 	CloseConfirmMinutes int
 }
 
+// New 构造交易日历服务（默认收盘确认 +5 分钟）
 func New(g *gorm.DB) *Service {
 	return &Service{DB: g, CloseConfirmMinutes: 5}
 }

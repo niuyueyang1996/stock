@@ -18,11 +18,13 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	aiSvc := s.AI
 
 	// ---- 模型管理 ----
+	// GET /api/ai/models —— 列出已保存的 AI 模型与当前激活模型（对齐 app/api/ai.py /models）。
 	api.GET("/ai/models", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
 			"models": aiSvc.ListModels(), "active": aiSvc.GetActiveModel(),
 		}})
 	})
+	// POST /api/ai/models/available —— 探测某 base_url/api_key 下可用的模型列表（对齐 app/api/ai.py）；不走已存配置。
 	api.POST("/ai/models/available", func(c *gin.Context) {
 		var body struct {
 			BaseURL string `json:"base_url"`
@@ -39,6 +41,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"models": models}})
 	})
+	// POST /api/ai/models —— 新增/更新模型配置（对齐 app/api/ai.py /models）：id 为空则新增、非空则更新；name/base_url/api_key/model。
 	api.POST("/ai/models", func(c *gin.Context) {
 		var body struct {
 			Name    string `json:"name"`
@@ -58,6 +61,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": row})
 	})
+	// DELETE /api/ai/models/:model_id —— 删除模型配置（对齐 app/api/ai.py）；返回待删除的 model_id。
 	api.DELETE("/ai/models/:model_id", func(c *gin.Context) {
 		id, _ := strconv.ParseInt(c.Param("model_id"), 10, 64)
 		if err := aiSvc.DeleteModel(id); err != nil {
@@ -66,6 +70,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"deleted": id}})
 	})
+	// POST /api/ai/models/:model_id/activate —— 激活某模型为当前生效模型（对齐 app/api/ai.py）；激活失败/不存在返回 400。
 	api.POST("/ai/models/:model_id/activate", func(c *gin.Context) {
 		id, _ := strconv.ParseInt(c.Param("model_id"), 10, 64)
 		row, err := aiSvc.ActivateModel(id)
@@ -77,9 +82,11 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	})
 
 	// ---- 思考级别 ----
+	// GET /api/ai/reasoning —— 读取全局 AI 思考级别 reasoning_effort（对齐 app/api/ai.py）。
 	api.GET("/ai/reasoning", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"effort": aiSvc.GetReasoningEffort()}})
 	})
+	// PUT /api/ai/reasoning —— 设置全局思考级别（对齐 app/api/ai.py）：body 传 effort（low/medium/high/max）。
 	api.PUT("/ai/reasoning", func(c *gin.Context) {
 		var body struct {
 			Effort string `json:"effort"`
@@ -93,11 +100,13 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	})
 
 	// ---- 运行时配置 ----
+	// GET /api/ai/runtime —— 读取 AI 运行时配置（对齐 app/api/ai.py）：max_tokens（输出预算）与 request_timeout（请求超时秒）。
 	api.GET("/ai/runtime", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
 			"max_tokens": aiSvc.GetMaxTokens(), "request_timeout": aiSvc.GetRequestTimeout(),
 		}})
 	})
+	// PUT /api/ai/runtime —— 更新 AI 运行时配置（对齐 app/api/ai.py）：body 可改 max_tokens/request_timeout，返回新值。
 	api.PUT("/ai/runtime", func(c *gin.Context) {
 		var body struct {
 			MaxTokens      *int `json:"max_tokens"`
@@ -113,11 +122,13 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	})
 
 	// ---- 可编辑提示词 ----
+	// GET /api/ai/prompts —— 读取可编辑提示词（对齐 app/api/ai.py）：返回 defaults（系统默认单一来源）与 saved（已保存覆盖）。
 	api.GET("/ai/prompts", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
 			"defaults": aiDefaultPrompts(), "saved": aiSvc.GetPromptOverrides(),
 		}})
 	})
+	// PUT /api/ai/prompts —— 保存提示词覆盖（对齐 app/api/ai.py）：body 传 overrides {kind: 文本}，null/空串清除该项恢复默认。
 	api.PUT("/ai/prompts", func(c *gin.Context) {
 		var body struct {
 			Overrides map[string]*string `json:"overrides"`
@@ -138,10 +149,13 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	})
 
 	// ---- 个股诊股 ----
+	// GET /api/stocks/:code/ai-report —— 读取个股最近诊股报告（对齐 app/api/ai.py）：返回该 code 最近一条 ScoreCard。
 	api.GET("/stocks/:code/ai-report", func(c *gin.Context) {
 		code := c.Param("code")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetReport(code)})
 	})
+	// POST /api/stocks/:code/ai-report —— 触发个股 AI 诊股（异步任务，对齐 app/api/ai.py）：
+	// 未配置模型 400；body 可传 system_prompt/intensity；返回 job_id，任务回调 ai-report 落库。
 	api.POST("/stocks/:code/ai-report", func(c *gin.Context) {
 		code := c.Param("code")
 		if aiSvc.GetActiveModel() == nil {
@@ -227,6 +241,8 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	}
 
 	// ---- 消息面 ----
+	// POST /api/ai/news-analysis —— 个股消息面 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 system_prompt/intensity；
+	// 返回 job_id，结果落 ai_news_reports。
 	api.POST("/ai/news-analysis", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -243,17 +259,22 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
 	})
+	// GET /api/ai/news-report/:code —— 读取某股最近一条消息面报告（对齐 app/api/ai.py，as_of DESC 取最新）。
 	api.GET("/ai/news-report/:code", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetStockNewsReport(c.Param("code"))})
 	})
+	// GET /api/ai/news-reports —— 按代码列表批量读取消息面报告（对齐 app/api/ai.py）：query codes 逗号分隔。
 	api.GET("/ai/news-reports", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListNewsReports(splitCodes(c.Query("codes")))})
 	})
+	// GET /api/ai/news-coherence —— 组合级消息面整合报告（对齐 app/api/ai.py）：query scope（portfolio/indices）+ scope_key，F5 重建用。
 	api.GET("/ai/news-coherence", func(c *gin.Context) {
 		scope := c.DefaultQuery("scope", "portfolio")
 		scopeKey := c.Query("scope_key")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetNewsCoherence(scope, scopeKey)})
 	})
+	// POST /api/ai/news-batch —— 批量消息面 AI（异步，对齐 app/api/ai.py）：body tags（持仓组合）与 codes（指数组合）只能二选一，
+	// 同时传返回 400；逐只落库、单只失败记日志继续，整组合 HTML 覆盖落库。
 	api.POST("/ai/news-batch", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -271,6 +292,8 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	})
 
 	// ---- 技术面 ----
+	// POST /api/ai/tech-analysis —— 个股技术面 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 system_prompt/intensity；
+	// 结果落 ai_tech_reports。
 	api.POST("/ai/tech-analysis", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -287,17 +310,21 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
 	})
+	// GET /api/ai/tech-report/:code —— 读取某股最近一条技术面报告（对齐 app/api/ai.py）。
 	api.GET("/ai/tech-report/:code", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetStockTechReport(c.Param("code"))})
 	})
+	// GET /api/ai/tech-reports —— 按代码列表批量读取技术面报告（对齐 app/api/ai.py）：query codes 逗号分隔。
 	api.GET("/ai/tech-reports", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListTechReports(splitCodes(c.Query("codes")))})
 	})
+	// GET /api/ai/tech-coherence —— 组合级技术面整合报告（对齐 app/api/ai.py）：query scope + scope_key。
 	api.GET("/ai/tech-coherence", func(c *gin.Context) {
 		scope := c.DefaultQuery("scope", "portfolio")
 		scopeKey := c.Query("scope_key")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetTechCoherence(scope, scopeKey)})
 	})
+	// POST /api/ai/tech-batch —— 批量技术面 AI（异步，对齐 app/api/ai.py）：tags 与 codes 只能二选一，同时传返回 400。
 	api.POST("/ai/tech-batch", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -369,6 +396,8 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	}
 
 	// 个股资金流分析（异步任务）
+	// POST /api/ai/fundflow-analysis —— 个股资金流 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 window/
+	// system_prompt/intensity；结果落 ai_fundflow_reports。
 	api.POST("/ai/fundflow-analysis", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -386,6 +415,8 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
 	})
 	// 批量资金流分析（异步任务；窗口需 15m 及以上）
+	// POST /api/ai/fundflow-batch —— 批量资金流 AI（异步，对齐 app/api/ai.py）：tags 与 codes 只能二选一；
+	// 窗口须 15m 及以上（1m/5m 返回 400）。
 	api.POST("/ai/fundflow-batch", func(c *gin.Context) {
 		if !requireModel(c) {
 			return
@@ -407,11 +438,13 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
 	})
 	// 读取个股最近资金流 AI 结果（window 可选，精确匹配）
+	// GET /api/ai/fundflow-report/:code —— 读取某股最近资金流分析（对齐 app/api/ai.py）：query window 可精确匹配某窗口。
 	api.GET("/ai/fundflow-report/:code", func(c *gin.Context) {
 		window := c.Query("window")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetStockFundflowReport(c.Param("code"), window)})
 	})
 	// 按代码列表批量读取最近结果
+	// GET /api/ai/fundflow-reports —— 按代码列表批量读取资金流分析（对齐 app/api/ai.py）：query codes 逗号分隔。
 	api.GET("/ai/fundflow-reports", func(c *gin.Context) {
 		var codes []string
 		for _, c2 := range strings.Split(c.Query("codes"), ",") {
@@ -422,6 +455,7 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListFundflowReports(codes)})
 	})
 	// 组合级资金相关性报告
+	// GET /api/ai/fundflow-coherence —— 组合级资金相关性报告（对齐 app/api/ai.py）：query scope（默认 indices）+ scope_key + window。
 	api.GET("/ai/fundflow-coherence", func(c *gin.Context) {
 		scope := c.DefaultQuery("scope", "indices")
 		scopeKey := c.Query("scope_key")

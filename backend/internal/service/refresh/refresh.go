@@ -58,7 +58,7 @@ type Service struct {
 	MarketClosed func(now time.Time) bool
 }
 
-// New 构造
+// New 构造刷新服务（依赖注入各异步/行情服务）
 func New(g *gorm.DB, cache *dao.CacheDAO, h *holdings.Service, m *market.MarketManager,
 	f *finance.FinanceManager, v *valuation.ValuationManager, live *valuation.Service,
 	fxs *fx.Service, jm *jobs.Manager) *Service {
@@ -400,6 +400,7 @@ func toTickRows(ts []tickLike) []raw.TickRow {
 	return out
 }
 
+// addDays 日期字符串偏移天数（解析失败原样返回）
 func addDays(dateStr string, days int) string {
 	t, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
@@ -407,7 +408,11 @@ func addDays(dateStr string, days int) string {
 	}
 	return t.AddDate(0, 0, days).Format("2006-01-02")
 }
+
+// round2 四舍五入保留 2 位小数
 func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+
+// round4 四舍五入保留 4 位小数
 func round4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }
 
 // SyncPeriodKline 周/月K同步（腾讯 fqkline，对齐 Python sync_kline_bars）：

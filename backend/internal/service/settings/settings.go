@@ -31,6 +31,7 @@ type Service struct {
 	Cfg *dao.ConfigDAO
 }
 
+// New 构造配置服务（注入 ConfigDAO 读写字端）
 func New(c *dao.ConfigDAO) *Service { return &Service{Cfg: c} }
 
 // GetDynamicIntervalSeconds 动态刷新间隔（秒），缺省 300，钳制 ≥30

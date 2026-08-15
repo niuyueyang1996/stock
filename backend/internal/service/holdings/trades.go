@@ -223,6 +223,7 @@ func SetIndexChecker(fn func(code string) bool) {
 	isTradeableFn = fn
 }
 
+// trimSpace 去掉字符串首尾的空格/制表/换行（空白串处理）
 func trimSpace(s string) string {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {

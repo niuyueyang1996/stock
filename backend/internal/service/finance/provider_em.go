@@ -10,10 +10,13 @@ import (
 // EMHKFinance 东财港股财务（主源）。报表货币折算在 NormalizeFinancialsHK。
 type EMHKFinance struct{ raw *raw.EM }
 
+// NewEMHKFinance 构造东财港股财务源
 func NewEMHKFinance(r *raw.EM) *EMHKFinance { return &EMHKFinance{raw: r} }
 
+// Name 源标识
 func (e *EMHKFinance) Name() string { return "em" }
 
+// Financials 拉取港股标准财务：校验港股代码，取多期 F10 + 主指标 MAX，经 NormalizeFinancialsHK 折算成人民币
 func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
 	if !isHKCode(code) {
 		return nil, ErrNotSupported
@@ -37,6 +40,7 @@ func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *flo
 	return f, nil
 }
 
+// DividendPerShare 最近年报每股股息（港元口径，需上层注入汇率折算）
 func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
 	if !isHKCode(code) {
 		return nil, ErrNotSupported

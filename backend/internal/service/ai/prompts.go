@@ -5,6 +5,8 @@ package ai
 
 import "strings"
 
+// newsSystemPrompt 构造个股消息面 system prompt：结合新闻时代分析与 stance/items/risks，
+// 深入强度追加自包含 HTML 报告要求，末尾并入用户附加要求与分析强度
 func newsSystemPrompt(intensity, systemPrompt string) string {
 	sys := `你是资深财经消息分析师。系统给出待分析标的的代码、名称、当前时间（as_of_datetime）与系统抓取的近期新闻（news 数组，按时间倒序，含 title/content/time/source/url）。
 请优先依据 news 中的新闻正文判断消息面：引用时注明日期与来源；news 为空或明显过时时，再结合你的公开知识（公司公告、行业与政策事件、财报节点等）补充，并严格遵守时效规则，不拿训练期旧闻当「最新」。
@@ -27,6 +29,8 @@ func newsSystemPrompt(intensity, systemPrompt string) string {
 	return appendExtras(sys, systemPrompt, intensity)
 }
 
+// techSystemPrompt 构造个股技术面 system prompt：解读日/周/月 K 趋势/关键位/信号/证伪条件，
+// 深入强度追加 HTML 报告要求
 func techSystemPrompt(intensity, systemPrompt string) string {
 	sys := `你是资深技术分析师。系统给出某标的最近日/周/月 K 数据（bars=日K、weekly_bars=周K、monthly_bars=月K，均按日期升序）与当前时间（as_of_datetime）。
 [数据说明]
@@ -49,6 +53,7 @@ func techSystemPrompt(intensity, systemPrompt string) string {
 	return appendExtras(sys, systemPrompt, intensity)
 }
 
+// batchNewsSystemPrompt 构造批量消息面 system prompt：逐只判断 stance/items，深入强度追加组合整体 HTML
 func batchNewsSystemPrompt(intensity, systemPrompt string) string {
 	sys := `你是资深财经消息分析师。系统给出组合内多只标的（列表 stocks，每只含 code/name 与该股近期新闻 news 数组，按时间倒序，含 title/content/time/source/url）与当前时间（as_of_datetime）。
 请优先依据每只的 news 新闻正文判断消息面：引用时注明日期与来源；news 为空或明显过时时，再结合你的公开知识逐只补充，并严格遵守时效规则（相对 as_of_datetime 判定，过时/不确信不输出）。
@@ -65,6 +70,7 @@ func batchNewsSystemPrompt(intensity, systemPrompt string) string {
 	return appendExtras(sys, systemPrompt, intensity)
 }
 
+// batchTechSystemPrompt 构造批量技术面 system prompt：逐只输出趋势/关键位/信号，深入强度追加组合整体 HTML
 func batchTechSystemPrompt(intensity, systemPrompt string) string {
 	sys := `你是资深技术分析师。系统给出组合内多只标的的最近日/周/月 K 数据（列表 stocks，每只含 code/name/bars=日K、weekly_bars=周K、monthly_bars=月K）与当前时间（as_of_datetime）。
 [数据说明]
@@ -94,6 +100,7 @@ func appendExtras(sys, systemPrompt, intensity string) string {
 	return sys
 }
 
+// newsSchemaText 构造消息面输出 JSON schema 文本，深入强度增补 html 字段
 func newsSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"stance": "bullish|neutral|bearish", "summary": "一句话", "items": [{"headline": "标题", "event_date": "YYYY-MM-DD", "impact": "利多/利空/中性", "summary": "简述"}], "risks": ["风险点"], "omit_reason": "无足够新信息时填说明，否则留空"`
 	if intensity == "deep" {
@@ -103,6 +110,7 @@ func newsSchemaText(intensity string) string {
 只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。`
 }
 
+// techSchemaText 构造技术面输出 JSON schema 文本，深入强度增补 html 字段
 func techSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"trend_short": "up|down|range", "trend_mid": "up|down|range", "key_levels": {"support": ["支撑价位"], "resistance": ["压力价位"]}, "signals": ["白话信号"], "invalidation": "证伪条件", "summary": "一句话结论"`
 	if intensity == "deep" {
@@ -112,6 +120,7 @@ func techSchemaText(intensity string) string {
 只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。`
 }
 
+// batchNewsSchemaText 构造批量消息面输出 JSON schema 文本，深入强度增补组合整体 html 字段
 func batchNewsSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"summary": "组合整体一句话", "stocks": [{"code": "标的代码", "stance": "bullish|neutral|bearish", "summary": "一句话结论", "items": [{"headline": "标题", "event_date": "YYYY-MM-DD", "impact": "利多/利空/中性", "summary": "简述"}], "risks": ["注意点"], "omit_reason": "无足够新信息时填说明"}]`
 	if intensity == "deep" {
@@ -121,6 +130,7 @@ func batchNewsSchemaText(intensity string) string {
 只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。`
 }
 
+// batchTechSchemaText 构造批量技术面输出 JSON schema 文本，深入强度增补组合整体 html 字段
 func batchTechSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"summary": "组合整体一句话", "stocks": [{"code": "标的代码", "trend_short": "up|down|range", "trend_mid": "up|down|range", "key_levels": {"support": ["支撑价位"], "resistance": ["压力价位"]}, "signals": ["白话信号"], "invalidation": "证伪条件", "summary": "一句话结论"}]`
 	if intensity == "deep" {

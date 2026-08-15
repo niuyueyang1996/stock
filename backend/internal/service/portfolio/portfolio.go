@@ -42,14 +42,17 @@ type Service struct {
 	Indices  *indices.Service
 }
 
+// New 构建组合服务，注入 DB、持仓/估值服务、行情读取器、汇率函数、缓存 DAO 与指数服务。
 func New(g *gorm.DB, h *holdings.Service, live *valuation.Service, q QuoteReader, fx FxGetter, cache *dao.CacheDAO, idx *indices.Service) *Service {
 	return &Service{DB: g, Holdings: h, Live: live, Quote: q, Fx: fx, Cache: cache, Indices: idx}
 }
 
+// currencyOf 查询股票交易计价币种（通过持仓服务持有 DB）。
 func (s *Service) currencyOf(code string) string {
 	return s.Holdings.DB.CurrencyOf(code)
 }
 
+// cnyRate 取某币种兑人民币汇率：CNY/空返回 1.0；无汇率函数或取不到返回 nil。
 func (s *Service) cnyRate(currency string) *float64 {
 	if currency == "" || currency == "CNY" {
 		one := 1.0
@@ -113,6 +116,7 @@ func dayPnl(quantity, price float64, prevClose *float64, tradeDate string, rows 
 	return &out
 }
 
+// financialsRow 取最近报告期（report_date 倒序第一条）的个股财务缓存；无则返回 nil。
 func (s *Service) financialsRow(code string) *db.FinancialCache {
 	var f db.FinancialCache
 	if err := s.DB.Where("code = ?", code).Order("report_date DESC").First(&f).Error; err != nil {
@@ -121,6 +125,7 @@ func (s *Service) financialsRow(code string) *db.FinancialCache {
 	return &f
 }
 
+// totalDividend 累计已收分红：汇总 side=adjust 且 is_dividend=1 的 -amount 之和。
 func (s *Service) totalDividend(code string) float64 {
 	var sum *float64
 	s.DB.Raw("SELECT SUM(-amount) FROM trades WHERE code=? AND side='adjust' AND is_dividend=1", code).Scan(&sum)
@@ -225,12 +230,15 @@ func (s *Service) passthrough(code string, quantity float64) map[string]any {
 	return out
 }
 
+// staticOf 取年度净利序列最新一年（存在则返回，否则用财务净利兜底）。
 func staticOf(annuals []float64, fallback *float64) *float64 {
 	if len(annuals) > 0 {
 		return &annuals[0]
 	}
 	return fallback
 }
+
+// staticPrevOf 取年度净利序列上一年，无则返回 nil。
 func staticPrevOf(annuals []float64) *float64 {
 	if len(annuals) > 1 {
 		return &annuals[1]
@@ -921,8 +929,10 @@ func pctAvg(items []map[string]any, key string) any {
 	return round1(acc / wsum)
 }
 
+// round1 保留 1 位小数的四舍五入。
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
 
+// absF 返回绝对值。
 func absF(v float64) float64 {
 	if v < 0 {
 		return -v
@@ -940,6 +950,7 @@ type cardAgg struct {
 	count  int
 }
 
+// derefF 从 any 解出 float64 值（支持 *float64 与 float64），nil/其它类型返回 0。
 func derefF(v any) float64 {
 	if p, ok := v.(*float64); ok && p != nil {
 		return *p
@@ -949,8 +960,14 @@ func derefF(v any) float64 {
 	}
 	return 0
 }
+
+// round2 保留 2 位小数的四舍五入。
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+// round3 保留 3 位小数的四舍五入。
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// round3p 对指针值保留 3 位小数，nil 返回 nil。
 func round3p(v *float64) *float64 {
 	if v == nil {
 		return nil
@@ -958,6 +975,8 @@ func round3p(v *float64) *float64 {
 	out := round3(*v)
 	return &out
 }
+
+// countETF 统计持仓列表中 ETF 的个数。
 func countETF(stocks []map[string]any) int {
 	n := 0
 	for _, st := range stocks {
@@ -967,6 +986,8 @@ func countETF(stocks []map[string]any) int {
 	}
 	return n
 }
+
+// missingFxCodes 列出缺汇率（missing_fx=true）的股票代码。
 func missingFxCodes(cny []map[string]any) []string {
 	out := []string{}
 	for _, st := range cny {
@@ -977,6 +998,8 @@ func missingFxCodes(cny []map[string]any) []string {
 	}
 	return out
 }
+
+// fnum 类型化取 float64 数值的指针（支持 float64；nil 或其它类型返回 nil）。
 func fnum(v any) *float64 {
 	switch x := v.(type) {
 	case float64:
@@ -986,6 +1009,8 @@ func fnum(v any) *float64 {
 	}
 	return nil
 }
+
+// ttmPair 计算序列 [当前报告期 TTM, 上年同期 TTM]（key 指定取值字段）。
 func ttmPair(series []map[string]any, key string) [2]*float64 {
 	if len(series) == 0 {
 		return [2]*float64{}
@@ -995,6 +1020,8 @@ func ttmPair(series []map[string]any, key string) [2]*float64 {
 	prev := ttmAt(series, prevYear(rd)+rd[4:], key)
 	return [2]*float64{cur, prev}
 }
+
+// ttmAt 计算某报告期对应口径的 TTM 值：用上年年报 + 当前累计 − 上年同期累计合成；缺同期回退年报或当前累计。
 func ttmAt(series []map[string]any, reportDate, key string) *float64 {
 	byDate := map[string]map[string]any{}
 	for _, srow := range series {
@@ -1028,12 +1055,16 @@ func ttmAt(series []map[string]any, reportDate, key string) *float64 {
 	}
 	return latestV
 }
+
+// prevYear 日期字符串年份减一（取前 4 位为年份），返回年份字符串。
 func prevYear(y string) string {
 	if len(y) > 4 {
 		y = y[:4]
 	}
 	return itoa(atoi(y) - 1)
 }
+
+// atoi 手写字符串转整数（遇到非数字停止，读前缀数字）。
 func atoi(s string) int {
 	n := 0
 	for _, c := range s {
@@ -1044,6 +1075,8 @@ func atoi(s string) int {
 	}
 	return n
 }
+
+// itoa 手写整数转字符串（含负数，无前导零）。
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

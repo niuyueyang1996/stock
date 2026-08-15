@@ -85,6 +85,7 @@ func NormalizeValuationHistory(rows []any) []model.ValuationPoint {
 	return pts
 }
 
+// strv 任意值转字符串（空/非法返回 ""）
 func strv(v any) string {
 	if v == nil {
 		return ""
@@ -99,6 +100,7 @@ func strv(v any) string {
 	}
 }
 
+// numf 任意值转 float 指针；空/不支持类型返回 nil
 func numf(v any) *float64 {
 	switch x := v.(type) {
 	case float64:

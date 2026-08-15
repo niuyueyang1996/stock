@@ -19,10 +19,12 @@ type AshareFinance struct {
 	cn   *raw.CNInfo
 }
 
+// NewAshareFinance 构造 A 股财务源（新浪主源 + 腾讯股本 + 巨潮分红）
 func NewAshareFinance(s *raw.Sina, t *raw.Tencent, c *raw.CNInfo) *AshareFinance {
 	return &AshareFinance{sina: s, tx: t, cn: c}
 }
 
+// Name 源标识
 func (a *AshareFinance) Name() string { return "sina" }
 
 // sinaMatrix 新浪财务摘要重组：指标 → 报告期 → 值
@@ -31,6 +33,7 @@ type sinaMatrix struct {
 	cells   map[string]map[string]any
 }
 
+// fetchMatrix 拉取新浪财务摘要(gjzb)并按"指标→报告期→值"重组为矩阵
 func (a *AshareFinance) fetchMatrix(ctx context.Context, code string) (*sinaMatrix, error) {
 	paper := code
 	if strings.HasPrefix(code, "6") {
@@ -65,6 +68,7 @@ func (a *AshareFinance) fetchMatrix(ctx context.Context, code string) (*sinaMatr
 	return m, nil
 }
 
+// cell 取指定指标在指定报告期的数值；缺失返回 nil
 func (m *sinaMatrix) cell(indicator string, period string) *float64 {
 	if period == "" {
 		return nil
@@ -114,6 +118,7 @@ func (a *AshareFinance) dividendInfo(ctx context.Context, code string) (*float64
 	return &v, nil
 }
 
+// Financials 拉取 A 股标准财务（人民币口径）：财务摘要矩阵 + 实时总股本 + 巨潮分红
 func (a *AshareFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
 	if isHKCode(code) {
 		return nil, ErrNotSupported
@@ -126,6 +131,7 @@ func (a *AshareFinance) Financials(ctx context.Context, code string, fxHKDCNY *f
 	return normalizeAshareFinancials(m, a.totalShares(ctx, code), dv, dvReport), nil
 }
 
+// DividendPerShare 最近年报每股股息（元，人民币口径）
 func (a *AshareFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
 	if isHKCode(code) {
 		return nil, ErrNotSupported
@@ -226,6 +232,7 @@ func normalizeAshareFinancials(m *sinaMatrix, totalShares *float64, dvPerShare *
 	}
 }
 
+// round2p 指针浮点值保留两位小数（nil 透传）
 func round2p(v *float64) *float64 {
 	if v == nil {
 		return nil

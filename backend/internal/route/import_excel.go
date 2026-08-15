@@ -21,6 +21,9 @@ import (
 
 // setupHoldingsImportRoutes 持仓 Excel 导入（仅空仓时允许）
 func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
+	// POST /api/holdings/import-excel —— 持仓 Excel 一键导入（multipart 上传，对齐 app/api/holdings.py import-excel）：
+	// 字段名 file；仅空仓允许（非空仓 400）；解析「持仓数据」sheet（代码/名称/持有数量/单位成本/最新价），
+	// 逐只后台落 buy 交易；返回 job_id + skipped 跳过明细。
 	api.POST("/holdings/import-excel", func(c *gin.Context) {
 		file, err := c.FormFile("file")
 		if err != nil {

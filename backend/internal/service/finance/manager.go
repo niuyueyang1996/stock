@@ -21,6 +21,7 @@ type MockFinance struct {
 	Handle func(code string) bool // 可选：只处理特定代码
 }
 
+// Name 源标识（可配置，默认 mock）
 func (m *MockFinance) Name() string {
 	if m.NameF != "" {
 		return m.NameF
@@ -28,6 +29,7 @@ func (m *MockFinance) Name() string {
 	return "mock"
 }
 
+// Financials 返回预设财务或错误（可选按代码筛选）
 func (m *MockFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
@@ -38,6 +40,7 @@ func (m *MockFinance) Financials(ctx context.Context, code string, fxHKDCNY *flo
 	return m.F, nil
 }
 
+// DividendPerShare 返回预设每股股息或错误（可选按代码筛选）
 func (m *MockFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
@@ -56,6 +59,7 @@ type FinanceManager struct {
 	hk     []FinanceSource
 }
 
+// NewFinanceManager 构造降级链门面，注入汇率提供者与港股/A股各自的财务源链
 func NewFinanceManager(fx FxProvider, ashare, hk []FinanceSource) *FinanceManager {
 	return &FinanceManager{Fx: fx, ashare: ashare, hk: hk}
 }

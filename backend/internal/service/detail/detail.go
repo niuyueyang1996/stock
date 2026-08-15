@@ -568,6 +568,7 @@ func lastTradeDate(d time.Time) time.Time {
 	return d
 }
 
+// isWeekday 是否周一到周五（交易日近似，忽略节假日）
 func isWeekday(d time.Time) bool {
 	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
 }
@@ -595,6 +596,7 @@ func instDefaultTag(code string, isETF bool) string {
 	return "个股"
 }
 
+// partialMissing 仅 partial 模式返回缓存缺失项列表（否则空）
 func partialMissing(st map[string]any, partial bool) []string {
 	if !partial {
 		return []string{}
@@ -605,6 +607,7 @@ func partialMissing(st map[string]any, partial bool) []string {
 	return []string{}
 }
 
+// addDays 日期字符串偏移天数（解析失败原样返回）
 func addDays(day string, n int) string {
 	t, err := time.Parse("2006-01-02", day)
 	if err != nil {

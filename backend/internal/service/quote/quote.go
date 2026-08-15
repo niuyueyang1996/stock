@@ -28,6 +28,7 @@ type Service struct {
 	PrewarmRunning func() bool
 }
 
+// New 构造缓存行情服务（仅注入 DB，无任何网络依赖）
 func New(g *gorm.DB) *Service { return &Service{DB: g} }
 
 // CachedQuote 行情（对齐 Python _row_to_quote 字段）
@@ -73,6 +74,8 @@ func (s *Service) Get(code string) *CachedQuote {
 	return s.rowToQuote(&fb, today, true)
 }
 
+// rowToQuote 将日K缓存行转换为对外行情快照 CachedQuote：
+// 取早于该交易日的最近收盘作为昨日收盘价，缺失涨跌幅时据此计算，并携带 stale 陈旧标记。
 func (s *Service) rowToQuote(row *db.DailyPriceCache, today string, stale bool) *CachedQuote {
 	// 真正的"昨日收盘价"：缓存中早于该交易日的最近一条收盘
 	var prevClose *float64
@@ -127,6 +130,7 @@ func (s *Service) Bars(code, start, end string, limit int) []db.DailyPriceCache 
 	return rows
 }
 
+// round2 四舍五入保留两位小数
 func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
 
 // Kline 日/周/月K线（腾讯源缓存；对齐 Python get_kline）。
@@ -266,6 +270,7 @@ func lastTradeDateT(d time.Time) time.Time {
 	return d
 }
 
+// isWeekdayT 是否工作日（周六/周日 false，忽略节假日）
 func isWeekdayT(d time.Time) bool {
 	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
 }
@@ -291,6 +296,7 @@ func marketStatusStr() string {
 	return "open"
 }
 
+// addDaysStr 日期字符串加 n 天（解析失败原样返回）
 func addDaysStr(day string, n int) string {
 	t, err := time.Parse("2006-01-02", day)
 	if err != nil {

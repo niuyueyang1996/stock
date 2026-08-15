@@ -12,10 +12,12 @@ import (
 	"stockanalyzer/internal/service/model"
 )
 
+// MarketManager 行情降级链门面：持有多个行情源，逐个尝试
 type MarketManager struct {
 	sources []MarketSource
 }
 
+// NewMarketManager 构造行情降级链门面
 func NewMarketManager(sources ...MarketSource) *MarketManager {
 	return &MarketManager{sources: sources}
 }

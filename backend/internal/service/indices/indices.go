@@ -25,6 +25,7 @@ type Service struct {
 	IsIndex func(code string) bool
 }
 
+// New 构造指数服务：注入 DB、腾讯行情源与乐咕估值源
 func New(g *gorm.DB, tx *raw.Tencent, lg *raw.Legu) *Service {
 	return &Service{DB: g, Tx: tx, Lg: lg}
 }
@@ -196,6 +197,7 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	return nil
 }
 
+// parseF 字符串 → float64（解析失败返回 0）
 func parseF(s string) float64 {
 	v := 0.0
 	if len(s) > 0 {
@@ -205,6 +207,7 @@ func parseF(s string) float64 {
 	return v
 }
 
+// numV 任意值 → *float64（float64 原样 / 字符串解析；无法解析返回 nil）
 func numV(v any) *float64 {
 	switch x := v.(type) {
 	case float64:

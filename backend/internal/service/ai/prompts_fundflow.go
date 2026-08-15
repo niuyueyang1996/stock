@@ -52,6 +52,7 @@ func batchFundflowSystemPrompt(intensity, systemPrompt string) string {
 	return appendExtras(sys, systemPrompt, intensity)
 }
 
+// fundflowSchemaText 构造个股资金流输出 JSON schema 文本，深入强度增补 html 字段
 func fundflowSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"correlation": "positive|negative|top_divergence|bottom_divergence|neutral", "summary": "一句话", "divergence": [{"time": "时间", "level": "级别", "detail": "说明"}], "main_force": "主力意图", "rhythm": "资金节奏", "alerts": ["注意点"], "conclusion": "结论"`
 	if intensity == "deep" {
@@ -61,6 +62,7 @@ func fundflowSchemaText(intensity string) string {
 只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。`
 }
 
+// batchFundflowSchemaText 构造批量资金流输出 JSON schema 文本，深入强度增补组合整体 html 字段
 func batchFundflowSchemaText(intensity string) string {
 	s := `输出必须严格为 JSON 对象，结构如下：{"stocks": [{"code": "标的代码", "correlation": "positive|negative|top_divergence|bottom_divergence|neutral", "summary": "一句话结论", "main_force": "主力意图", "conclusion": "操作注意"}], "coherence": {"correlation": "positive|negative|top_divergence|bottom_divergence|neutral", "summary": "联动格局一句话", "points": ["要点"], "conclusion": "组合层面结论"}`
 	if intensity == "deep" {

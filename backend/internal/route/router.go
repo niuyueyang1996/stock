@@ -58,10 +58,14 @@ func Setup(r *gin.Engine, s *Services) {
 	setupHoldingsImportRoutes(api, s)
 
 	// ---- system ----
+	// GET /api/health —— 健康检查（对齐 app/api/system.py /health）：返回 ok=true 与 app_id/version，
+	// 供 Windows 启动器按 app_id=stock-analyzer 判断服务身份。
 	api.GET("/health", func(c *gin.Context) {
 		// 对齐 Python：Windows 启动器按 app_id 判断服务身份
 		c.JSON(http.StatusOK, gin.H{"ok": true, "app_id": "stock-analyzer", "version": "0.2.0"})
 	})
+	// GET /api/status —— 服务状态概览（对齐 app/api/system.py /status）：返回时间、
+	// trade_day（是否交易日）、market_closed（收盘与否，15:05 视为收盘）、source_status（探测首个持仓代码的数据源）。
 	api.GET("/status", func(c *gin.Context) {
 		now := time.Now()
 		isTradeDay := true
@@ -83,12 +87,15 @@ func Setup(r *gin.Engine, s *Services) {
 			"source_status": gin.H{"ok": true, "source": "sina", "code": probeCode},
 		})
 	})
+	// GET /api/status/jobs —— 当前后台任务快照列表（对齐 app/api/system.py）：返回 jobs.Manager 的全部运行中/已结束任务。
 	api.GET("/status/jobs", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Jobs.Snapshot()})
 	})
+	// GET /api/status/prewarm —— 启动预预热（市场列表等）状态快照。
 	api.GET("/status/prewarm", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Jobs.PrewarmSnapshot()})
 	})
+	// DELETE /api/jobs/:job_id —— 取消单个后台任务（对齐 app/api/system.py）；任务不存在或已结束返回 404。
 	api.DELETE("/jobs/:job_id", func(c *gin.Context) {
 		if s.Jobs.Cancel(c.Param("job_id")) {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -96,6 +103,7 @@ func Setup(r *gin.Engine, s *Services) {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "任务不存在或已结束"})
 		}
 	})
+	// DELETE /api/jobs/batch/:batch_id —— 按批次取消一组后台任务（batch 扇出的子任务）；不存在或已结束返回 404。
 	api.DELETE("/jobs/batch/:batch_id", func(c *gin.Context) {
 		if s.Jobs.CancelBatch(c.Param("batch_id")) {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -103,6 +111,8 @@ func Setup(r *gin.Engine, s *Services) {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "任务不存在或已结束"})
 		}
 	})
+	// POST /api/data/reset —— 清空全部数据（危重操作，须 body 传 confirm=true 确认）；
+	// 返回删除行数 deleted_rows；未确认返回 400。
 	api.POST("/data/reset", func(c *gin.Context) {
 		var body struct {
 			Confirm bool `json:"confirm"`
@@ -121,10 +131,12 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- holdings ----
+	// GET /api/holdings —— 持仓列表（对齐 app/api/holdings.py）：query active（默认 true）控制是否只取在持/含已清仓。
 	api.GET("/holdings", func(c *gin.Context) {
 		active := c.DefaultQuery("active", "true") != "false"
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.GetHoldings(active)})
 	})
+	// POST /api/holdings —— 批量初始化持仓（对齐 app/api/holdings.py /init-holdings）：body items 数组，返回逐项导入结果。
 	api.POST("/holdings", func(c *gin.Context) {
 		var body struct {
 			Items []map[string]any `json:"items"`
@@ -142,6 +154,8 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- indices ----
+	// GET /api/indices —— 指数定义列表（对齐 app/api/index.py）：返回每个指数的代码/名称/symbol/乐咕代码/估值源，
+	// 并附带当前行情 quote（缓存零网络）与空 turnover 占位。
 	api.GET("/indices", func(c *gin.Context) {
 		var out []map[string]any
 		for _, d := range s.Indices.GetIndexDefs() {
@@ -157,6 +171,8 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 	})
+	// GET /api/indices/:code —— 指数详情（对齐 app/api/index.py /detail，走个股详情口径 is_index）：返回该指数行情、
+	// 估值/历史分位等；支持 query window（窗口，默认 15）。
 	api.GET("/indices/:code", func(c *gin.Context) {
 		code := c.Param("code")
 		window := 15
@@ -166,6 +182,8 @@ func Setup(r *gin.Engine, s *Services) {
 		status, body := s.Detail.StockDetail(code, true, window, "", false)
 		c.JSON(status, body)
 	})
+	// PUT /api/indices/:code —— 更新指数定义字段（对齐 app/api/index.py）：支持 name/symbol/legu_code/pe_source/pb_source；
+	// 指数不存在 404、无有效字段 400。
 	api.PUT("/indices/:code", func(c *gin.Context) {
 		code := c.Param("code")
 		var body map[string]any
@@ -190,10 +208,12 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetIndexDef(code)})
 	})
+	// POST /api/indices/refresh-all —— 全量刷新所有指数定义（对齐 app/api/index.py）：拉行情+估值序列，返回逐指数刷新结果。
 	api.POST("/indices/refresh-all", func(c *gin.Context) {
 		out := s.Indices.RefreshAllIndices(c.Request.Context())
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 	})
+	// GET /api/indices/etf-map/:etf_code —— 查询某 ETF 跟踪的指数映射（对齐 app/api/index.py ETF 估值映射）；无映射返回 data=null。
 	api.GET("/indices/etf-map/:etf_code", func(c *gin.Context) {
 		m := s.Indices.GetETFIndexMap(c.Param("etf_code"))
 		if m == nil {
@@ -202,6 +222,7 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": m})
 	})
+	// PUT /api/indices/etf-map/:etf_code —— 设置/更新某 ETF 的跟踪指数映射（对齐 app/api/index.py）：body 需 index_code/source。
 	api.PUT("/indices/etf-map/:etf_code", func(c *gin.Context) {
 		var body struct {
 			IndexCode string `json:"index_code"`
@@ -216,6 +237,9 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- portfolio ----
+	// GET /api/portfolio —— 组合穿透式指标（对齐 app/api/portfolio.py、前端指标看板）：query 支持 tags
+	// （逗号分隔筛选子组合，空=全部）、code（单股贡献路径，返回该股 + 权重 + 组合主体，缺数据/不在持仓返回 404）、
+	// lite（1/true 用轻量口径，但带 code 时回退全量）。
 	api.GET("/portfolio", func(c *gin.Context) {
 		tagsQS := strings.TrimSpace(c.Query("tags"))
 		var tags []string
@@ -261,6 +285,7 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": p})
 	})
+	// GET /api/portfolio/weights —— 全量组合权重列表（对齐 Python portfolio_weights）：compute_portfolio() 的 weights 数组。
 	api.GET("/portfolio/weights", func(c *gin.Context) {
 		// 对齐 Python portfolio_weights：无参数，compute_portfolio() 全量
 		out := s.Portfolio.ComputePortfolio(nil)
@@ -269,6 +294,7 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- settings ----
+	// GET /api/settings/refresh —— 读取刷新设置（对齐 app/api/system.py /settings/refresh）：mode/静态TTL/动态间隔。
 	api.GET("/settings/refresh", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
 			"mode":                     s.Settings.GetUIMode(),
@@ -276,6 +302,7 @@ func Setup(r *gin.Engine, s *Services) {
 			"dynamic_interval_seconds": s.Settings.GetDynamicIntervalSeconds(),
 		}})
 	})
+	// PUT /api/settings/refresh —— 更新刷新设置（对齐 app/api/system.py）：body 可改 mode/static_ttl_minutes/dynamic_interval_seconds，返回新值。
 	api.PUT("/settings/refresh", func(c *gin.Context) {
 		var body struct {
 			Mode                   *string `json:"mode"`
@@ -295,6 +322,9 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- stocks ----
+	// GET /api/stocks/:code —— 个股详情（对齐 app/api/stocks.py，个股页主数据）：query 支持 partial(1 缺缓存可返回部分)、
+	// window(基本面窗口，默认 15)、as_of(回看某交易日)、index=1(指数模式返回 is_index)；
+	// 缓存缺失返回 409 CACHE_MISS，前端弹窗询问下载。
 	api.GET("/stocks/:code", func(c *gin.Context) {
 		code := c.Param("code")
 		partial := c.Query("partial") == "1"
@@ -308,6 +338,7 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- stocks 补充端点 ----
+	// GET /api/stocks/:code/kline —— 个股 K 线（对齐 Python kline）：query period（day/wk/month 等，默认 day）返回行情序列。
 	api.GET("/stocks/:code/kline", func(c *gin.Context) {
 		code := c.Param("code")
 		period := c.DefaultQuery("period", "day")
@@ -318,10 +349,12 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(status, gin.H{"ok": true, "data": data})
 	})
+	// GET /api/stocks/:code/cache-status —— 个股缓存状态（对齐 Python cache_status）：返回各缓存项是否已就绪，前端据此决定 409 提示。
 	api.GET("/stocks/:code/cache-status", func(c *gin.Context) {
 		code := c.Param("code")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Detail.CacheStatus(code)})
 	})
+	// PUT /api/stocks/:code/tag —— 设置个股标签（对齐 Python set_tag）：body 需 tag/name，返回生效的 tag。
 	api.PUT("/stocks/:code/tag", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
@@ -336,6 +369,8 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "tag": tag}})
 	})
+	// GET /api/stocks/search —— 股票/ETF 名称联想搜索（对齐 Python /stocks/search，读本地预置列表零网络）：
+	// query q=关键词、limit=数量(默认10)；返回候选 data 与列表是否就绪 lists_ready。
 	api.GET("/stocks/search", func(c *gin.Context) {
 		q := c.Query("q")
 		limit := 10
@@ -346,11 +381,13 @@ func Setup(r *gin.Engine, s *Services) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": data, "lists_ready": ready, "hint": hint})
 	})
 	// 预期增速/营收增速/支付率（对齐 Python：GET 返回 {code, growth, updated_at}）
+	// GET /api/stocks/:code/expected-growth —— 读取该股预期增速（对齐 app/api/stocks.py）：返回 growth/updated_at。
 	api.GET("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		g, ts := s.StockMeta.GetExpectedGrowth(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
+	// PUT /api/stocks/:code/expected-growth —— 设置预期增速：body 需 growth（必填），覆盖旧值并回写 updated_at。
 	api.PUT("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
@@ -363,11 +400,13 @@ func Setup(r *gin.Engine, s *Services) {
 		s.StockMeta.SetExpectedGrowth(code, *body.Growth)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": *body.Growth}})
 	})
+	// GET /api/stocks/:code/expected-revenue-growth —— 读取该股预期营收增速（对齐 app/api/stocks.py）：返回 growth/updated_at。
 	api.GET("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		g, ts := s.StockMeta.GetExpectedRevenueGrowth(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
+	// PUT /api/stocks/:code/expected-revenue-growth —— 设置预期营收增速：body 需 growth（必填）。
 	api.PUT("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
@@ -380,11 +419,13 @@ func Setup(r *gin.Engine, s *Services) {
 		s.StockMeta.SetExpectedRevenueGrowth(code, *body.Growth)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": *body.Growth}})
 	})
+	// GET /api/stocks/:code/expected-payout —— 读取该股预期支付率（对齐 app/api/stocks.py）：返回 payout/updated_at。
 	api.GET("/stocks/:code/expected-payout", func(c *gin.Context) {
 		code := c.Param("code")
 		g, ts := s.StockMeta.GetExpectedPayout(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": g, "updated_at": ts}})
 	})
+	// PUT /api/stocks/:code/expected-payout —— 设置预期支付率：body 需 payout（必填）。
 	api.PUT("/stocks/:code/expected-payout", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
@@ -399,10 +440,13 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- trades ----
+	// GET /api/trades —— 交易流水列表（对齐 app/api/trades.py）：query code 可选按代码过滤，返回重放后的持仓/成本/交易记录。
 	api.GET("/trades", func(c *gin.Context) {
 		code := c.Query("code")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.ListTrades(code)})
 	})
+	// POST /api/trades —— 录入一笔交易（对齐 app/api/trades.py）：body 需 code/side(买或卖)/price/quantity，
+	// 可选 fee/trade_time/note/name；录毕立即重放持仓并可能触发当日 AI 打分失效。
 	api.POST("/trades", func(c *gin.Context) {
 		var body struct {
 			Code      string  `json:"code"`
@@ -430,6 +474,7 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"trade_id": id, "holding": h}})
 	})
+	// PUT /api/trades/:trade_id —— 修改一笔交易（对齐 app/api/trades.py）：body 传要改的字段，空 body 返回 400。
 	api.PUT("/trades/:trade_id", func(c *gin.Context) {
 		id, _ := strconv.ParseInt(c.Param("trade_id"), 10, 64)
 		var body map[string]any
@@ -444,6 +489,7 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
 	})
+	// DELETE /api/trades/:trade_id —— 删除一笔交易（对齐 app/api/trades.py）：删除后重放该股持仓与成本。
 	api.DELETE("/trades/:trade_id", func(c *gin.Context) {
 		id, _ := strconv.ParseInt(c.Param("trade_id"), 10, 64)
 		result, err := s.Holdings.DeleteTrade(id)
@@ -455,6 +501,8 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 
 	// ---- holdings 写操作 ----
+	// POST /api/holdings/:code/cost-adjust —— 成本/股数调整（对齐 app/api/holdings.py /cost-adjust）：
+	// amount 正加负减成本、delta_qty 记录拆股送股、is_dividend 标记累计分红；插入 adjust 交易重放只改成本/股数。
 	api.POST("/holdings/:code/cost-adjust", func(c *gin.Context) {
 		var body struct {
 			Amount     float64 `json:"amount"`

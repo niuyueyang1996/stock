@@ -53,6 +53,7 @@ func NormFlowWindow(window any) string {
 	}
 }
 
+// dayMode 日级聚合模式：'week'→自然周，'month'→自然月，其余→逐日
 func dayMode(w string) string {
 	switch strings.ToLower(strings.TrimSpace(w)) {
 	case "week":
@@ -64,6 +65,7 @@ func dayMode(w string) string {
 	}
 }
 
+// dayAILimit 按窗口返回喂给 AI 的（原始数据）条数上限：day 120 / week 60 / month 36
 func dayAILimit(w string) int {
 	switch strings.ToLower(strings.TrimSpace(w)) {
 	case "week":
@@ -173,6 +175,7 @@ func BucketDayFlows(rows []db.DailyFundflowCache, mode string, priceMap map[stri
 	return out
 }
 
+// fval2 按字段名取逐日五档金额字段值；未知键返回 nil
 func fval2(r *db.DailyFundflowCache, key string) *float64 {
 	switch key {
 	case "netamount":
@@ -626,12 +629,14 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 	}, nil
 }
 
+// sortedCopy 返回传入字符串切片的一份升序副本（不修改原切片）
 func sortedCopy(in []string) []string {
 	out := append([]string{}, in...)
 	sort.Strings(out)
 	return out
 }
 
+// jsonList 把值序列化为 JSON 字符串（便于落库 JSON 列）
 func jsonList(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)

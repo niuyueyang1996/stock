@@ -69,6 +69,7 @@ func (s *Service) EnsureStockNews(code string, limit, contentMax int, force bool
 	return out
 }
 
+// nowISO2 当前本地时间秒级 ISO（2006-01-02T15:04:05）
 func nowISO2() string { return time.Now().Format("2006-01-02T15:04:05") }
 
 // NormalizeNews 规整消息面输出（对齐 _normalize_news）
@@ -136,6 +137,7 @@ func NormalizeTechnical(data map[string]any) map[string]any {
 	}
 }
 
+// strList 把任意值规整为去空串的 []string（兼容 []any/[]string/单值）
 func strList(v any) []string {
 	switch x := v.(type) {
 	case []any:
@@ -187,6 +189,7 @@ func (s *Service) UpsertTechReport(code, asOf, source string, report map[string]
 	return s.TechR.Upsert(&rec)
 }
 
+// strPtr 返回字符串指针
 func strPtr(v string) *string { return &v }
 
 // AnalyzeNews 个股 AI 消息面分析：新闻注入 + 公开知识 + 时效规则，落库 source='single'
@@ -499,6 +502,7 @@ func (s *Service) GetTechCoherence(scope, scopeKey string) map[string]any {
 		"summary": daoStr(r.Summary), "html": daoStr(r.HTML), "model_name": daoStr(r.ModelName)}
 }
 
+// requireModel 获取激活模型配置；未激活则 panic（由调用方在上层拦截）
 func (s *Service) requireModel() *db.AIModel {
 	m := s.Models.GetActive()
 	if m == nil {
@@ -507,6 +511,7 @@ func (s *Service) requireModel() *db.AIModel {
 	return m
 }
 
+// modelTagOf 模型标记：优先 model 名，缺省用 name
 func modelTagOf(m *db.AIModel) string {
 	if m.Model != "" {
 		return m.Model
@@ -514,6 +519,7 @@ func modelTagOf(m *db.AIModel) string {
 	return m.Name
 }
 
+// techEndDay 截取 as_of 日期部分（前 10 位 YYYY-MM-DD）
 func techEndDay(asOf string) string {
 	if len(asOf) >= 10 {
 		return asOf[:10]
@@ -521,6 +527,7 @@ func techEndDay(asOf string) string {
 	return asOf
 }
 
+// ctxJSON 结构序列化 JSON 字符串，序列化失败返回 "{}"
 func ctxJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -529,6 +536,7 @@ func ctxJSON(v any) string {
 	return string(b)
 }
 
+// loadAnyList 把存库的 JSON 字符串（*string）反序列化为 []any；nil/失败返回空
 func loadAnyList(p *string) []any {
 	if p == nil {
 		return []any{}

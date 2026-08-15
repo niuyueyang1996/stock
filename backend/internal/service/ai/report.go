@@ -152,6 +152,7 @@ func (s *Service) BuildStockContext(code string) map[string]any {
 	return ctx
 }
 
+// sumN 对切片末 n 个元素求和（n 超出长度则取全部）
 func sumN(nets []float64, n int) float64 {
 	if len(nets) == 0 {
 		return 0
@@ -225,6 +226,7 @@ func IntradaySeries(rows []db.Fundflow15mCache, windowMin int) []map[string]any 
 	return out
 }
 
+// hmMin 把 "HH:MM" 时分转成当天分钟数；格式不足则返回 0
 func hmMin(hm string) int {
 	if len(hm) < 5 {
 		return 0
@@ -234,6 +236,7 @@ func hmMin(hm string) int {
 	return h*60 + m
 }
 
+// fval 取 float 指针值；nil 返回 0
 func fval(p *float64) float64 {
 	if p == nil {
 		return 0
@@ -241,6 +244,7 @@ func fval(p *float64) float64 {
 	return *p
 }
 
+// roundF 四舍五入保留 prec 位小数
 func roundF(v float64, prec int) float64 {
 	p := math.Pow(10, float64(prec))
 	return math.Round(v*p) / p
@@ -449,6 +453,7 @@ func NormalizeReport(data map[string]any) map[string]any {
 	}
 }
 
+// toFloat 把任意数字/数字字符串转 float64；失败返回错误（nil 也报错）
 func toFloat(v any) (float64, error) {
 	if v == nil {
 		return 0, fmt.Errorf("nil")
@@ -473,11 +478,13 @@ func toFloat(v any) (float64, error) {
 	}
 }
 
+// toBool 断言值为 bool；非 bool 返回 false
 func toBool(v any) bool {
 	b, _ := v.(bool)
 	return b
 }
 
+// clampNum 把数字钳制到 [-100, 10000] 并保留两位；nil/解析失败返回 nil
 func clampNum(v any) any {
 	if v == nil {
 		return nil
@@ -554,6 +561,8 @@ func (s *Service) AnalyzeStock(code, systemPrompt, intensity string) (map[string
 	}, nil
 }
 
+// outputSchemaText 组装诊股输出 schema 文本：开头列出固定键与 10 维结构，
+// 深入强度追加 html 字段（双端 schema 的开头端；user 消息末尾另有重申）
 func outputSchemaText(intensity string) string {
 	var b strings.Builder
 	b.WriteString(`{"score": 0-100, "grade": "A|B|C|D", "action": "add|hold|watch|reduce|exit", "risk": 0-100, "risk_level": "low|medium|high", "confidence": "high|medium|low", "dimensions": {`)

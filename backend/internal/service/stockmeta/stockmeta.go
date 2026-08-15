@@ -13,6 +13,7 @@ type Service struct {
 	DB *gorm.DB
 }
 
+// New 构造个股预期数据服务（仅注入 DB）
 func New(g *gorm.DB) *Service { return &Service{DB: g} }
 
 // GrowthRow 预期增速/营收增速记录

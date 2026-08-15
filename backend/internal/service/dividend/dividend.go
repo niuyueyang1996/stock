@@ -33,6 +33,7 @@ type Service struct {
 	DB       *gorm.DB
 }
 
+// New 构造除权服务：注入东财/巨潮数据源、持仓服务与 DB
 func New(e *raw.EM, c *raw.CNInfo, h *holdings.Service, g *gorm.DB) *Service {
 	return &Service{em: e, cn: c, holdings: h, DB: g}
 }
@@ -76,12 +77,14 @@ func (s *Service) FetchLatestDividend(ctx context.Context, code string) *LatestD
 	return nil
 }
 
+// isApplied 该 code 在 exDate 是否已做过除权（幂等判断）
 func (s *Service) isApplied(code, exDate string) bool {
 	var n int64
 	s.DB.Raw("SELECT COUNT(*) FROM dividend_adjustments WHERE code=? AND ex_date=?", code, exDate).Scan(&n)
 	return n > 0
 }
 
+// markApplied 记录已除权（INSERT OR IGNORE，幂等防重复）
 func (s *Service) markApplied(code, exDate string, amount float64) {
 	_ = s.DB.Exec("INSERT OR IGNORE INTO dividend_adjustments(code, ex_date, amount, applied_at) VALUES(?,?,?,?)",
 		code, exDate, amount, time.Now().Format("2006-01-02T15:04:05"))
@@ -121,5 +124,8 @@ func (s *Service) ApplyDividendAdjustments(ctx context.Context) map[string]any {
 	return map[string]any{"today": today, "applied": applied, "skipped": skipped, "failed": failed}
 }
 
+// round2 四舍五入保留 2 位小数
 func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+
+// round4 四舍五入保留 4 位小数
 func round4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }

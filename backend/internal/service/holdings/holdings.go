@@ -21,6 +21,8 @@ type Service struct {
 	FxEnsure func(currency, rateDate string) *float64
 }
 
+// New 构造持仓服务：注入持仓 DAO 与交易日汇率确保函数（fxEnsure 为港股折算提供汇率，
+// 返回 nil 表示当日汇率缺失）。
 func New(h *dao.HoldingsDAO, fxEnsure func(currency, rateDate string) *float64) *Service {
 	return &Service{DB: h, FxEnsure: fxEnsure}
 }
@@ -223,6 +225,7 @@ func isETFCode(code string) bool {
 		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
 }
 
+// strptr 空白串返回 nil 指针，否则返回其地址（可选字段写库用）
 func strptr(s string) *string {
 	if s == "" {
 		return nil
@@ -230,6 +233,7 @@ func strptr(s string) *string {
 	return &s
 }
 
+// round 四舍五入保留指定小数位数（基于 int64 截断，正值 0.5 进一）
 func round(v float64, digits int) float64 {
 	p := 1.0
 	for i := 0; i < digits; i++ {

@@ -64,8 +64,10 @@ type Progress struct {
 	m     *Manager
 }
 
+// Cancelled 判断当前任务是否已被取消（含取消请求或已置为 cancelled 状态）。
 func (p *Progress) Cancelled() bool { return p.m.isCancelled(p.jobID) }
 
+// Check 任务取消检查：若已取消返回 ErrCancelled，否则返回 nil（供任务函数周期调用）。
 func (p *Progress) Check() error {
 	if p.Cancelled() {
 		return ErrCancelled
@@ -73,6 +75,8 @@ func (p *Progress) Check() error {
 	return nil
 }
 
+// 进度上报快捷入口（对齐 Python Progress 语义）：
+// SetTotal 设置任务总步数（Total）；Step 标记当前进行中的步骤名；CompleteStep 完成一个步骤名。
 func (p *Progress) SetTotal(total int)       { p.m.setTotal(p.jobID, total) }
 func (p *Progress) Step(name string)         { p.m.setStep(p.jobID, name) }
 func (p *Progress) CompleteStep(name string) { p.m.completeStep(p.jobID, name) }
@@ -81,6 +85,7 @@ var ErrCancelled = &CancelError{}
 
 type CancelError struct{}
 
+// Error 返回取消错误的文本表示（实现 error 接口）。
 func (*CancelError) Error() string { return "job cancelled" }
 
 type Manager struct {
@@ -102,6 +107,7 @@ type Manager struct {
 
 const pushInterval = 300 * time.Millisecond // 进度推送节流窗口（对齐 Python 0.3s）
 
+// New 创建任务管理器，初始化 jobs/batches 表与两条 lane 的 worker 队列，并启动常驻 worker。
 func New() *Manager {
 	m := &Manager{
 		jobs:    map[string]*Job{},
@@ -112,14 +118,17 @@ func New() *Manager {
 	return m
 }
 
+// newID 生成 6 字节随机数的十六进制字符串作为任务/批次 ID。
 func newID() string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
+// nowStr 返回当前时间的 "HH:MM:SS" 字符串（任务/批次时间戳）。
 func nowStr() string { return time.Now().Format("15:04:05") }
 
+// laneOf 依据任务 kind 前缀判定归属 lane：以 "ai." 开头走 AI 车道，否则走 refresh 车道。
 func laneOf(kind string) string {
 	if strings.HasPrefix(kind, "ai.") {
 		return LaneAI
@@ -127,6 +136,7 @@ func laneOf(kind string) string {
 	return LaneRefresh
 }
 
+// ensureWorkers 首次调用时为每条 lane 启动固定数量的常驻 worker goroutine（幂等，只启动一次）。
 func (m *Manager) ensureWorkers() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -142,6 +152,7 @@ func (m *Manager) ensureWorkers() {
 	}
 }
 
+// workerLoop 单个 worker 主循环：从队列取任务，标记 running，执行后 finalize（直到队列被关闭）。
 func (m *Manager) workerLoop(lane string, q chan *Job) {
 	for job := range q {
 		m.mu.Lock()
@@ -153,6 +164,7 @@ func (m *Manager) workerLoop(lane string, q chan *Job) {
 	}
 }
 
+// runJob 执行任务的 Fn 回调：Fn 为空返回 nil；否则用带进度指针的 Progress 调用任务函数。
 func (m *Manager) runJob(job *Job) error {
 	if job.Fn == nil {
 		return nil
@@ -160,6 +172,8 @@ func (m *Manager) runJob(job *Job) error {
 	return job.Fn(&Progress{jobID: job.ID, m: m})
 }
 
+// finalize 收尾一个任务：按取消/错误/完成设置终态、OK、完成度与时间戳，记入 recent 列表，
+// 若属某个批次则尝试结束批次，最后强制推送终态快照到前端。
 func (m *Manager) finalize(job *Job, err error) {
 	m.mu.Lock()
 	if job.CancelRequested || (err != nil && errors.Is(err, ErrCancelled)) {
@@ -211,6 +225,7 @@ func (m *Manager) notify(force bool) {
 	}
 }
 
+// finishBatchIfDone 按批次子任务完成情况更新批次 DoneCount/Pct，全部完成时置批次为 done。
 func (m *Manager) finishBatchIfDone(batchID string) {
 	b, ok := m.batches[batchID]
 	if !ok {
@@ -236,6 +251,7 @@ func (m *Manager) finishBatchIfDone(batchID string) {
 	}
 }
 
+// Start 创建并排队一个独立任务：按 kind 分配 lane，注册进 jobs 表并入队，返回任务 ID。
 func (m *Manager) Start(kind, label string, fn func(p *Progress) error) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -280,6 +296,8 @@ func (m *Manager) EnqueueBatchWithMeta(kind, label string, children []BatchChild
 	return b.ID
 }
 
+// EnqueueBatch 创建一批子任务：每个 childLabels 项生成一个并入同一 batch 的任务，
+// fn 按各子标签依次执行；返回批次 ID。
 func (m *Manager) EnqueueBatch(kind, label string, childLabels []string, fn func(label string, p *Progress) error) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -300,6 +318,7 @@ func (m *Manager) EnqueueBatch(kind, label string, childLabels []string, fn func
 	return b.ID
 }
 
+// Cancel 请求取消指定任务：标记 CancelRequested（由任务函数通过 Progress 感知）；任务不存在返回 false。
 func (m *Manager) Cancel(jobID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -311,6 +330,7 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
+// CancelBatch 取消整批任务：给每种子任务标记取消请求并把批次状态置为 cancelled；批次不存在返回 false。
 func (m *Manager) CancelBatch(batchID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -357,6 +377,7 @@ type RecentPublic struct {
 	BatchID any    `json:"batch_id"`
 }
 
+// recentPublic 把内部 Job 转为精简的 RecentPublic（空串/空字段归一为 nil）。
 func recentPublic(j *Job) RecentPublic {
 	return RecentPublic{
 		JobID: j.ID, Kind: j.Kind, Label: j.Label, Status: j.Status,
@@ -377,6 +398,7 @@ type BatchPublic struct {
 	CurrentLabel string   `json:"current_label"`
 }
 
+// jobPublic 把内部 Job 转为对外 JobPublic（Done 切片复制，system.prewarm 任务不可取消）。
 func (m *Manager) jobPublic(j *Job) JobPublic {
 	return JobPublic{
 		JobID: j.ID, Kind: j.Kind, Label: j.Label, Lane: j.Lane, Status: j.Status,
@@ -386,6 +408,8 @@ func (m *Manager) jobPublic(j *Job) JobPublic {
 	}
 }
 
+// Snapshot 构造对外推送/读取的任务全集快照：primary 任务（优先 batch，其次 refresh 车道 running，
+// 再任意 running/queued，最后 recent）、各 lane 的 running/queue 列表、进行中的批次与最近任务。
 func (m *Manager) Snapshot() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -511,6 +535,7 @@ func (m *Manager) Snapshot() map[string]any {
 	return out
 }
 
+// primaryOf 把单个运行中任务转为主任务呈现 map（running=true，含进度与批信息）。
 func (m *Manager) primaryOf(j *Job) map[string]any {
 	return map[string]any{
 		"running": true, "job_id": j.ID, "kind": j.Kind, "label": j.Label,
@@ -520,6 +545,7 @@ func (m *Manager) primaryOf(j *Job) map[string]any {
 	}
 }
 
+// batchPublic 把内部 Batch 转为对外 BatchPublic：汇总 running/queued 子任务标签并给出当前执行子任务。
 func (m *Manager) batchPublic(b *Batch) BatchPublic {
 	bp := BatchPublic{BatchID: b.ID, Kind: b.Kind, Label: b.Label, Status: b.Status,
 		DoneCount: b.DoneCount, Total: b.Total, Pct: b.Pct}
@@ -540,60 +566,79 @@ func (m *Manager) batchPublic(b *Batch) BatchPublic {
 	return bp
 }
 
+// jobIDOf 取 Job 的 ID，nil 返回 nil。
 func jobIDOf(j *Job) any {
 	if j == nil {
 		return nil
 	}
 	return j.ID
 }
+
+// kindOf 取 Job 的 Kind，nil 返回空串。
 func kindOf(j *Job) string {
 	if j == nil {
 		return ""
 	}
 	return j.Kind
 }
+
+// labelOf 取 Job 的 Label，nil 返回空串。
 func labelOf(j *Job) string {
 	if j == nil {
 		return ""
 	}
 	return j.Label
 }
+
+// errOf 取 Job 的错误信息，nil 或空串返回 nil。
 func errOf(j *Job) any {
 	if j == nil || j.Error == "" {
 		return nil
 	}
 	return j.Error
 }
+
+// batchIDOf 取 Job 的 BatchID，nil 或空串返回 nil。
 func batchIDOf(j *Job) any {
 	if j == nil || j.BatchID == "" {
 		return nil
 	}
 	return j.BatchID
 }
+
+// jobIDOf2 取 RecentPublic 的 JobID，nil 返回 nil。
 func jobIDOf2(j *RecentPublic) any {
 	if j == nil {
 		return nil
 	}
 	return j.JobID
 }
+
+// kindOf2 取 RecentPublic 的 Kind，nil 返回空串。
 func kindOf2(j *RecentPublic) string {
 	if j == nil {
 		return ""
 	}
 	return j.Kind
 }
+
+// labelOf2 取 RecentPublic 的 Label，nil 返回空串。
 func labelOf2(j *RecentPublic) string {
 	if j == nil {
 		return ""
 	}
 	return j.Label
 }
+
+// errOf2 取 RecentPublic 的错误，nil 返回 nil。
 func errOf2(j *RecentPublic) any {
 	if j == nil || j.Error == nil {
 		return nil
 	}
 	return j.Error
 }
+
+// batchIDOf2 取 RecentPublic 的 BatchID，nil 返回 nil。
 func batchIDOf2(j *RecentPublic) any {
 	if j == nil || j.BatchID == nil {
 		return nil
@@ -601,6 +646,7 @@ func batchIDOf2(j *RecentPublic) any {
 	return j.BatchID
 }
 
+// strOrNil 空字符串转 nil，否则原样返回。
 func strOrNil(s string) any {
 	if s == "" {
 		return nil
@@ -608,6 +654,7 @@ func strOrNil(s string) any {
 	return s
 }
 
+// Prewarm 入队一个系统启动预热任务：按 steps 依次执行 fn 并上报进度，返回任务 ID。
 func (m *Manager) Prewarm(steps []string, fn func(step string) error) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -633,6 +680,7 @@ func (m *Manager) Prewarm(steps []string, fn func(step string) error) string {
 	return id
 }
 
+// PrewarmSnapshot 构造预热/当前任务的精简快照：优先读 prewarm 任务本身，否则读任意 running 任务。
 func (m *Manager) PrewarmSnapshot() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -667,6 +715,7 @@ func (m *Manager) PrewarmSnapshot() map[string]any {
 	}
 }
 
+// IsRefreshBusy 判断 refresh 车道是否有排队或运行中的任务（用于刷新互斥/忙碌判断）。
 func (m *Manager) IsRefreshBusy() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -678,6 +727,7 @@ func (m *Manager) IsRefreshBusy() bool {
 	return false
 }
 
+// isCancelled 检查任务是否已取消（取消请求或状态为 cancelled）。
 func (m *Manager) isCancelled(jobID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -685,6 +735,7 @@ func (m *Manager) isCancelled(jobID string) bool {
 	return ok && (j.CancelRequested || j.Status == StatusCanceled)
 }
 
+// setTotal 设置运行中任务的总步数（Total，最小 1）并复位进度为 0。
 func (m *Manager) setTotal(jobID string, total int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -699,6 +750,8 @@ func (m *Manager) setTotal(jobID string, total int) {
 	j.Pct = 0
 }
 
+// setStep 更新运行中任务的当前步骤名、时间戳与占比（进行中步骤按 (已完成+1)/Total 计，上限 99%），
+// 并节流推送快照。
 func (m *Manager) setStep(jobID, name string) {
 	m.mu.Lock()
 	j, ok := m.jobs[jobID]
@@ -719,6 +772,7 @@ func (m *Manager) setStep(jobID, name string) {
 	m.notify(false)
 }
 
+// completeStep 记录已完成步骤名（去重）、更新已完成计数/占比（上限 99%）与时间戳，并节流推送快照。
 func (m *Manager) completeStep(jobID, name string) {
 	m.mu.Lock()
 	j, ok := m.jobs[jobID]

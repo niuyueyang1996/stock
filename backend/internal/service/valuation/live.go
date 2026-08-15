@@ -25,10 +25,12 @@ type Service struct {
 	Fx FxGetter
 }
 
+// NewLive 构造实时估值服务（注入 DB 与汇率读取器）
 func NewLive(g *gorm.DB, fx FxGetter) *Service {
 	return &Service{DB: g, Fx: fx}
 }
 
+// getFinancials 读最新财务缓存（report_date 降序取最新），无则返回 nil
 func (s *Service) getFinancials(code string) *db.FinancialCache {
 	var f db.FinancialCache
 	if err := s.DB.Where("code = ?", code).Order("report_date DESC").First(&f).Error; err != nil {
@@ -37,6 +39,7 @@ func (s *Service) getFinancials(code string) *db.FinancialCache {
 	return &f
 }
 
+// getExpectedGrowth 读用户预设盈利增速（无→nil）
 func (s *Service) getExpectedGrowth(code string) *float64 {
 	var g db.StockExpectedGrowth
 	if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
@@ -45,6 +48,7 @@ func (s *Service) getExpectedGrowth(code string) *float64 {
 	return &g.Growth
 }
 
+// getExpectedRevenueGrowth 读用户预设营收增速（无→nil）
 func (s *Service) getExpectedRevenueGrowth(code string) *float64 {
 	var g db.StockExpectedRevenueGrowth
 	if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
@@ -53,6 +57,7 @@ func (s *Service) getExpectedRevenueGrowth(code string) *float64 {
 	return &g.Growth
 }
 
+// getExpectedPayout 读用户预设派息率（无→nil）
 func (s *Service) getExpectedPayout(code string) *float64 {
 	var g db.StockExpectedPayout
 	if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
@@ -111,6 +116,7 @@ func percentile(hist []float64, target *float64) *float64 {
 	return &out
 }
 
+// seriesValues 估值历史序列的非空值数组
 func (s *Service) seriesValues(code, indicator, period, asOf string) []float64 {
 	rows := s.getSeries(code, indicator, period, asOf)
 	out := make([]float64, 0, len(rows))
@@ -122,6 +128,7 @@ func (s *Service) seriesValues(code, indicator, period, asOf string) []float64 {
 	return out
 }
 
+// percentileInSeries 目标值在历史序列中的百分位（剔除末条当前值）
 func (s *Service) percentileInSeries(code, indicator, period string, value *float64, asOf string) *float64 {
 	hist := s.seriesValues(code, indicator, period, asOf)
 	if len(hist) > 0 {
@@ -130,6 +137,7 @@ func (s *Service) percentileInSeries(code, indicator, period string, value *floa
 	return percentile(hist, value)
 }
 
+// seriesLastAny 在 1y/3y/5y 中找首个有末值的序列，返回其末值及周期
 func (s *Service) seriesLastAny(code, indicator, asOf string) (*float64, string) {
 	for _, period := range []string{"1y", "3y", "5y"} {
 		rows := s.getSeries(code, indicator, period, asOf)
@@ -184,6 +192,7 @@ func ComputeTTM(series []map[string]any) *float64 {
 	return ttmAt(series, rd, "net_profit")
 }
 
+// computeTTMGrowth 最新 TTM 相对去年同期 TTM 的同比增速（%）
 func computeTTMGrowth(series []map[string]any, key string) *float64 {
 	if len(series) == 0 {
 		return nil
@@ -199,6 +208,7 @@ func computeTTMGrowth(series []map[string]any, key string) *float64 {
 	return &out
 }
 
+// ttmPair 最新与去年同期 TTM 值对
 func ttmPair(series []map[string]any, key string) (*float64, *float64) {
 	if len(series) == 0 {
 		return nil, nil
@@ -507,6 +517,7 @@ func (s *Service) computeLiveSeriesFallback(code string, price *float64, asOf st
 	return out
 }
 
+// resolveLivePrice 读最近一次日收盘价（asOf 前），无则返回 nil
 func (s *Service) resolveLivePrice(code, asOf string) *float64 {
 	var c db.DailyPriceCache
 	q := s.DB.Where("code = ?", code)
@@ -520,15 +531,24 @@ func (s *Service) resolveLivePrice(code, asOf string) *float64 {
 }
 
 // ---- helpers ----
+// deref 指针解引用，nil 返回 0
 func deref(p *float64) float64 {
 	if p == nil {
 		return 0
 	}
 	return *p
 }
+
+// round1 一位小数
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+// round2 两位小数
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+// round3 三位小数
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+
+// round2p 指针值两位小数（nil 透传）
 func round2p(v *float64) *float64 {
 	if v == nil {
 		return nil
@@ -536,10 +556,14 @@ func round2p(v *float64) *float64 {
 	out := round2(*v)
 	return &out
 }
+
+// round2f 值转两位小数指针
 func round2f(v float64) *float64 {
 	out := round2(v)
 	return &out
 }
+
+// round0p 指针值取整（nil 透传，对齐 Python round(v,0)）
 func round0p(v *float64) *float64 {
 	if v == nil {
 		return nil
@@ -547,6 +571,8 @@ func round0p(v *float64) *float64 {
 	out := math.Round(*v) // 对齐 Python round(v, 0)
 	return &out
 }
+
+// div2 a÷b 保留两位小数；b 空/零返回 nil
 func div2(a float64, b *float64) *float64 {
 	if b == nil || *b == 0 {
 		return nil
@@ -554,6 +580,8 @@ func div2(a float64, b *float64) *float64 {
 	out := round2(a / *b)
 	return &out
 }
+
+// divpct a÷b×100 两位小数；任一空或 b 为零返回 nil
 func divpct(a, b *float64) *float64 {
 	if a == nil || b == nil || *b == 0 {
 		return nil
@@ -561,6 +589,8 @@ func divpct(a, b *float64) *float64 {
 	out := round2(*a / *b * 100)
 	return &out
 }
+
+// fnum 数字类型转 float 指针；仅支持 float64/int/nil
 func fnum(v any) *float64 {
 	switch x := v.(type) {
 	case float64:
@@ -573,6 +603,8 @@ func fnum(v any) *float64 {
 	}
 	return nil
 }
+
+// atoi 字符串前导数字解析为 int（遇非数字停止）
 func atoi(s string) int {
 	n := 0
 	for _, c := range s {
@@ -583,6 +615,8 @@ func atoi(s string) int {
 	}
 	return n
 }
+
+// itoa 整数转十进制字符串
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
