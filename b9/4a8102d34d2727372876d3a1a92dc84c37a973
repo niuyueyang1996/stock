@@ -1,0 +1,15 @@
+.gitignore
+  h_07352c0544a725 12-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b94a8102d34d2727372876d3a1a92dc84c37a973",
+  "prompts": {},
+  "logical_commit_id": "b94a8102d34d2727372876d3a1a92dc84c37a973",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
