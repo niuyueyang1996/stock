@@ -1,0 +1,25 @@
+.gitattributes
+  h_07352c0544a725 4
+CLAUDE.md
+  h_07352c0544a725 1,4-5,7,10-15,18-21,26-28,31,33-34,40,44-46,48-66,70,72-73,75,83-87,92-107,114-116,118-124,127-135,138-145
+README.md
+  h_07352c0544a725 5,19,50,60,62,65,71,75-76,78,84-89,95,97-100,102,107,122,128-129,131,152,160-161,164,168,191,204,211-223,231-233
+packaging/android/app/src/main/AndroidManifest.xml
+  h_07352c0544a725 11-12
+packaging/android/app/src/main/java/com/stockanalyzer/app/GoServer.kt
+  h_07352c0544a725 29-37
+packaging/android/app/src/main/java/com/stockanalyzer/app/MainActivity.kt
+  h_07352c0544a725 42-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "99c1a623c5df303605cc52ab7cf587b49a8a5b3a",
+  "prompts": {},
+  "logical_commit_id": "99c1a623c5df303605cc52ab7cf587b49a8a5b3a",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
