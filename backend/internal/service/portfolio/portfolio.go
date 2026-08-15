@@ -1492,15 +1492,13 @@ func latestToMap(b *latestBucket) map[string]any {
 	}
 }
 
-// comboFundflow 多 code 资金流按权重求和（等权=1.0 直接加总），对齐 Python combo_fundflow：
-// A股/ETF/指数参与、港股排除（持仓场景等价于排除五位港股）；读本地缓存零网络。
+// comboFundflow 多 code 资金流按权重求和（等权=1.0 直接加总）：
+// A股/ETF/指数/港股均参与（港股分时按价向派生，口径与 A股分笔不同但同为五档净流入，
+// 用户要求港股进组合；Python 参照仍排除）。读本地缓存零网络。
 // asOfRequested：原样输出 asOf（空串/未传 → null，对齐 Python as_of=None）。
 func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note string) map[string]any {
-	members := []string{}
+	members := make([]string, 0, len(codes))
 	for _, code := range codes {
-		if isHKCode5(code) {
-			continue // 港股无资金流排除（对齐 Python participates_fundflow=False）
-		}
 		members = append(members, code)
 	}
 	var asOfOut any
@@ -1604,14 +1602,14 @@ func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note st
 	return out
 }
 
-// Fundflow 组合资金流穿透（对齐 Python portfolio_fundflow）：
-// 持仓（tags 标签子集，None=全选）中参与资金流的 A股/ETF 按字段求和（港股无资金流排除），
-// 额外叠加组合净值线 price（Σ 价格×股数，仅参与资金流的 A股/ETF 人民币持仓，避免与港股混币）。
+// Fundflow 组合资金流穿透：
+// 持仓（tags 标签子集，None=全选）中 A股/ETF/港股 按字段求和（港股分时按价向派生，用户要求参与；
+// Python 参照仍排除），额外叠加组合净值线 price（Σ 价格×股数，仅人民币持仓 A股/ETF，避免与港股混币）。
 // asOf：可选历史回看日（非交易日退到最近交易日；空=当前有效交易日，未开盘回退）。
 func (s *Service) Fundflow(tags []string, asOf string) map[string]any {
 	tradeDay, _ := s.resolveTradeDay(asOf)
 
-	// 持仓筛选：active + quantity>0 + tags 标签匹配；参与资金流即排除港股
+	// 持仓筛选：active + quantity>0 + tags 标签匹配；港股参与（用户要求）
 	tagSet := map[string]bool{}
 	for _, t := range tags {
 		tagSet[t] = true
@@ -1621,7 +1619,7 @@ func (s *Service) Fundflow(tags []string, asOf string) map[string]any {
 	codes := []string{}
 	qty := map[string]float64{}
 	for _, h := range hs {
-		if h.Quantity <= 0 || isHKCode5(h.Code) {
+		if h.Quantity <= 0 {
 			continue
 		}
 		if len(tagSet) > 0 {
@@ -1636,13 +1634,14 @@ func (s *Service) Fundflow(tags []string, asOf string) map[string]any {
 		codes = append(codes, h.Code)
 		qty[h.Code] = h.Quantity
 	}
-	note := "持仓穿透求和（A股/ETF 腾讯分笔；港股无资金流排除）"
+	note := "持仓穿透求和（A股/ETF 腾讯分笔 + 港股分时派生）"
 	out := s.comboFundflow(codes, tradeDay, asOf, note)
 	s.attachPriceLine(out, codes, qty, tradeDay)
 	return out
 }
 
-// attachPriceLine 组合净值线：Σ(价格×股数)，仅参与资金流的 A股/ETF（人民币口径，避免与港股混币）。
+// attachPriceLine 组合净值线：Σ(价格×股数)，仅 A股/ETF（人民币口径，避免与港股混币）；
+// 港股参与五档求和但不进净值线（港币价不折人民币）。
 // 分时价「前向沿用」：某持仓某分钟缺价（数据结束/盘后）→ 沿用最近一次价，保证净值线连续不砍半不 null。
 // 对齐 Python portfolio_fundflow 末尾净值线逻辑。
 func (s *Service) attachPriceLine(out map[string]any, codes []string, qty map[string]float64, tradeDay string) {
