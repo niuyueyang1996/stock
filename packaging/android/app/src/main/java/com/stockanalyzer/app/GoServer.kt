@@ -35,13 +35,12 @@ object GoServer {
     }
 
     private fun startInternal(context: Context) {
-        val bin = File(context.filesDir, "stockanalyzer-server")
-        // 从 assets 拷贝二进制（assets 不可直接 exec，需落到私有目录）
+        // Go 后端以 JNI 库方式打包（jniLibs/arm64-v8a/libstockanalyzer.so）：
+        // Android 10+ 禁止 exec 应用私有目录（filesDir）文件，但 nativeLibraryDir 允许 exec，
+        // 且安装时已带可执行权限，无需拷贝/赋权。
+        val bin = File(context.applicationInfo.nativeLibraryDir, "libstockanalyzer.so")
         if (!bin.exists()) {
-            context.assets.open("bin/stockanalyzer-server").use { input ->
-                bin.outputStream().use { output -> input.copyTo(output) }
-            }
-            bin.setExecutable(true)
+            throw IllegalStateException("后端二进制缺失: ${bin.absolutePath}")
         }
         if (!bin.canExecute()) {
             bin.setExecutable(true)
@@ -64,13 +63,12 @@ object GoServer {
         Log.i(TAG, "后端进程已启动")
     }
 
-    /** 把 assets 根下除 bin/ 外的所有条目递归同步到 filesDir/static（Go 端 StaticDir）。 */
+    /** 把 assets 根下所有条目递归同步到 filesDir/static（Go 端 StaticDir）。 */
     private fun syncStatic(context: Context) {
         val dest = File(context.filesDir, "static")
         try {
             val entries = context.assets.list("") ?: return
             for (name in entries) {
-                if (name == "bin") continue
                 copyAssetRecursive(context.assets, name, File(dest, name))
             }
             Log.i(TAG, "静态资源已同步到 ${dest.absolutePath}")

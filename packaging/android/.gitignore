@@ -4,7 +4,7 @@ build/
 app/build/
 
 # Go 交叉编译产物（CI / build.sh 现场编译生成）
-app/src/main/assets/bin/
+app/src/main/jniLibs/
 
 # 本机 SDK 路径
 local.properties

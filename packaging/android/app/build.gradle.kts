@@ -27,8 +27,9 @@ android {
     kotlinOptions { jvmTarget = "17" }
     sourceSets {
         getByName("main") {
-            // bin/（Go 后端二进制）来自 src/main/assets；static/（前端四页）直接引用仓库根
-            assets.srcDirs("src/main/assets", "$rootDir/../../static")
+            // jniLibs：Go 后端二进制（arm64-v8a/libstockanalyzer.so，构建脚本/CI 交叉编译产出）。
+            // 以 native 库方式打包才能 exec（Android 10+ 禁止 exec 应用私有目录，nativeLibraryDir 例外）
+            assets.srcDirs("$rootDir/../../static")
         }
     }
     packaging {
