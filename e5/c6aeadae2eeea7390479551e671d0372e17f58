@@ -1,0 +1,27 @@
+backend/cmd/live_dbg.go
+  h_07352c0544a725 1-16
+backend/cmd/server/main.go
+  h_07352c0544a725 105-107,140
+backend/internal/db/dao/cache_read.go
+  h_07352c0544a725 1-91
+backend/internal/route/router.go
+  h_07352c0544a725 27,93-105
+backend/internal/route/stocks.go
+  h_07352c0544a725 1-221
+backend/internal/service/quote/quote.go
+  h_07352c0544a725 2,6-7,16-17,22,25,27,34-36,41,43-59,62-71,73-87,90-92,95,118-119
+backend/internal/service/valuation/live.go
+  h_07352c0544a725 243-244,246-249,595-601
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e5c6aeadae2eeea7390479551e671d0372e17f58",
+  "prompts": {},
+  "logical_commit_id": "e5c6aeadae2eeea7390479551e671d0372e17f58",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
