@@ -27,7 +27,8 @@ android {
     kotlinOptions { jvmTarget = "17" }
     sourceSets {
         getByName("main") {
-            assets.srcDirs("src/main/assets")
+            // bin/（Go 后端二进制）来自 src/main/assets；static/（前端四页）直接引用仓库根
+            assets.srcDirs("src/main/assets", "$rootDir/../../static")
         }
     }
     packaging {

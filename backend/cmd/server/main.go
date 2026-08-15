@@ -3,10 +3,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +41,18 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// 支持 --listen host:port（Android 壳/打包启动器传入），优先级高于 STOCK_PORT 环境变量
+	listenAddr := flag.String("listen", "", "监听地址 host:port（覆盖 STOCK_PORT）")
+	flag.Parse()
+	if *listenAddr != "" {
+		if h, p, err := net.SplitHostPort(*listenAddr); err == nil {
+			if n, perr := strconv.Atoi(p); perr == nil && n > 0 && n < 65536 {
+				cfg.ListenHost = h
+				cfg.Port = n
+			}
+		}
+	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		log.Fatalf("[启动] 创建数据目录失败: %v", err)
