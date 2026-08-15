@@ -30,9 +30,21 @@
           </table>
         </div>
         <div class="panel" id="aiScorePanel">
-          <h2>🤖 AI 组合打分 <span class="sub" id="aiScoreSub">AI 直接给出得分与评级，依据全部持仓汇总 + 各标签偏好</span></h2>
-          <div id="aiScoreBody"></div>
-          <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
+          <h2>🤖 AI 组合分析 <span class="sub" id="aiScoreSub">打分 / 消息面 / 技术面 / 资金流 · 点「🤖 AI诊组合」勾选分析</span></h2>
+          <div class="period-tabs" id="aiScoreTabs"></div>
+          <div id="aiScoreTabScore">
+            <div id="aiScoreBody"></div>
+            <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
+          </div>
+          <div id="aiScoreTabNews" style="display:none;margin-top:10px">
+            <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="aiScoreTabTech" style="display:none;margin-top:10px">
+            <div id="techBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="aiScoreTabFlow" style="display:none;margin-top:10px">
+            <div id="flowBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
         </div>
         <div class="panel" id="gaugePanel">
           <h2>综合估值分位（近1年）</h2>
@@ -66,21 +78,7 @@
           </div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
         </div>
-        <div class="panel" id="aiExtPanel">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <h2 style="margin:0">AI 扩展分析 <span class="sub">消息面（自动抓取个股新闻） / 技术面（日/周/月K结构） / 资金流 · 批量分析跟随当前标签筛选，点「🤖 AI诊组合」勾选</span></h2>
-          </div>
-          <div class="period-tabs" id="aiExtTabs"></div>
-          <div id="newsBatchWrap" style="display:none;margin-top:10px">
-            <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-          <div id="techBatchWrap" style="display:none;margin-top:10px">
-            <div id="techBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-          <div id="flowBatchWrap" style="display:none;margin-top:10px">
-            <div id="flowBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-        </div>
+
         <div class="panel" id="chartRow">
           <h2>权重分布（按标签）</h2>
           <div class="chart sm" id="weightChart" style="height:340px"></div>
@@ -112,14 +110,14 @@
                                 'day': '日', 'week': '周', 'month': '月' };
     let pfFlowWindow = '15m';   // 当前选中窗口（绘图与 AI 分析共用）
 
-    // AI 扩展分析：消息面 / 技术面 / 资金流 三个 tab（沿用 .ptab），
-    // 按钮跟随当前标签筛选批量分析；资金流批量沿用组合资金流面板当前窗口
+    // AI 组合分析 4 tab（打分 / 消息面 / 技术面 / 资金流）：扩展分析并入打分面板（用户要求 tab 合并）
     (function () {
-      const tabsWrap = document.getElementById('aiExtTabs');
+      const tabsWrap = document.getElementById('aiScoreTabs');
       const wraps = {
-        news: document.getElementById('newsBatchWrap'),
-        tech: document.getElementById('techBatchWrap'),
-        flow: document.getElementById('flowBatchWrap'),
+        score: document.getElementById('aiScoreTabScore'),
+        news: document.getElementById('aiScoreTabNews'),
+        tech: document.getElementById('aiScoreTabTech'),
+        flow: document.getElementById('aiScoreTabFlow'),
       };
       const panels = {
         news: document.getElementById('newsBatchPanel'),
@@ -128,7 +126,7 @@
       };
       if (!tabsWrap || Object.values(wraps).some((x) => !x) || Object.values(panels).some((x) => !x)) return;
       const TABS = [
-        ['news', '消息面'], ['tech', '技术面'], ['flow', '资金流'],
+        ['score', '打分'], ['news', '消息面'], ['tech', '技术面'], ['flow', '资金流'],
       ];
       function show(tab) {
         Object.keys(wraps).forEach((k) => { wraps[k].style.display = k === tab ? '' : 'none'; });
@@ -143,7 +141,7 @@
         b.onclick = () => show(t);
         tabsWrap.appendChild(b);
       });
-      show('news');
+      show('score');
       const currentTags = () => {
         const t = tagsQS();
         return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
@@ -801,7 +799,7 @@
       ['gaugePanel', false],
       ['seriesPanel', false],
       ['fundflowPanel', false],
-      ['aiExtPanel', false],
+
       ['chartRow', false],
       ['peBarPanel', false],
     ].forEach(([id, open]) => {
