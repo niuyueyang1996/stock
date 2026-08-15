@@ -1,0 +1,15 @@
+backend/internal/service/ai/models.go
+  h_07352c0544a725 55-56,58-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cc19a8b5fa312dbf42777b2d4b160602d7390c06",
+  "prompts": {},
+  "logical_commit_id": "cc19a8b5fa312dbf42777b2d4b160602d7390c06",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
