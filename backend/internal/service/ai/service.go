@@ -48,6 +48,16 @@ type Service struct {
 	Live      LiveComputer
 	Portfolio PortfolioComputer
 	Fx        FxGetter
+	// 消息面/技术面依赖
+	NewsRaw   NewsFetcher
+	NewsCache *dao.StockNewsCacheDAO
+	NewsR     *dao.AINewsReportDAO
+	TechR     *dao.AITechReportDAO
+	NewsCoh   *dao.AINewsCoherenceDAO
+	TechCoh   *dao.AITechCoherenceDAO
+	// 资金流依赖
+	FlowR   *dao.AIFundflowReportDAO
+	FlowCoh *dao.AIFundflowCoherenceDAO
 }
 
 func New(g *gorm.DB, client AIClient, config *dao.ConfigDAO, cache *dao.CacheDAO,

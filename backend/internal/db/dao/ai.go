@@ -286,10 +286,14 @@ func (d *AIFundflowCoherenceDAO) Upsert(scope, scopeKey, tradeDate, window, corr
 	}).Create(&rec).Error
 }
 
-// GetLatest 该 scope+scope_key 最近一条；无则 nil
+// GetLatest 该 scope（+scope_key）最近一条；scope_key 空则只按 scope；无则 nil
 func (d *AIFundflowCoherenceDAO) GetLatest(scope, scopeKey string) *db.AIFundflowCoherenceReport {
 	var r db.AIFundflowCoherenceReport
-	if err := d.DB.Where("scope = ? AND scope_key = ?", scope, scopeKey).Order("trade_date DESC, updated_at DESC").First(&r).Error; err != nil {
+	q := d.DB.Where("scope = ?", scope)
+	if scopeKey != "" {
+		q = q.Where("scope_key = ?", scopeKey)
+	}
+	if err := q.Order("trade_date DESC, updated_at DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -394,10 +398,14 @@ func (d *AINewsCoherenceDAO) Upsert(scope, scopeKey, asOf, summary, html, modelN
 	}).Create(&rec).Error
 }
 
-// GetLatest 该 scope+scope_key 最近一条；无则 nil
+// GetLatest 该 scope（+scope_key）最近一条；scope_key 空则只按 scope；无则 nil
 func (d *AINewsCoherenceDAO) GetLatest(scope, scopeKey string) *db.AINewsCoherenceReport {
 	var r db.AINewsCoherenceReport
-	if err := d.DB.Where("scope = ? AND scope_key = ?", scope, scopeKey).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
+	q := d.DB.Where("scope = ?", scope)
+	if scopeKey != "" {
+		q = q.Where("scope_key = ?", scopeKey)
+	}
+	if err := q.Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -418,10 +426,14 @@ func (d *AITechCoherenceDAO) Upsert(scope, scopeKey, asOf, summary, html, modelN
 	}).Create(&rec).Error
 }
 
-// GetLatest 该 scope+scope_key 最近一条；无则 nil
+// GetLatest 该 scope（+scope_key）最近一条；scope_key 空则只按 scope；无则 nil
 func (d *AITechCoherenceDAO) GetLatest(scope, scopeKey string) *db.AITechCoherenceReport {
 	var r db.AITechCoherenceReport
-	if err := d.DB.Where("scope = ? AND scope_key = ?", scope, scopeKey).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
+	q := d.DB.Where("scope = ?", scope)
+	if scopeKey != "" {
+		q = q.Where("scope_key = ?", scopeKey)
+	}
+	if err := q.Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r

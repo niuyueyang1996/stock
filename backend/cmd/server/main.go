@@ -145,6 +145,14 @@ func main() {
 	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
 		dao.NewAIModelDAO(gdb), dao.NewAIReportDAO(gdb), dao.NewTagPrefDAO(gdb),
 		quoteSvc, liveSvc, portSvc, fxSvc)
+	aiSvc.NewsRaw = nw
+	aiSvc.NewsCache = dao.NewStockNewsCacheDAO(gdb)
+	aiSvc.NewsR = dao.NewAINewsReportDAO(gdb)
+	aiSvc.TechR = dao.NewAITechReportDAO(gdb)
+	aiSvc.NewsCoh = dao.NewAINewsCoherenceDAO(gdb)
+	aiSvc.TechCoh = dao.NewAITechCoherenceDAO(gdb)
+	aiSvc.FlowR = dao.NewAIFundflowReportDAO(gdb)
+	aiSvc.FlowCoh = dao.NewAIFundflowCoherenceDAO(gdb)
 
 	svcs := &route.Services{
 		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
