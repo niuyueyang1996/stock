@@ -1,0 +1,31 @@
+backend/cmd/rawprobe/main.go
+  h_07352c0544a725 1-108
+backend/cmd/rawprobe2/main.go
+  h_07352c0544a725 1-67
+backend/internal/raw/em.go
+  h_07352c0544a725 1-175
+backend/internal/raw/http.go
+  h_07352c0544a725 1-114
+backend/internal/raw/legu.go
+  h_07352c0544a725 1-87
+backend/internal/raw/misc.go
+  h_07352c0544a725 1-292
+backend/internal/raw/raw_test.go
+  h_07352c0544a725 1-265
+backend/internal/raw/sina.go
+  h_07352c0544a725 1-121
+backend/internal/raw/tencent.go
+  h_07352c0544a725 1-433
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "727772d48d367cc612219a6df5e0c6d65dfc48b0",
+  "prompts": {},
+  "logical_commit_id": "727772d48d367cc612219a6df5e0c6d65dfc48b0",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
