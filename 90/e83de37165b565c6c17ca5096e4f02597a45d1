@@ -1,0 +1,25 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 169-172
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 60-61
+backend/internal/service/refresh/refresh_batch.go
+  h_07352c0544a725 22,28,223-232
+static/js/common.js
+  h_07352c0544a725 743,1521,1545,1625,1652,1824,1828-1830,1835,1838-1846,1858,1861,1868,1890,1895,1917
+static/portfolio.html
+  h_07352c0544a725 71,129,151-166,384-386,402,404,406-425,428,430-456
+static/stock.html
+  h_07352c0544a725 20,111,113,210,213,236,241,264,638-639,641,661-730
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "90e83de37165b565c6c17ca5096e4f02597a45d1",
+  "prompts": {},
+  "logical_commit_id": "90e83de37165b565c6c17ca5096e4f02597a45d1",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
