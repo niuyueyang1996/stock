@@ -1,0 +1,29 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 162
+backend/internal/db/dao/cache_read.go
+  h_07352c0544a725 46-52
+backend/internal/route/import_excel.go
+  h_07352c0544a725 1-265
+backend/internal/route/router.go
+  h_07352c0544a725 17,44,52-55,119,194-195,261,265-266,269,278-314
+backend/internal/route/stocks_extra2.go
+  h_07352c0544a725 1-531
+backend/internal/service/ai/report.go
+  h_07352c0544a725 334-339,341,343,348-349
+backend/internal/service/dividend/dividend.go
+  h_07352c0544a725 23,60,73
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 6-7,11-12,463-653,674-682,764,799,860-862,892-1074
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5a96adafaa59137bb8867bec4b6f149217b1a20e",
+  "prompts": {},
+  "logical_commit_id": "5a96adafaa59137bb8867bec4b6f149217b1a20e",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
