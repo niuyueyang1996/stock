@@ -1,0 +1,19 @@
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 1-316
+backend/internal/service/portfolio/portfolio_test.go
+  h_07352c0544a725 1-114
+backend/internal/service/valuation/live.go
+  h_07352c0544a725 1-591
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c4eab38fd7e15d7106650fa85d0216e5388e21f5",
+  "prompts": {},
+  "logical_commit_id": "c4eab38fd7e15d7106650fa85d0216e5388e21f5",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
