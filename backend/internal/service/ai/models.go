@@ -52,9 +52,16 @@ func (s *Service) ListModels() []map[string]any {
 	return out
 }
 
-// GetActiveModel 当前激活模型（含完整配置）；无则 nil
+// GetActiveModel 当前激活模型（含完整配置）；无则 nil。
+// 对齐 Python：active 行的 is_active 保持整数 1（列表里才转 bool）
 func (s *Service) GetActiveModel() map[string]any {
-	return modelRow(s.Models.GetActive())
+	m := s.Models.GetActive()
+	if m == nil {
+		return nil
+	}
+	row := modelRow(m)
+	row["is_active"] = m.IsActive
+	return row
 }
 
 // SaveModel 新增或更新模型；校验必填；base_url 去尾斜杠
