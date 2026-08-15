@@ -1,0 +1,17 @@
+backend/internal/service/indices/indices.go
+  h_07352c0544a725 1-181
+backend/internal/service/volatility/volatility.go
+  h_07352c0544a725 1-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "13b62053326c01b9c5fc8a9faf296839b5c92019",
+  "prompts": {},
+  "logical_commit_id": "13b62053326c01b9c5fc8a9faf296839b5c92019",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
