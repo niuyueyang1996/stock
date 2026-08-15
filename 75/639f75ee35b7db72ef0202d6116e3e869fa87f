@@ -1,0 +1,25 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 1,5,13,16-30,40-45,47-131,133-152,154,158-200,202,205-206,211,213
+backend/internal/route/router.go
+  h_07352c0544a725 1-82
+backend/internal/route/trades.go
+  h_07352c0544a725 1-46
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 8,166,168-190,197-205,208-211,215-220
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 15,21
+backend/internal/service/portfolio/portfolio_test.go
+  h_07352c0544a725 12,17,19,21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "75639f75ee35b7db72ef0202d6116e3e869fa87f",
+  "prompts": {},
+  "logical_commit_id": "75639f75ee35b7db72ef0202d6116e3e869fa87f",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
