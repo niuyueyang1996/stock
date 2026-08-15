@@ -232,11 +232,16 @@ func setupRouter(cfg *config.Config, svcs *route.Services) *gin.Engine {
 
 	route.Setup(r, svcs)
 
-	// 静态资源（前端四页）用 NoRoute 兜底（StaticFS 与 /api 路由冲突）
+	// 静态资源（前端四页）：页面与资源均引用 /static/ 前缀（对齐 Python StaticFiles 挂载）。
+	// /api 路由优先；/static/* 走 gin Static（自动 MIME/目录索引）；其余路径 NoRoute 兜底。
 	if _, err := os.Stat(cfg.StaticDir); err == nil {
-		fs := http.FileServer(http.Dir(cfg.StaticDir))
+		r.Static("/static", cfg.StaticDir)
 		r.NoRoute(func(c *gin.Context) {
-			fs.ServeHTTP(c.Writer, c.Request)
+			if c.Request.URL.Path == "/" {
+				c.Redirect(http.StatusFound, "/static/index.html")
+				return
+			}
+			http.FileServer(http.Dir(cfg.StaticDir)).ServeHTTP(c.Writer, c.Request)
 		})
 	} else {
 		log.Printf("[启动] 警告: 静态目录不存在 %s", cfg.StaticDir)
