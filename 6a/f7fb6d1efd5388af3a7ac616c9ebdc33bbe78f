@@ -1,0 +1,23 @@
+.github/workflows/android-apk.yml
+  h_07352c0544a725 57,59-60
+packaging/android/.gitignore
+  h_07352c0544a725 7
+packaging/android/app/build.gradle.kts
+  h_07352c0544a725 30-32
+packaging/android/app/src/main/java/com/stockanalyzer/app/GoServer.kt
+  h_07352c0544a725 38-41,43,66
+packaging/android/build.sh
+  h_07352c0544a725 7,9,11-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6af7fb6d1efd5388af3a7ac616c9ebdc33bbe78f",
+  "prompts": {},
+  "logical_commit_id": "6af7fb6d1efd5388af3a7ac616c9ebdc33bbe78f",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
