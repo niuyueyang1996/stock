@@ -85,7 +85,7 @@ type xlsxSheet struct {
 			T string `xml:"t,attr"`
 			V string `xml:"v"`
 		} `xml:"c"`
-	} `xml:"row"`
+	} `xml:"sheetData>row"`
 }
 
 type xlsxWorkbook struct {
