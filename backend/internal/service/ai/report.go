@@ -112,7 +112,7 @@ func (s *Service) BuildStockContext(code string) map[string]any {
 			ff["daily"] = daily
 		}
 		// 当日分时 15 分钟序列
-		mins := s.Cache.GetFundflowMin(code, flow.TradeDate)
+		mins := s.Cache.GetFundflowMinute(code, flow.TradeDate)
 		if series := IntradaySeries(mins, 15); len(series) > 0 {
 			ff["intraday_15m"] = series
 		}
@@ -169,7 +169,7 @@ func sumN(nets []float64, n int) float64 {
 
 // IntradaySeries 分时行重聚合到指定窗口（对齐 intraday_window_series）：
 // [{ts, super, large, medium, small, xs, main, cum, buy, sell, price}] 按 ts 升序
-func IntradaySeries(rows []db.Fundflow15mCache, windowMin int) []map[string]any {
+func IntradaySeries(rows []db.FundflowMinuteCache, windowMin int) []map[string]any {
 	type acc struct {
 		super, large, medium, small, xs, buy, sell float64
 	}

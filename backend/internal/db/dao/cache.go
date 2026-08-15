@@ -102,7 +102,7 @@ func (d *CacheDAO) PurgeWeekend(code string) {
 	_ = d.DB.Exec("DELETE FROM daily_price_cache WHERE code=? AND (strftime('%w', trade_date) IN ('0','6'))", code)
 }
 
-// PurgeFundflowFuture 清理 code+trade_date 下超前时刻的 15m 分时（盘前污染）
+// PurgeFundflowFuture 清理 code+trade_date 下超前时刻的 分钟分时（盘前污染）
 func (d *CacheDAO) PurgeFundflowFuture(code, date, ts string) {
 	_ = d.DB.Exec("DELETE FROM fundflow_15m_cache WHERE code=? AND trade_date=? AND ts>?", code, date, ts)
 }
@@ -115,8 +115,8 @@ func (d *CacheDAO) UpsertFinancials(f *db.FinancialCache) error {
 	}).Create(f).Error
 }
 
-// FundflowMinRow 15m 分时行
-type FundflowMinRow struct {
+// FundflowMinuteRow 分钟分时行
+type FundflowMinuteRow struct {
 	Code          string   `gorm:"column:code;primaryKey"`
 	TradeDate     string   `gorm:"column:trade_date;primaryKey"`
 	Ts            string   `gorm:"column:ts;primaryKey"`
@@ -131,10 +131,10 @@ type FundflowMinRow struct {
 	Price         *float64 `gorm:"column:price"`
 }
 
-func (FundflowMinRow) TableName() string { return "fundflow_15m_cache" }
+func (FundflowMinuteRow) TableName() string { return "fundflow_15m_cache" }
 
-// UpsertFundflowMin 15m 分时落库
-func (d *CacheDAO) UpsertFundflowMin(code, date string, points []FundflowMinRow) error {
+// UpsertFundflowMinute 分钟分时落库
+func (d *CacheDAO) UpsertFundflowMinute(code, date string, points []FundflowMinuteRow) error {
 	if len(points) == 0 {
 		return nil
 	}
@@ -159,4 +159,28 @@ func (d *CacheDAO) GetDailyFundflowCount(code, windowStart string) (int64, strin
 	row := d.DB.Raw("SELECT COUNT(*), COALESCE(MAX(trade_date),'') FROM daily_fundflow_cache WHERE code=? AND trade_date>=?", code, windowStart).Row()
 	_ = row.Scan(&n, &mx)
 	return n, mx
+}
+
+// UpsertIndexIntraday 指数分时量价落库（1 分钟基础粒度；主键 code+trade_date+ts 覆盖）
+func (d *CacheDAO) UpsertIndexIntraday(code, date string, rows []IndexIntradayRow) error {
+	for _, r := range rows {
+		if err := d.DB.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}, {Name: "ts"}},
+			DoUpdates: clause.AssignmentColumns([]string{"price", "volume", "amount"}),
+		}).Create(&db.IndexIntradayCache{
+			Code: code, TradeDate: date, Ts: r.Ts,
+			Price: r.Price, Volume: r.Volume, Amount: r.Amount,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// IndexIntradayRow 指数分时行（对齐 Python normalize_index_trends：ts/price/volume/amount）
+type IndexIntradayRow struct {
+	Ts     string
+	Price  *float64
+	Volume *float64
+	Amount *float64
 }

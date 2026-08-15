@@ -1510,7 +1510,7 @@ func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note st
 	intraday := map[string]*flowBucket{}
 	covered := 0
 	for _, code := range members {
-		rows := s.Cache.GetFundflowMin(code, tradeDay)
+		rows := s.Cache.GetFundflowMinute(code, tradeDay)
 		if len(rows) > 0 {
 			covered++
 		}
@@ -1648,7 +1648,7 @@ func (s *Service) attachPriceLine(out map[string]any, codes []string, qty map[st
 		if isHKCode5(code) {
 			continue // 仅参与资金流的 A股/ETF
 		}
-		rows := s.Cache.GetFundflowMin(code, tradeDay)
+		rows := s.Cache.GetFundflowMinute(code, tradeDay)
 		if len(rows) > 0 {
 			byTS := map[string]*float64{}
 			for i := range rows {

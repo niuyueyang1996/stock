@@ -272,9 +272,9 @@ func (s *Service) buildDetail(code, name, currency string, q *quote.CachedQuote,
 	if fw != 1 && fw != 5 && fw != 15 && fw != 30 {
 		fw = 15
 	}
-	fundflow15m := []map[string]any{}
-	for _, r := range s.Cache.GetFundflowMin(code, tradeDay) {
-		fundflow15m = append(fundflow15m, map[string]any{
+	fundflowMin := []map[string]any{}
+	for _, r := range s.Cache.GetFundflowMinute(code, tradeDay) {
+		fundflowMin = append(fundflowMin, map[string]any{
 			"ts": r.Ts, "super_large_net": r.SuperLargeNet, "large_net": r.LargeNet,
 			"medium_net": r.MediumNet, "small_net": r.SmallNet, "xs_net": r.XsNet,
 			"buy_amount": r.BuyAmount, "sell_amount": r.SellAmount, "price": r.Price,
@@ -325,7 +325,7 @@ func (s *Service) buildDetail(code, name, currency string, q *quote.CachedQuote,
 		"financials":        financials,
 		"dv_ratio":          live["dv_ratio"],
 		"fundflow_latest":   flowLatest, "fundflow_bands": bands,
-		"fundflow_history": flowHist, "fundflow_15m": fundflow15m,
+		"fundflow_history": flowHist, "fundflow_15m": fundflowMin,
 		"intraday": intraday, "fundflow_window": fw,
 		"fundflow_windows": []int{1, 5, 15, 30},
 		"partial_missing":  partialMissing,

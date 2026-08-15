@@ -181,6 +181,7 @@ func main() {
 	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
+	idxSvc.SyncFundflow = func(ctx context.Context, code string) { rfSvc.SyncIndexFundflow(ctx, code) }
 	quoteSvc.DataDir = cfg.DataDir
 	quoteSvc.PrewarmRunning = func() bool {
 		snap := jm.Snapshot()

@@ -289,7 +289,7 @@ func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) 
 			windowMin = n
 		}
 	}
-	mins := s.Cache.GetFundflowMin(code, today)
+	mins := s.Cache.GetFundflowMinute(code, today)
 	series := IntradaySeries(mins, windowMin)
 	if len(series) == 0 {
 		return out

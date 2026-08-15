@@ -625,7 +625,7 @@ func (s *Service) StockFactors(code, asOf string) map[string]any {
 			f["fundflow_5d_net"] = math.Round(sumN(nets, 5))
 			f["fundflow_days"] = len(nets)
 		}
-		if series := IntradaySeries(s.Cache.GetFundflowMin(code, flowDate), 15); len(series) > 0 {
+		if series := IntradaySeries(s.Cache.GetFundflowMinute(code, flowDate), 15); len(series) > 0 {
 			f["fundflow_intraday_15m"] = series
 		}
 	}

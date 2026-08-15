@@ -64,9 +64,9 @@ func (d *CacheDAO) GetDailyFundflows(code, start, end string) []db.DailyFundflow
 	return rows
 }
 
-// GetFundflowMin 指定日分时（升序）
-func (d *CacheDAO) GetFundflowMin(code, date string) []db.Fundflow15mCache {
-	var rows []db.Fundflow15mCache
+// GetFundflowMinute 指定日分时（升序）
+func (d *CacheDAO) GetFundflowMinute(code, date string) []db.FundflowMinuteCache {
+	var rows []db.FundflowMinuteCache
 	d.DB.Where("code = ? AND trade_date = ?", code, date).Order("ts").Find(&rows)
 	return rows
 }

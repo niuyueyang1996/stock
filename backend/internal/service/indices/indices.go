@@ -21,6 +21,8 @@ type Service struct {
 	Cache *dao.CacheDAO
 	// SyncKline 周/月K同步（main 注入 refresh.SyncPeriodKline；指数刷新时调用，对齐 refresh_index）
 	SyncKline func(code string)
+	// SyncFundflow 指数分时量价同步（main 注入 refresh.SyncIndexFundflow；对齐 refresh_index 的 sync_fundflow）
+	SyncFundflow func(ctx context.Context, code string)
 	// IsIndex code 是否指数（注入注册表）
 	IsIndex func(code string) bool
 }
@@ -158,6 +160,10 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	// 周/月K跟随日K（对齐 refresh_index：out["kline"] = sync_kline_bars(code, now)）
 	if s.SyncKline != nil {
 		s.SyncKline(code)
+	}
+	// 指数分时量价（对齐 refresh_index：out["fundflow"] = sync_fundflow(code, now)）
+	if s.SyncFundflow != nil {
+		s.SyncFundflow(ctx, code)
 	}
 	// 腾讯指数行情
 	parts := s.Tx.QuoteRaw(ctx, *def.Symbol)

@@ -12,6 +12,7 @@ import (
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/market"
+	"stockanalyzer/internal/service/model"
 )
 
 func openRefresh(t *testing.T) (*Service, *gorm.DB) {
@@ -91,5 +92,24 @@ func TestSyncDailyBarsIncremental(t *testing.T) {
 	r := s.syncDailyBars(t.Context(), "600519", time.Now(), false)
 	if r["reason"] != "source_fail" && r["reason"] != "ok" {
 		t.Fatalf("reason = %v", r["reason"])
+	}
+}
+
+// TestDBDailyFlowFromBands 分档阈值落库（对齐 Python upsert_daily_fundflow 带 bands）
+func TestDBDailyFlowFromBands(t *testing.T) {
+	day := &model.FundflowDay{Netamount: 100, MainNet: 50}
+	bands := map[string]float64{"p15": 1000, "p40": 5000, "p75": 20000, "p95": 100000}
+	row := dbDailyFlowFrom("600900", "2026-08-14", day, bands)
+	if row.P15 == nil || *row.P15 != 1000 || row.P40 == nil || *row.P40 != 5000 ||
+		row.P75 == nil || *row.P75 != 20000 || row.P95 == nil || *row.P95 != 100000 {
+		t.Fatalf("bands 未落库: %+v", row)
+	}
+	if row.Netamount == nil || *row.Netamount != 100 {
+		t.Fatalf("五档字段被破坏: %+v", row)
+	}
+	// bands 为 nil（多日窗口）时 P15 等保持 nil，不覆盖旧值
+	row2 := dbDailyFlowFrom("600900", "2026-08-13", day, nil)
+	if row2.P15 != nil || row2.P40 != nil {
+		t.Fatalf("nil bands 不应设置分档: %+v", row2)
 	}
 }

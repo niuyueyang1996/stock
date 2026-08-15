@@ -160,8 +160,8 @@ type DailyFundflowCache struct {
 
 func (DailyFundflowCache) TableName() string { return "daily_fundflow_cache" }
 
-// Fundflow15mCache fundflow_15m_cache
-type Fundflow15mCache struct {
+// FundflowMinuteCache fundflow_15m_cache
+type FundflowMinuteCache struct {
 	Code          string   `gorm:"column:code;primaryKey"`
 	TradeDate     string   `gorm:"column:trade_date;primaryKey"`
 	Ts            string   `gorm:"column:ts;primaryKey"`
@@ -176,7 +176,7 @@ type Fundflow15mCache struct {
 	Price         *float64 `gorm:"column:price"`
 }
 
-func (Fundflow15mCache) TableName() string { return "fundflow_15m_cache" }
+func (FundflowMinuteCache) TableName() string { return "fundflow_15m_cache" }
 
 // IndexIntradayCache index_intraday_cache
 type IndexIntradayCache struct {

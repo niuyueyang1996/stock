@@ -5,6 +5,7 @@ package refresh
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"strconv"
@@ -213,52 +214,91 @@ func (s *Service) syncFinancials(ctx context.Context, code string, force bool) m
 
 // syncFundflow 当日资金流（分笔派生五档 + 盘前过滤）
 func (s *Service) syncFundflow(ctx context.Context, code string, now time.Time) map[string]any {
+	// 指数：量价分时（腾讯 mkline 带日期，始终按数据日期落库——最近交易日数据）
 	if s.IsIndex != nil && s.IsIndex(code) {
-		return map[string]any{"code": code, "fetched": 0, "reason": "index_skipped"}
-	}
-	// 港股：非交易日继续补刷近5日窗口（对齐 Python has_multi_day_fundflow）；其余类型非交易日跳过
-	if s.IsTradeDay != nil && !s.IsTradeDay(now.Format("2006-01-02")) {
-		if !isHKCode5(code) {
-			return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
-		}
-		return s.syncHKFundflow(ctx, code)
+		return s.syncIndexIntraday(ctx, code)
 	}
 	if isHKCode5(code) {
 		return s.syncHKFundflow(ctx, code)
 	}
+	// 目标日期判定（用户口径：不按日历跳过，始终加载最近一个交易日的分时）：
+	// 日K里有今天的行 = 今天已开盘 → 分笔是今天的（超前过滤防盘前污染）；
+	// 日K里没有今天的行 = 今天未开盘/非交易日（周六/周日）→ 分笔是最近交易日的全天（完整落库，周末可读周五）。
 	today := now.Format("2006-01-02")
 	nowHM := now.Format("15:04")
+	targetDate := s.fundflowTargetDate(code, now)
+	filterFuture := targetDate == today
 	ticks := s.Market.Ticks(ctx, code)
 	if len(ticks) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
 	}
-	// 盘前污染过滤：只认不超前于当前时刻的点
+	// 盘前污染过滤：仅「目标日=今天」时只认不超前于当前时刻的点；
+	// 最近交易日场景（周末/盘前）完整保留全天分笔
 	var valid []tickLike
 	for _, t := range ticks {
-		if t.Time[:5] <= nowHM {
-			valid = append(valid, tickLike{Ts: t.Time, Amount: t.Amount, Sign: t.Sign, Price: t.Price})
+		if filterFuture && t.Time[:5] > nowHM {
+			continue
 		}
+		valid = append(valid, tickLike{Ts: t.Time, Amount: t.Amount, Sign: t.Sign, Price: t.Price})
 	}
 	if len(valid) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "stale_ticks"}
 	}
-	day := market.TicksToDay(toTickRows(valid), today)
+	day := market.TicksToDay(toTickRows(valid), targetDate)
 	if day != nil {
-		_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, today, day))
+		// 当日自适应分档阈值 P15/P40/P75/P95（前端展示各档组成条件；对齐 Python tick_bands）
+		bands := market.TickBands(toTickRows(valid))
+		_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, targetDate, day, bands))
 	}
 	points := market.AggregateTicks(toTickRows(valid), 1)
-	rows := make([]dao.FundflowMinRow, 0, len(points))
+	rows := make([]dao.FundflowMinuteRow, 0, len(points))
 	for _, p := range points {
-		rows = append(rows, dao.FundflowMinRow{
-			Code: code, TradeDate: today, Ts: p.Ts,
+		rows = append(rows, dao.FundflowMinuteRow{
+			Code: code, TradeDate: targetDate, Ts: p.Ts,
 			MainNet: &p.MainNet, SuperLargeNet: &p.SuperLargeNet, LargeNet: &p.LargeNet,
 			MediumNet: &p.MediumNet, SmallNet: &p.SmallNet, XsNet: &p.XsNet,
 			BuyAmount: &p.BuyAmount, SellAmount: &p.SellAmount, Price: p.Price,
 		})
 	}
-	s.Cache.PurgeFundflowFuture(code, today, nowHM)
-	_ = s.Cache.UpsertFundflowMin(code, today, rows)
+	if filterFuture {
+		// 只清理「今天」的超前残留（盘前污染双保险）；历史日期数据完整，不清理
+		s.Cache.PurgeFundflowFuture(code, today, nowHM)
+	}
+	_ = s.Cache.UpsertFundflowMinute(code, targetDate, rows)
 	return map[string]any{"code": code, "fetched": len(points), "reason": "ok"}
+}
+
+// fundflowTargetDate 资金流目标日期（用户口径）：
+// 日K里有今天的行 → 今天（已开盘，数据是今天的）；
+// 否则 → 最近有效交易日（未开盘 <09:15 回退上一交易日；非交易日回退最近交易日——周六/周日读周五）。
+func (s *Service) fundflowTargetDate(code string, now time.Time) string {
+	today := now.Format("2006-01-02")
+	if s.hasTodayKline(code, today) {
+		return today
+	}
+	d := now
+	if now.Hour()*60+now.Minute() < 9*60+15 {
+		d = now.AddDate(0, 0, -1) // 未开盘：当日尚无数据，回退上一交易日
+	}
+	for !s.isTradeDayT(d) {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d.Format("2006-01-02")
+}
+
+// hasTodayKline 日K里是否有今天的行（= 今天已开盘；用户口径：接口有今天的日K就代表开盘了）
+func (s *Service) hasTodayKline(code, today string) bool {
+	var n int64
+	s.Cache.DB.Raw("SELECT COUNT(*) FROM daily_price_cache WHERE code=? AND trade_date=?", code, today).Scan(&n)
+	return n > 0
+}
+
+// isTradeDayT 交易日判定（优先 trade_calendar 注入回调；缺省周末近似）
+func (s *Service) isTradeDayT(d time.Time) bool {
+	if s.IsTradeDay != nil {
+		return s.IsTradeDay(d.Format("2006-01-02"))
+	}
+	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
 }
 
 // syncStockFull 一站式同步单股全部数据（开仓新股）
@@ -271,6 +311,11 @@ func (s *Service) syncStockFull(ctx context.Context, code string) map[string]any
 	out["financials"] = s.syncFinancials(ctx, code, true)
 	out["fundflow"] = s.syncFundflow(ctx, code, now)
 	return out
+}
+
+// SyncIndexFundflow 单指数资金流（量价分时）同步（对齐 Python refresh_index：out["fundflow"] = sync_fundflow）
+func (s *Service) SyncIndexFundflow(ctx context.Context, code string) {
+	s.syncFundflow(ctx, code, time.Now())
 }
 
 // ShouldRunDynamicLoop 盘中动态刷新窗口（16:30 后停止）
@@ -382,13 +427,21 @@ func finToRow(code string, f *model.Financials) *db.FinancialCache {
 }
 
 // dbDailyFlowFrom FundflowDay → daily_fundflow_cache 行
-func dbDailyFlowFrom(code, date string, d *model.FundflowDay) *db.DailyFundflowCache {
-	return &db.DailyFundflowCache{
+func dbDailyFlowFrom(code, date string, d *model.FundflowDay, bands map[string]float64) *db.DailyFundflowCache {
+	row := &db.DailyFundflowCache{
 		Code: code, TradeDate: date,
 		Netamount: &d.Netamount, MainNet: &d.MainNet, SuperLargeNet: &d.SuperLargeNet,
 		LargeNet: &d.LargeNet, MediumNet: &d.MediumNet, SmallNet: &d.SmallNet,
 		MainNetPct: &d.MainNetPct, XsNet: &d.XsNet, BuyAmount: &d.BuyAmount, SellAmount: &d.SellAmount,
 	}
+	// 分档阈值（P15/P40/P75/P95）；无分笔时保持 nil（不覆盖旧值）
+	for k, dst := range map[string]**float64{"p15": &row.P15, "p40": &row.P40, "p75": &row.P75, "p95": &row.P95} {
+		if v, ok := bands[k]; ok {
+			vv := v
+			*dst = &vv
+		}
+	}
+	return row
 }
 
 // toTickRows tickLike → raw.TickRow
@@ -559,26 +612,32 @@ func (s *Service) syncHKFundflow(ctx context.Context, code string) map[string]an
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
 	}
 	fetched := 0
+	today := time.Now().Format("2006-01-02")
 	for _, day := range days {
 		ticks := market.MinuteBarsToTicks([]raw.HKIntradayDay{day})
 		if len(ticks) == 0 {
 			continue
 		}
 		if f := market.TicksToDay(ticks, day.Date); f != nil {
-			_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, day.Date, f))
+			// bands 只写最新日（对齐 Python：多日窗口 bands=None，避免覆盖当日）
+			var bands map[string]float64
+			if day.Date == today {
+				bands = market.TickBands(ticks)
+			}
+			_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, day.Date, f, bands))
 			fetched++
 		}
 		points := market.AggregateTicks(ticks, 1)
-		rows := make([]dao.FundflowMinRow, 0, len(points))
+		rows := make([]dao.FundflowMinuteRow, 0, len(points))
 		for _, p := range points {
-			rows = append(rows, dao.FundflowMinRow{
+			rows = append(rows, dao.FundflowMinuteRow{
 				Code: code, TradeDate: day.Date, Ts: p.Ts,
 				MainNet: &p.MainNet, SuperLargeNet: &p.SuperLargeNet, LargeNet: &p.LargeNet,
 				MediumNet: &p.MediumNet, SmallNet: &p.SmallNet, XsNet: &p.XsNet,
 				BuyAmount: &p.BuyAmount, SellAmount: &p.SellAmount, Price: p.Price,
 			})
 		}
-		_ = s.Cache.UpsertFundflowMin(code, day.Date, rows)
+		_ = s.Cache.UpsertFundflowMinute(code, day.Date, rows)
 	}
 	return map[string]any{"code": code, "fetched": fetched, "reason": "ok"}
 }
@@ -594,4 +653,65 @@ func isHKCode5(code string) bool {
 		}
 	}
 	return true
+}
+
+// syncIndexIntraday 指数分时量价同步（腾讯 mkline，对齐 Python sync_fundflow 指数分支）：
+// 一次请求含跨日分钟（今+昨尾盘，约 320 分钟），按交易日拆分逐日落 index_intraday_cache，
+// 供「较昨同时段成交额」用真实数据而非进度估算。
+func (s *Service) syncIndexIntraday(ctx context.Context, code string) map[string]any {
+	if s.Tencent == nil {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
+	}
+	// 腾讯指数符号（index_defs.symbol，如 sh000300）
+	var symbol string
+	s.DB.Raw("SELECT symbol FROM index_defs WHERE code=?", code).Scan(&symbol)
+	if symbol == "" {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_symbol"}
+	}
+	rows := s.Tencent.IndexMinKline(ctx, symbol, 320)
+	if len(rows) == 0 {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
+	}
+	// 按交易日切分 + 归一化（对齐 normalize_index_trends：ts 'HH:MM'、price=收、volume=量、amount=None）
+	buckets := map[string][]dao.IndexIntradayRow{}
+	fetched := 0
+	for _, r := range rows {
+		stamp := fmt.Sprintf("%v", r[0])
+		if len(stamp) < 12 {
+			continue
+		}
+		date := stamp[0:4] + "-" + stamp[4:6] + "-" + stamp[6:8]
+		price := parseF3(r[2])
+		volume := parseF3(r[5])
+		if price == nil || *price == 0 {
+			continue
+		}
+		// 对齐 Python normalize_index_trends：price 保留 3 位小数；volume 原样
+		p3 := math.Round(*price*1000) / 1000
+		price = &p3
+		ts := stamp[8:10] + ":" + stamp[10:12]
+		buckets[date] = append(buckets[date], dao.IndexIntradayRow{Ts: ts, Price: price, Volume: volume})
+		fetched++
+	}
+	for date, pts := range buckets {
+		_ = s.Cache.UpsertIndexIntraday(code, date, pts)
+	}
+	return map[string]any{"code": code, "fetched": fetched, "reason": "ok"}
+}
+
+// parseF3 任意类型 → *float64（三位小数；解析失败返回 nil）
+func parseF3(v any) *float64 {
+	switch t := v.(type) {
+	case float64:
+		return &t
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(t), 64); err == nil {
+			return &f
+		}
+	case json.Number:
+		if f, err := t.Float64(); err == nil {
+			return &f
+		}
+	}
+	return nil
 }
