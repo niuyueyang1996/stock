@@ -153,6 +153,8 @@ func main() {
 	aiSvc.TechCoh = dao.NewAITechCoherenceDAO(gdb)
 	aiSvc.FlowR = dao.NewAIFundflowReportDAO(gdb)
 	aiSvc.FlowCoh = dao.NewAIFundflowCoherenceDAO(gdb)
+	aiSvc.PortReports = dao.NewAIPortfolioReportDAO(gdb)
+	aiSvc.Daily = dao.NewAIDailyReportDAO(gdb)
 
 	svcs := &route.Services{
 		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,

@@ -58,6 +58,9 @@ type Service struct {
 	// 资金流依赖
 	FlowR   *dao.AIFundflowReportDAO
 	FlowCoh *dao.AIFundflowCoherenceDAO
+	// 评分依赖
+	PortReports *dao.AIPortfolioReportDAO
+	Daily       *dao.AIDailyReportDAO
 }
 
 func New(g *gorm.DB, client AIClient, config *dao.ConfigDAO, cache *dao.CacheDAO,

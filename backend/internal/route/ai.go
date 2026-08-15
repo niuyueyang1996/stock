@@ -170,6 +170,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	})
 
 	setupAINewsTechRoutes(api, s, aiSvc)
+	setupAIScoringRoutes(api, s, aiSvc)
 }
 
 func aiDefaultPrompts() map[string]string {
