@@ -1,0 +1,21 @@
+backend/internal/raw/em.go
+  h_07352c0544a725 176-211
+backend/internal/service/dividend/dividend.go
+  h_07352c0544a725 1-124
+backend/internal/service/dividend/dividend_test.go
+  h_07352c0544a725 1-75
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 198-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cb4a3b07704fc747e585adc84afb91b7a21ecc93",
+  "prompts": {},
+  "logical_commit_id": "cb4a3b07704fc747e585adc84afb91b7a21ecc93",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
