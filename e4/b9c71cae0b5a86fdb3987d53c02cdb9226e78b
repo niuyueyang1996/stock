@@ -1,0 +1,19 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 24,137-139,146
+backend/internal/route/router.go
+  h_07352c0544a725 18,38,97-164
+backend/internal/route/stocks_extra.go
+  h_07352c0544a725 79-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e4b9c71cae0b5a86fdb3987d53c02cdb9226e78b",
+  "prompts": {},
+  "logical_commit_id": "e4b9c71cae0b5a86fdb3987d53c02cdb9226e78b",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
