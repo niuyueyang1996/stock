@@ -1,0 +1,21 @@
+backend/internal/raw/tencent.go
+  h_07352c0544a725 408-424
+backend/internal/service/market/providers.go
+  h_07352c0544a725 227,231-233,236-245
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 651-675,1282-1283,1286-1287,1289-1290,1293
+backend/internal/service/portfolio/portfolio_series.go
+  h_07352c0544a725 1-199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "25206f0071806937eef84632047baef228a75129",
+  "prompts": {},
+  "logical_commit_id": "25206f0071806937eef84632047baef228a75129",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
