@@ -1,0 +1,15 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 235-236,238,240-244
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0158d1ba611436f30ea37d35cd1f9f0d6c570ebf",
+  "prompts": {},
+  "logical_commit_id": "0158d1ba611436f30ea37d35cd1f9f0d6c570ebf",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
