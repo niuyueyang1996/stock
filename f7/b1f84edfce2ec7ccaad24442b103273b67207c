@@ -1,0 +1,51 @@
+backend/cmd/serviceprobe/main.go
+  h_07352c0544a725 1-98
+backend/internal/config/config.go
+  h_07352c0544a725 15
+backend/internal/db/models.go
+  h_07352c0544a725 20-27,128-145,152-163,182-201,360-374,381-393,418-425,427-430,480-481,484-486
+backend/internal/service/finance/finance_test.go
+  h_07352c0544a725 1-131
+backend/internal/service/finance/manager.go
+  h_07352c0544a725 1-115
+backend/internal/service/finance/normalizer.go
+  h_07352c0544a725 1-253
+backend/internal/service/finance/provider_em.go
+  h_07352c0544a725 1-70
+backend/internal/service/finance/provider_sina.go
+  h_07352c0544a725 1-245
+backend/internal/service/finance/source.go
+  h_07352c0544a725 1-23
+backend/internal/service/market/manager.go
+  h_07352c0544a725 1-74
+backend/internal/service/market/market_test.go
+  h_07352c0544a725 1-99
+backend/internal/service/market/normalizer.go
+  h_07352c0544a725 1-344
+backend/internal/service/market/providers.go
+  h_07352c0544a725 1-232
+backend/internal/service/market/source.go
+  h_07352c0544a725 1-26
+backend/internal/service/model/model.go
+  h_07352c0544a725 1-92
+backend/internal/service/valuation/normalizer.go
+  h_07352c0544a725 1-123
+backend/internal/service/valuation/providers.go
+  h_07352c0544a725 1-112
+backend/internal/service/valuation/source.go
+  h_07352c0544a725 1-21
+backend/internal/service/valuation/valuation_test.go
+  h_07352c0544a725 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f7b1f84edfce2ec7ccaad24442b103273b67207c",
+  "prompts": {},
+  "logical_commit_id": "f7b1f84edfce2ec7ccaad24442b103273b67207c",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
