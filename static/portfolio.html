@@ -147,19 +147,20 @@
         return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
       };
       // 统一入口按钮（评分区「🤖 AI诊组合」）执行勾选项；tab 切换只负责展示
-      window._pfRunAiExt = async (keys, intensity) => {
+      window._pfRunAiExt = async (keys, intensity, overrides) => {
         const tags = currentTags();
         const dummy = document.createElement('span');
+        const ov = overrides || {};
         for (const k of keys) {
           if (k === 'news') {
-            await runNewsBatch({ tags, btn: dummy, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true, intensity });
+            await runNewsBatch({ tags, btn: dummy, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.news || null });
           } else if (k === 'tech') {
-            await runTechBatch({ tags, btn: dummy, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true, intensity });
+            await runTechBatch({ tags, btn: dummy, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.tech || null });
           } else if (k === 'flow') {
             if (/^(1|5)m$/.test(pfFlowWindow)) { toast('批量分析窗口过小，请选择 15 分钟及以上'); continue; }
             await runFundflowBatch({
               tags, window: pfFlowWindow, btn: dummy, panel: panels.flow,
-              onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true, intensity,
+              onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true, intensity, systemPrompt: ov.flow || null,
             });
           }
         }
@@ -432,24 +433,25 @@
     function portfolioAiMenu() {
       openAiExtPicker({
         title: '🤖 AI诊组合',
-        note: '勾选要分析的内容（默认不勾），将逐个进行分析（批量分析跟随当前标签筛选），进度见顶部。',
+        note: '勾选要分析的内容（默认不勾），将逐个进行分析（批量分析跟随当前标签筛选），进度见顶部；每项可单独「改提示词」。',
         withIntensity: true,
         items: [
-          { key: 'score', label: '组合打分', desc: '（AI 质量评级 + 操作建议）', checked: false },
-          { key: 'news', label: '批量消息面', desc: '（自动抓取个股新闻）', checked: false },
-          { key: 'tech', label: '批量技术面', desc: '（日/周/月K 结构）', checked: false },
-          { key: 'flow', label: '批量资金流', desc: '（分时五档 × 组合净值）', checked: false },
+          { key: 'score', label: '组合打分', desc: '（AI 质量评级 + 操作建议）', checked: false, promptKind: 'portfolio' },
+          { key: 'news', label: '批量消息面', desc: '（自动抓取个股新闻）', checked: false, promptKind: 'news_batch' },
+          { key: 'tech', label: '批量技术面', desc: '（日/周/月K 结构）', checked: false, promptKind: 'tech_batch' },
+          { key: 'flow', label: '批量资金流', desc: '（分时五档 × 组合净值）', checked: false, promptKind: 'batch' },
         ],
-        onRun: async (keys, intensity) => {
+        onRun: async (keys, intensity, overrides) => {
+          const ov = overrides || {};
           for (const k of keys) {
             if (k === 'score') {
-              await portfolioScoreDo(null, intensity);
+              await portfolioScoreDo(ov.score || null, intensity);
             }
           }
           // 扩展分析项（消息面/技术面/资金流批量）
           const extKeys = keys.filter((k) => k !== 'score');
           if (extKeys.length && typeof window._pfRunAiExt === 'function') {
-            await window._pfRunAiExt(extKeys, intensity);
+            await window._pfRunAiExt(extKeys, intensity, ov);
           }
         },
       });
