@@ -1,0 +1,21 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 1-68
+backend/go.mod
+  h_07352c0544a725 1-37
+backend/go.sum
+  h_07352c0544a725 1-89
+backend/internal/config/config.go
+  h_07352c0544a725 1-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "41c13bcfa22a0f51920c47da6dd3ae522e56bb0e",
+  "prompts": {},
+  "logical_commit_id": "41c13bcfa22a0f51920c47da6dd3ae522e56bb0e",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
