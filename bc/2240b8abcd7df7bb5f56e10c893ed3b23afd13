@@ -1,0 +1,39 @@
+.github/workflows/android-apk.yml
+  h_07352c0544a725 1-92
+backend/cmd/server/main.go
+  h_07352c0544a725 6,9,12,44-55
+packaging/android/.gitignore
+  h_07352c0544a725 1-15
+packaging/android/app/build.gradle.kts
+  h_07352c0544a725 30-31
+packaging/android/app/src/main/java/com/stockanalyzer/app/GoServer.kt
+  h_07352c0544a725 4,13-14,40-41,47,55-84
+packaging/android/app/src/main/res/drawable/ic_launcher_background.xml
+  h_07352c0544a725 1-11
+packaging/android/app/src/main/res/drawable/ic_launcher_foreground.xml
+  h_07352c0544a725 1-18
+packaging/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+  h_07352c0544a725 1-6
+packaging/android/build.gradle.kts
+  h_07352c0544a725 2,4-5
+packaging/android/gradle/wrapper/gradle-wrapper.properties
+  h_07352c0544a725 1-7
+packaging/android/gradlew
+  h_07352c0544a725 1-251
+packaging/android/gradlew.bat
+  h_07352c0544a725 1-94
+packaging/android/settings.gradle.kts
+  h_07352c0544a725 1-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bc2240b8abcd7df7bb5f56e10c893ed3b23afd13",
+  "prompts": {},
+  "logical_commit_id": "bc2240b8abcd7df7bb5f56e10c893ed3b23afd13",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
