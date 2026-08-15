@@ -234,7 +234,7 @@ func main() {
 	router.Any("/ws", gin.WrapH(ws.Handler(hub, jm.Snapshot))) // 根路径（前端连 ws://host/ws）
 
 	// ---- 后台任务 ----
-	startBackground(gdb, listsSvc, fxSvc, divSvc, rfSvc, settingsSvc, jm, hub)
+	startBackground(gdb, listsSvc, idxSvc, fxSvc, divSvc, rfSvc, settingsSvc, jm, hub)
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.Port)
 	log.Printf("[启动] stockanalyzer-go 监听 http://%s", addr)
@@ -246,16 +246,24 @@ func main() {
 	}
 }
 
-// startBackground 启动后台任务：预热（市场列表/汇率/除权）+ 盘中动态刷新 + 每日收盘全量同步
-func startBackground(gdb *gorm.DB, listsSvc *marketlists.Service, fxSvc *fx.Service,
-	divSvc *dividend.Service, rfSvc *refresh.Service, settingsSvc *settings.Service,
-	jm *jobs.Manager, hub *ws.Hub) {
-	// 1) 启动预热（异步）：市场列表最先（搜索依赖），其次汇率/除权
+// startBackground 启动后台任务：预热（市场列表/指数行情/汇率/除权）+ 盘中动态刷新 + 每日收盘全量同步
+func startBackground(gdb *gorm.DB, listsSvc *marketlists.Service, idxSvc *indices.Service,
+	fxSvc *fx.Service, divSvc *dividend.Service, rfSvc *refresh.Service,
+	settingsSvc *settings.Service, jm *jobs.Manager, hub *ws.Hub) {
+	// 1) 启动预热（异步）：市场列表最先（搜索依赖），其次指数行情/汇率/除权
 	go func() {
-		jm.Prewarm([]string{"市场列表", "港股汇率", "今日除权"}, func(step string) error {
+		jm.Prewarm([]string{"市场列表", "指数行情", "港股汇率", "今日除权"}, func(step string) error {
 			switch step {
 			case "市场列表":
-				listsSvc.Download(context.Background())
+				if err := listsSvc.Download(context.Background()); err != nil {
+					log.Printf("[预热] 市场列表失败: %v", err)
+				} else {
+					log.Printf("[预热] 市场列表就绪")
+				}
+			case "指数行情":
+				// 指数行情 + 乐咕估值序列（全新环境/APK 开箱即有指数数据）
+				out := idxSvc.RefreshAllIndices(context.Background())
+				log.Printf("[预热] 指数行情 ok=%v fail=%v", out["ok"], out["fail"])
 			case "港股汇率":
 				fxSvc.RefreshHKFX(context.Background(), time.Now().Format("2006-01-02T15:04:05"), true)
 			case "今日除权":
