@@ -1,0 +1,19 @@
+.github/workflows/android-apk.yml
+  h_07352c0544a725 41,51,54-56,60-61
+backend/cmd/server/main.go
+  h_07352c0544a725 237,249-253,255,258-266
+packaging/android/build.sh
+  h_07352c0544a725 2-4,9-29,32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0e37746dd2e757de88a883b28971f363552a03a4",
+  "prompts": {},
+  "logical_commit_id": "0e37746dd2e757de88a883b28971f363552a03a4",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
