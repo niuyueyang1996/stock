@@ -2,7 +2,7 @@
 
 把一篮子持仓（A 股 + 港股 + 场内 ETF）当成组合做整体与拆分分析：交易流水与成本管理、穿透式组合估值与分位、资金流、指数对照、港股人民币折算、分红除权，以及组合 / 每日 / 诊股 / 资金流 / 消息面 / 技术面的 AI 分析。
 
-当前版本：**v0.2.0**。双后端架构：**Go 后端为生产实现**（零 CGO，可交叉编译 Android / Windows），**Python 后端为兼容性参照物**（FastAPI），两者共享同一 SQLite 数据库与同一套 `static/` 前端（原生 JS + ECharts，无构建），JSON 响应逐字段对齐。
+当前版本：**v0.2.0**。**Go 单后端**（gin + gorm + `glebarez/sqlite`，零 CGO，可交叉编译 Android），前端为原生 JS + ECharts（`static/`，无构建），Android APK 由 GitHub Actions 自动打包。
 
 ---
 
@@ -16,6 +16,7 @@
 - [核心口径](#核心口径)
 - [API 概要](#api-概要)
 - [测试](#测试)
+- [打包（APK）](#打包apk)
 - [已知限制](#已知限制)
 
 ---
@@ -46,6 +47,7 @@
 **AI**
 - 公式评分已移除；标签偏好：短句 → AI 补全指引 → 确认后生效
 - 分析强度：快速 / 普通 / 深入（深入出 HTML 详细报告）；思考级别 / 输出预算 / 超时可配
+- 消息面 / 技术面 / 资金流专项分析；AI 按钮收敛：个股「🤖 AI诊股」、组合「🤖 AI诊组合」
 
 **前端页面**：持仓 · 组合 · 个股 · 交易评分 · 指数（原生 JS + 本地 ECharts，无构建）
 
@@ -55,63 +57,54 @@
 
 | 层 | 选型 |
 |---|---|
-| 生产后端 | **Go 1.21+**（gin + gorm + `glebarez/sqlite`，零 CGO，可交叉编译 Android/Windows） |
-| 参照后端 | Python 3.12 + FastAPI + Uvicorn（同一 SQLite，兼容性基准） |
+| 后端 | **Go 1.21+**（gin + gorm + `glebarez/sqlite`，零 CGO，可交叉编译 Android） |
 | 数据库 | SQLite（版本化迁移，`data/etf.db`） |
-| 数据源 | 腾讯 / 新浪 / 东财 / 百度 / 乐咕 / 中行（HTTP 直连，无 akshare 依赖） |
+| 数据源 | 腾讯 / 新浪 / 东财 / 百度 / 乐咕 / 中行（HTTP 直连） |
 | 前端 | 原生 JS + ECharts（`static/`，无构建） |
 | WebSocket | gorilla/websocket（任务进度 + 数据更新推送） |
-| 打包 | Windows 托盘（PyInstaller/Inno Setup，仓库 `packaging/windows`）；Android APK 壳 |
+| 打包 | GitHub Actions 打 Android APK（WebView 壳 + 内嵌 Go 二进制） |
 
 ---
 
 ## 架构与分层
 
-### 数据接入分层（最高优先级）
-
-数据相关代码统一三层结构（所有数据代码必须遵守）：
-
-```
-app/data/                 Python 侧数据分层（Go 侧对应 backend/internal/raw + service/*）
-  base.py          对外门面：DataSource 抽象 + SourceManager 降级链 + Financials 标准模型
-  raw/             接口层：真实访问底层接口，只做请求与最小解析
-  providers.py     接口转换层：平台选择 + 降级链（哪平台先试、失败换下一个）
-  normalizers.py   数据转换层：raw → 标准模型，统一字段名、单位、货币（人民币）、报告期口径
-```
-
-- **对外屏蔽**：唯一入口 `build_manager()` 返回的 SourceManager，外部只调 `manager.financials(code)` / `quote()`，不直接依赖具体源或层
-- **货币统一在数据转换层**：各平台原始货币一律折算人民币（Financials 全是人民币口径）；任何「市值÷净利」「每股股息÷股价」等比率必须先同货币
-- **口径下沉**：TTM 计算、同比、货币折算、单位统一只允许在数据转换层做
-
-### Go 后端分层（route→service→db→raw）
+### Go 后端分层（route→service→db→raw，红线强制）
 
 ```
 route（internal/route）    第1层：gin 路由 + handler（参数校验 → 调 service → 组响应）
-  ↓ 只依赖 service 接口（零 db/dao 触点，Services 结构不暴露 DB/DAO 句柄）
-service（internal/service）第2层：业务逻辑（对齐 app/services + app/analysis 语义）
+  ↓ 只依赖 service 接口（Services 结构不暴露 DB/DAO/缓存句柄，零 db 触点）
+service（internal/service）第2层：业务逻辑（多态子包：行情/财务/资金流/组合/AI…）
   ↓
-db/dao（internal/db/dao）  第3层：数据访问（gorm 查询，对齐 app/data/cache.py）
+db/dao（internal/db/dao）  第3层：数据访问（gorm 查询）
 raw（internal/raw）        第4层：真实接口访问（腾讯/新浪/东财/百度/乐咕 HTTP）
 ```
 
 **分层红线**：route 层禁止直接持有 `*gorm.DB` / DAO 句柄；所有数据访问必须经 service 方法。service 依赖通过 main 装配注入（构造注入 + 函数回调）。
+
+### 数据接入原则
+
+- 数据访问统一走 `raw`（接口请求）→ `db/dao`（缓存落库）→ `service`（口径计算），**口径只允许在 service 层算**，不重复折算
+- **货币统一**：各平台原始货币一律折算人民币；任何「市值÷净利」「每股股息÷股价」等比率必须先同货币（港股财务为公司记账本位币、市值恒为港元，混币出错的教训）
+- 判定功能货币：东财港股主指标带 EM 计算的 PE_TTM/PB_TTM（币种自洽），作锚点重算比对判定报表货币
 
 ---
 
 ## 代码结构
 
 ```
-├── backend/                    # Go 生产后端（零 CGO，主线）
+├── backend/                    # Go 生产后端（零 CGO，唯一后端）
 │   ├── cmd/
-│   │   ├── server/             # 服务入口：配置→连库→迁移→装配→路由→后台任务
-│   │   └── apidiff/            # 双服务逐接口对比工具（Python vs Go 深度 diff）
+│   │   ├── server/             # 服务入口：配置→连库→迁移→装配→路由→后台任务（支持 --listen）
+│   │   ├── dbcheck/            # 数据库巡检工具
+│   │   ├── rawprobe/           # 数据源接口探测工具
+│   │   └── serviceprobe/       # 服务层探测工具
 │   ├── internal/
-│   │   ├── config/             # 运行时配置（STOCK_APP_HOME / 端口 / 目录）
+│   │   ├── config/             # 运行时配置（STOCK_APP_HOME / STOCK_PORT / 目录）
 │   │   ├── db/                 # 建表 + 版本化迁移（schema.go / migrate.go / models.go）
 │   │   │   └── dao/            # 数据访问层：缓存/持仓/交易/AI 报告/汇率/周期K
 │   │   ├── raw/                # 接口层：腾讯/新浪/东财/百度/乐咕 HTTP 客户端
 │   │   ├── route/              # 路由层：85 端点注册 + handler（零 db/dao 触点）
-│   │   └── service/            # 服务层（业务逻辑，对齐 Python 语义）
+│   │   └── service/            # 服务层（业务逻辑）
 │   │       ├── ai/             # AI：模型配置/诊股/消息面/技术面/资金流/组合与每日打分
 │   │       ├── calendar/       # 交易日历
 │   │       ├── datamanage/     # 一键清空数据 / 批量初始化持仓
@@ -126,25 +119,16 @@ raw（internal/raw）        第4层：真实接口访问（腾讯/新浪/东财
 │   │       ├── model/          # 标准模型（Bar/Quote/Financials）
 │   │       ├── portfolio/      # 组合穿透式指标 + 打包序列 + 标签分组 + 资金流穿透
 │   │       ├── quote/          # 纯缓存行情读取（零网络）+ K线 + 全市场搜索
-│   │       ├── refresh/        # 刷新编排（动态/全量/单股/周月K/港股分时）
+│   │       ├── refresh/        # 刷新编排（动态/全量/单股/周月K/港股分时/指数）
 │   │       ├── settings/       # 全局配置（界面模式/刷新间隔/静态TTL）
 │   │       ├── stockmeta/      # 个股预期数据（增速/营收增速/支付率）
 │   │       ├── valuation/      # 实时估值 + 前瞻 PB/PE + 分位 + 序列
 │   │       ├── volatility/     # 人民币波动率
 │   │       └── ws/             # WebSocket hub（任务推送 + data_updated 广播）
-├── app/                        # Python 参照后端（FastAPI，兼容性基准）
-│   ├── api/                    # 路由（system/holdings/trades/stocks/portfolio/index/ai）
-│   ├── services/               # 业务逻辑（refresh/holdings/ai_scoring/job_runners…）
-│   ├── data/                   # 数据三层（base/raw/providers/normalizers + cache/fx）
-│   ├── analysis/               # 组合/估值/波动率分析
-│   ├── instruments/            # 判型与各品种数据接入（ashares/hk/etf/index）
-│   ├── models/                 # SQLite 建表 + 版本化迁移
-│   └── main.py                 # FastAPI 入口
-├── static/                     # 前端五页（持仓/组合/个股/交易/指数）+ js/（api.js common.js charts.js），两端共用
-├── tests/                      # Python 侧 pytest（367 用例，全程离线）
-├── packaging/windows/          # Windows 托盘程序 + PyInstaller/Inno Setup 构建链
+├── static/                     # 前端五页（持仓/组合/个股/交易/指数）+ js/（api.js common.js charts.js）
+├── packaging/android/          # Android APK 构建链（Kotlin WebView 壳 + Gradle 8.13 + wrapper）
 ├── data/                       # 运行时数据（etf.db + 市场列表缓存，个人数据不入库）
-└── docs/                       # 设计文档
+└── .github/workflows/          # CI：android-apk.yml（Go 编译 + Gradle 打包 + Release）
 ```
 
 ### Go 服务装配链（cmd/server/main.go）
@@ -162,44 +146,26 @@ config.Load → db.Open（迁移）→ DAO 层（Config/Holdings/Cache/Fx/AI…�
 
 ## 快速开始
 
-### Go 后端（生产）
-
 ```bash
 cd backend
 STOCK_APP_HOME=../data go run ./cmd/server          # 默认端口 8000，监听 127.0.0.1
-# 或指定端口：STOCK_PORT=8081
+# 或指定端口：STOCK_PORT=8081；或 --listen 127.0.0.1:8081
 ```
 
 启动后访问 http://127.0.0.1:8000/（自动跳转 `/static/index.html`）。
 
-### Python 参照后端（兼容性对比用）
-
-```bash
-.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8082
-```
-
-### 双服务对比验证
-
-```bash
-cd backend && go run ./cmd/apidiff http://127.0.0.1:8082 http://127.0.0.1:8081
-# 或用 Python 深度 diff 脚本（忽略运行时字段，数值宽容）
-python3 /tmp/aicmp.py /api/holdings /api/portfolio ...
-```
-
 ### 测试
 
 ```bash
-# Go（backend 目录）
-GOCACHE=/tmp/gocache go test ./...          # 15 个包全部离线
-# Python（仓库根；Windows 需 --basetemp）
-.venv/bin/python -m pytest tests/ -q -p no:cacheprovider --basetemp=.tmp_test
+cd backend
+GOCACHE=/tmp/gocache go test ./...                  # 全部离线
 ```
 
-### 零 CGO 交叉编译（Android / Windows）
+### 零 CGO 交叉编译
 
 ```bash
 cd backend
-CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./...   # Android
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./...   # Android（APK 构建链见下）
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...   # Windows
 ```
 
@@ -222,7 +188,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...   # Windows
 
 ## API 概要
 
-85 个端点（Go 与 Python 完全对齐，JSON 逐字段一致）：
+85 个端点：
 
 | 分组 | 端点 |
 |---|---|
@@ -235,15 +201,26 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...   # Windows
 | AI | `/api/ai/models[/available|activate]`、`/reasoning`、`/runtime`、`/prompts`、`/news-*`、`/tech-*`、`/fundflow-*`、`/ai-scoring/*` |
 | 实时推送 | `GET /ws`（任务进度 `jobs` + 数据更新 `data_updated`） |
 
-错误约定：非 2xx 一律 `{"detail": "中文错误消息"}`（对齐 FastAPI `HTTPException`）；缓存缺失 `409 CACHE_MISS`。
+错误约定：非 2xx 一律 `{"detail": "中文错误消息"}`；缓存缺失 `409 CACHE_MISS`。
 
 ---
 
 ## 测试
 
 - Go：15 个包，重点覆盖 detail（409/as_of/分位重算）、holdings（重放/交易/标签）、portfolio（穿透/lite/标签分组）、refresh（items 过滤/周月K/batch 扇出）、ai（ScoreCard/每日自动打分/消息面技术面）、jobs（任务/批/ws 广播）、settings、datamanage、ws hub
-- Python：367 用例（ai_scoring/ai/ai_news_tech/portfolio/fx/dividend/migration/api/instruments/indices/fundflow/Windows 打包）
-- 兼容性：`cmd/apidiff` + `/tmp/aicmp.py` 双服务逐字段对比（忽略运行时字段与 1e-12 级浮点尾数）
+
+---
+
+## 打包（APK）
+
+`.github/workflows/android-apk.yml`（对齐仓库内 Windows 打包的 CI 风格）：
+
+- **触发**：手动 `workflow_dispatch`；push 到 `main` / `refactor/golang-backend`；`v*` 标签
+- **流程**：setup-go → JDK 17 → 安装 Android SDK（cmdline-tools + platform 35 + build-tools 34/35）→ 交叉编译 Go（`CGO_ENABLED=0 GOOS=android GOARCH=arm64`）→ `./gradlew assembleDebug` → 上传 artifact
+- **打 `vX.Y.Z` 标签**：校验与 `versionName` 一致后自动发 GitHub Release
+- 本地一键构建：`packaging/android/build.sh`（交叉编译 + Gradle），产物在 `dist/android/`
+
+APK 结构：`assets/bin/stockanalyzer-server`（Go 后端，启动时解压执行，监听 127.0.0.1:8080）+ `assets/`（前端四页，同步到 `filesDir/static`，`STOCK_PROJECT_ROOT` 指向 `filesDir` 供静态目录解析）。
 
 ---
 
@@ -251,6 +228,6 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...   # Windows
 
 - 组合分位 / 打包序列依赖全量刷新触发重建（持仓画像 hash 变化后旧序列不参与）
 - `dv/dv_static` 存在 1e-12 级浮点尾数差异（float64 累加顺序，前端 round 后渲染一致）
-- Python 参照服务在部分环境下 `/ws` 不可用（缺 uvicorn standard 扩展）；Go 始终可用
-- 指数分时资金面（`index_intraday_cache`）依赖盘中刷新同步；非交易日均为空（两端一致）
-- 市场列表缓存（A股/ETF/港股全市场搜索）由 Python 启动预热或既有文件提供；Go 只读不主动下载
+- 指数分时资金面（`index_intraday_cache`）依赖盘中刷新同步；非交易日均为空
+- 市场列表缓存（A股/ETF/港股全市场搜索）依赖启动预热下载；断网环境搜索为空
+- Android APK 仅 arm64（`abiFilters`）；需要 x86 模拟器支持时需扩展构建矩阵

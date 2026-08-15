@@ -39,6 +39,20 @@ class MainActivity : AppCompatActivity() {
                 // 外部链接用系统浏览器打开
                 return true
             }
+
+            // 后端未就绪/加载失败时给出提示，避免白屏
+            override fun onReceivedError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    val html = "<html><body style='font-family:sans-serif;text-align:center;margin-top:40%'>" +
+                        "<h3>本地服务启动中…</h3><p style='color:#666'>请稍候或重启应用再试</p></body></html>"
+                    view?.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                }
+            }
         }
         webView.webChromeClient = WebChromeClient()
         webView.loadUrl(GoServer.BASE_URL)

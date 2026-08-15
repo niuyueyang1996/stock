@@ -1,10 +1,4 @@
-.venv/
 .idea/
-__pycache__/
-**/.___pycache__
-*.pyc
-.pytest_cache/
-.tmp_test/
 *.xlsx
 data/*.db
 data/*.db-shm
@@ -15,4 +9,3 @@ data/data/
 .server.log
 build/
 dist/
-packaging/windows/stock-analyzer.ico

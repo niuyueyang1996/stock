@@ -26,6 +26,15 @@ object GoServer {
             Log.i(TAG, "后端已在运行，直接复用")
             return
         }
+        try {
+            startInternal(context)
+        } catch (e: Exception) {
+            // 任何启动异常只记日志，不让 Activity 崩溃（页面会显示加载失败提示）
+            Log.e(TAG, "后端启动失败: ${e.message}", e)
+        }
+    }
+
+    private fun startInternal(context: Context) {
         val bin = File(context.filesDir, "stockanalyzer-server")
         // 从 assets 拷贝二进制（assets 不可直接 exec，需落到私有目录）
         if (!bin.exists()) {
