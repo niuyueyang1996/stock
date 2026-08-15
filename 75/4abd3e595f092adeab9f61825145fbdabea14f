@@ -1,0 +1,23 @@
+backend/cmd/apidiff/main.go
+  h_07352c0544a725 1-176
+backend/cmd/rawprobe2/main.go
+  h_07352c0544a725 54-60
+backend/internal/route/router.go
+  h_07352c0544a725 6,8,48-58,60-64,98-201
+backend/internal/route/trades.go
+  h_07352c0544a725 25,29,31-37,39,41,43,45-48
+backend/internal/service/jobs/jobs.go
+  h_07352c0544a725 90,172,285-302,328,330-336,338-354,356-390,392-402,404-416,418-420,422-423,425-450,452-505,507,509-545,590-591,594-597,601-602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "754abd3e595f092adeab9f61825145fbdabea14f",
+  "prompts": {},
+  "logical_commit_id": "754abd3e595f092adeab9f61825145fbdabea14f",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
