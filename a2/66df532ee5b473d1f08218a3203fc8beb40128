@@ -1,0 +1,37 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 184
+backend/internal/db/dao/cache.go
+  h_07352c0544a725 105,118-119,134,136-137,162-185
+backend/internal/db/dao/cache_read.go
+  h_07352c0544a725 67-69
+backend/internal/db/models.go
+  h_07352c0544a725 163-164,179
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 292
+backend/internal/service/ai/report.go
+  h_07352c0544a725 115,172
+backend/internal/service/ai/scoring.go
+  h_07352c0544a725 628
+backend/internal/service/detail/detail.go
+  h_07352c0544a725 275-277,328
+backend/internal/service/indices/indices.go
+  h_07352c0544a725 24-25,163-166
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 1513,1651
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 8,217,219,224-226,229-230,235-236,239-240,242,247,249-251,254,256-257,263-267,269-293,296-303,316-320,430-431,436-442,444,615,622-627,631,633,640,656-716
+backend/internal/service/refresh/refresh_test.go
+  h_07352c0544a725 15,95-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a266df532ee5b473d1f08218a3203fc8beb40128",
+  "prompts": {},
+  "logical_commit_id": "a266df532ee5b473d1f08218a3203fc8beb40128",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
