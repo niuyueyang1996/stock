@@ -1,0 +1,197 @@
+// Package holdings 持仓与交易服务：移动加权成本、撤销回滚（重放法）、港股人民币折算。
+// 对齐 app/services/holdings.py。持仓是交易记录的物化视图：任何插入/删除交易后
+// 对受影响股票按 id 顺序重放全部交易，重算数量与移动加权成本。
+package holdings
+
+import (
+	"errors"
+	"time"
+
+	"stockanalyzer/internal/db/dao"
+)
+
+// ErrInvalid 业务校验失败
+var ErrInvalid = errors.New("invalid")
+
+// Service 持仓服务
+type Service struct {
+	DB *dao.HoldingsDAO
+	// FxEnsure 交易日汇率确保（注入 fx 服务）
+	FxEnsure func(currency, rateDate string) *float64
+}
+
+func New(h *dao.HoldingsDAO, fxEnsure func(currency, rateDate string) *float64) *Service {
+	return &Service{DB: h, FxEnsure: fxEnsure}
+}
+
+// HoldingResult 重放结果
+type HoldingResult struct {
+	Code        string
+	Quantity    float64
+	AvgCost     float64
+	AvgCostCny  *float64
+	TotalBuy    float64
+	TotalBuyCny *float64
+	Currency    string
+	MissingFx   bool
+	Status      string
+}
+
+// Rebuild 按 id 顺序重放 code 的全部交易，重建持仓
+func (s *Service) Rebuild(code string) (*HoldingResult, error) {
+	currency := s.DB.CurrencyOf(code)
+	trades := s.DB.TradesByCode(code)
+	qty, avgCost, totalBuy := 0.0, 0.0, 0.0
+	avgCostCny, totalBuyCny := 0.0, 0.0
+	cnyOK := true
+	for _, t := range trades {
+		amt := t.Amount
+		fee := t.Fee
+		switch t.Side {
+		case "buy":
+			totalBuy += amt + fee
+			newQty := qty + t.Quantity
+			if newQty > 0 {
+				avgCost = (qty*avgCost + amt + fee) / newQty
+			} else {
+				avgCost = 0
+			}
+			amtCny := t.AmountCny
+			if amtCny == nil {
+				cnyOK = false
+			} else {
+				var feeCny float64
+				if currency == "CNY" {
+					feeCny = fee
+				} else if t.FxRate != nil {
+					feeCny = fee * *t.FxRate
+				} else {
+					feeCny = 0
+					cnyOK = false
+				}
+				totalBuyCny += *amtCny + feeCny
+				if newQty > 0 {
+					avgCostCny = (qty*avgCostCny + *amtCny + feeCny) / newQty
+				}
+			}
+			qty = newQty
+		case "adjust":
+			oldQty := qty
+			newQty := qty + t.Quantity
+			if newQty <= 0 {
+				return nil, ErrInvalid
+			}
+			totalBuy += amt
+			avgCost = (oldQty*avgCost + amt) / newQty
+			amtCny := t.AmountCny
+			if amtCny == nil {
+				cnyOK = false
+			} else {
+				avgCostCny = (oldQty*avgCostCny + *amtCny) / newQty
+				totalBuyCny += *amtCny
+			}
+			qty = newQty
+		default: // sell
+			qty -= t.Quantity
+			if qty < -1e-9 {
+				return nil, ErrInvalid
+			}
+		}
+	}
+	status := "active"
+	if qty <= 1e-9 {
+		status = "closed"
+	}
+	res := &HoldingResult{
+		Code: code, Quantity: round(qty, 6), AvgCost: round(avgCost, 4),
+		TotalBuy: round(totalBuy, 2), Currency: currency, Status: status,
+	}
+	if cnyOK {
+		v1, v2 := round(avgCostCny, 4), round(totalBuyCny, 2)
+		res.AvgCostCny, res.TotalBuyCny = &v1, &v2
+	} else {
+		res.MissingFx = true
+	}
+	// 落库
+	_ = s.DB.UpsertHolding(&dao.Holding{
+		Code: code, Quantity: res.Quantity, AvgCost: res.AvgCost,
+		AvgCostCny: res.AvgCostCny, TotalBuy: res.TotalBuy, TotalBuyCny: res.TotalBuyCny,
+		Currency: &res.Currency, Status: status,
+	})
+	return res, nil
+}
+
+// RecordTrade 录入交易并重放持仓（side_effects=false 时跳过联动）
+func (s *Service) RecordTrade(code, side string, price, quantity, fee float64, tradeTime, note string, name *string, sideEffects bool) (int64, *HoldingResult, error) {
+	if side != "buy" && side != "sell" {
+		return 0, nil, ErrInvalid
+	}
+	if price <= 0 || quantity <= 0 {
+		return 0, nil, ErrInvalid
+	}
+	if tradeTime == "" {
+		tradeTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	amount := round(price*quantity, 4)
+	currency := s.DB.CurrencyOf(code)
+	// 汇率计算在事务外（汇率落库需独立连接，事务内会锁库）
+	var fxRate, amountCny *float64
+	if currency == "CNY" {
+		v1, v2 := 1.0, round(amount, 2)
+		fxRate, amountCny = &v1, &v2
+	} else if s.FxEnsure != nil {
+		rate := s.FxEnsure("HKD", tradeTime[:10])
+		if rate != nil {
+			v1 := round(*rate, 6)
+			v2 := round(amount**rate, 2)
+			fxRate, amountCny = &v1, &v2
+		}
+	}
+	if name != nil {
+		_ = s.DB.EnsureStock(code, *name, "sh", "", currency)
+	}
+	t := &dao.Trade{
+		Code: code, Side: side, Price: price, Quantity: quantity, Amount: amount,
+		Fee: fee, TradeTime: tradeTime, Note: strptr(note), FxRate: fxRate, AmountCny: amountCny,
+	}
+	id, err := s.DB.InsertTrade(t)
+	if err != nil {
+		return 0, nil, err
+	}
+	h, err := s.Rebuild(code)
+	return id, h, err
+}
+
+// GetHoldings 持仓列表（含币种/缺失汇率标记）
+func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
+	rows := s.DB.GetHoldings(activeOnly)
+	out := make([]map[string]any, 0, len(rows))
+	for _, h := range rows {
+		currency := "CNY"
+		if h.Currency != nil {
+			currency = *h.Currency
+		}
+		out = append(out, map[string]any{
+			"code": h.Code, "quantity": h.Quantity, "avg_cost": h.AvgCost,
+			"avg_cost_cny": h.AvgCostCny, "total_buy": h.TotalBuy, "total_buy_cny": h.TotalBuyCny,
+			"currency": currency, "status": h.Status,
+			"missing_fx": h.AvgCostCny == nil && currency != "CNY",
+		})
+	}
+	return out
+}
+
+func strptr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func round(v float64, digits int) float64 {
+	p := 1.0
+	for i := 0; i < digits; i++ {
+		p *= 10
+	}
+	return float64(int64(v*p+0.5)) / p
+}

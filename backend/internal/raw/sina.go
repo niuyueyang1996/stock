@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // Sina 新浪客户端
@@ -118,4 +120,32 @@ type SinaFinanceData struct {
 		RType       string `json:"rType"`
 		UpdateTime  int64  `json:"update_time"`
 	} `json:"report_list"`
+}
+
+// FXRate 新浪实时外汇 HKD/CNY：1 HKD = x CNY（买卖价中点）。失败返回 nil。
+// 对齐 app/services/fx.py fetch_rate_for_date（中行牌价接口在本环境仅 2023 历史，改用新浪实时）。
+func (s *Sina) FXRate(ctx context.Context) *float64 {
+	// 新浪外汇接口必须带 Referer（否则 Forbidden）
+	saved := s.c.Headers
+	s.c.Headers = s.flowHeaders
+	defer func() { s.c.Headers = saved }()
+	b, err := s.c.GetGBK(ctx, "https://hq.sinajs.cn/list=HKDCNY", nil)
+	if err != nil {
+		return nil
+	}
+	i := strings.Index(b, "\"")
+	if i < 0 {
+		return nil
+	}
+	parts := strings.Split(b[i+1:], ",")
+	if len(parts) < 11 {
+		return nil
+	}
+	buy, err1 := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	sell, err2 := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	v := math.Round((buy+sell)/2*1e6) / 1e6
+	return &v
 }
