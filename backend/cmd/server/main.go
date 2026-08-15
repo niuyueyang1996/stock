@@ -30,6 +30,7 @@ import (
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/market"
+	"stockanalyzer/internal/service/marketlists"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/refresh"
@@ -78,6 +79,9 @@ func main() {
 	cn := raw.NewCNInfo()
 	bd := raw.NewBaidu()
 	nw := raw.NewEMNews()
+
+	// 市场列表预热（A股/ETF/港股全列表 → data/ 下 JSON，搜索依赖；幂等）
+	listsSvc := &marketlists.Service{DataDir: cfg.DataDir, Em: em, Sina: sina, Tencent: tx}
 
 	// 汇率服务
 	fxSvc := fx.New(sina, dao.NewFxDAO(gdb), holdingsDAO)
@@ -230,7 +234,7 @@ func main() {
 	router.Any("/ws", gin.WrapH(ws.Handler(hub, jm.Snapshot))) // 根路径（前端连 ws://host/ws）
 
 	// ---- 后台任务 ----
-	startBackground(gdb, fxSvc, divSvc, rfSvc, settingsSvc, jm, hub)
+	startBackground(gdb, listsSvc, fxSvc, divSvc, rfSvc, settingsSvc, jm, hub)
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.Port)
 	log.Printf("[启动] stockanalyzer-go 监听 http://%s", addr)
@@ -242,13 +246,16 @@ func main() {
 	}
 }
 
-// startBackground 启动后台任务：预热（汇率/除权）+ 盘中动态刷新 + 每日收盘全量同步
-func startBackground(gdb *gorm.DB, fxSvc *fx.Service, divSvc *dividend.Service,
-	rfSvc *refresh.Service, settingsSvc *settings.Service, jm *jobs.Manager, hub *ws.Hub) {
-	// 1) 启动预热（异步）
+// startBackground 启动后台任务：预热（市场列表/汇率/除权）+ 盘中动态刷新 + 每日收盘全量同步
+func startBackground(gdb *gorm.DB, listsSvc *marketlists.Service, fxSvc *fx.Service,
+	divSvc *dividend.Service, rfSvc *refresh.Service, settingsSvc *settings.Service,
+	jm *jobs.Manager, hub *ws.Hub) {
+	// 1) 启动预热（异步）：市场列表最先（搜索依赖），其次汇率/除权
 	go func() {
-		jm.Prewarm([]string{"港股汇率", "今日除权"}, func(step string) error {
+		jm.Prewarm([]string{"市场列表", "港股汇率", "今日除权"}, func(step string) error {
 			switch step {
+			case "市场列表":
+				listsSvc.Download(context.Background())
 			case "港股汇率":
 				fxSvc.RefreshHKFX(context.Background(), time.Now().Format("2006-01-02T15:04:05"), true)
 			case "今日除权":

@@ -438,3 +438,36 @@ func isHKCode(code string) bool {
 	}
 	return true
 }
+
+// HKNames 腾讯批量港股中文名（qt.gtimg.cn v_hk 段，50 个一批，GBK；
+// 对齐 Python _fetch_hk_names）。返回 code→中文名，单批失败跳过。
+func (t *Tencent) HKNames(ctx context.Context, codes []string) map[string]string {
+	names := map[string]string{}
+	for i := 0; i < len(codes); i += 50 {
+		end := i + 50
+		if end > len(codes) {
+			end = len(codes)
+		}
+		syms := make([]string, 0, end-i)
+		for _, c := range codes[i:end] {
+			syms = append(syms, "hk"+c)
+		}
+		text, err := t.c.GetGBK(ctx, "https://qt.gtimg.cn/q="+strings.Join(syms, ","), nil)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(text, ";") {
+			line = strings.TrimSpace(line)
+			if !strings.Contains(line, "=") || !strings.Contains(line, "v_hk") {
+				continue
+			}
+			head, payload, _ := strings.Cut(line, "=")
+			code := strings.TrimPrefix(strings.TrimSpace(head), "v_hk")
+			parts := strings.Split(strings.Trim(payload, `"`), "~")
+			if len(parts) >= 3 && strings.TrimSpace(parts[1]) != "" {
+				names[code] = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	return names
+}

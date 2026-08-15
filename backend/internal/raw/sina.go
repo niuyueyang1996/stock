@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Sina 新浪客户端
@@ -148,4 +149,83 @@ func (s *Sina) FXRate(ctx context.Context) *float64 {
 	}
 	v := math.Round((buy+sell)/2*1e6) / 1e6
 	return &v
+}
+
+// ListHK 新浪港股全列表（getHKStockData 分页，node=qbgg_hk；对齐 akshare stock_hk_spot）。
+// 页间并发（8 路限流），按页序合并去重。返回代码（5位）+ 新浪中文名
+// （腾讯中文名由 Tencent.HKNames 覆盖，见 marketlists）。
+func (s *Sina) ListHK(ctx context.Context) ([]MarketCode, error) {
+	const (
+		pageSize = 60
+		workers  = 8
+		maxPages = 100
+	)
+	first, err := s.hkPage(ctx, 1, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	out := first
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, workers)
+	var mu sync.Mutex
+	for page := 2; page <= maxPages; page++ {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			rows, err := s.hkPage(ctx, p, pageSize)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			out = append(out, rows...)
+			mu.Unlock()
+		}(page)
+	}
+	wg.Wait()
+	// 保序去重
+	seen := make(map[string]bool, len(out))
+	dedup := out[:0]
+	for _, c := range out {
+		if c.Code == "" || seen[c.Code] {
+			continue
+		}
+		seen[c.Code] = true
+		dedup = append(dedup, c)
+	}
+	if len(dedup) == 0 {
+		return nil, fmt.Errorf("新浪港股列表为空")
+	}
+	return dedup, nil
+}
+
+// hkPage 新浪港股单页
+func (s *Sina) hkPage(ctx context.Context, page, pageSize int) ([]MarketCode, error) {
+	b, err := s.c.Get(ctx,
+		"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHKStockData",
+		url.Values{
+			"page": {strconv.Itoa(page)}, "num": {strconv.Itoa(pageSize)},
+			"sort": {"symbol"}, "asc": {"1"},
+			"node": {"qbgg_hk"}, "_s_r_a": {"init"},
+		})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Symbol string `json:"symbol"`
+		Name   string `json:"name"`
+	}
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]MarketCode, 0, len(rows))
+	for _, r := range rows {
+		code := strings.TrimPrefix(strings.TrimSpace(r.Symbol), "hk")
+		if code == "" {
+			continue
+		}
+		out = append(out, MarketCode{Code: code, Name: strings.TrimSpace(r.Name)})
+	}
+	return out, nil
 }
