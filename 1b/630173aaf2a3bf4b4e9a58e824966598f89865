@@ -1,0 +1,23 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 33,83-85,237,249-253,255,257-258
+backend/internal/raw/em.go
+  h_07352c0544a725 10,13-14,214-378
+backend/internal/raw/sina.go
+  h_07352c0544a725 14,152-230
+backend/internal/raw/tencent.go
+  h_07352c0544a725 441-473
+backend/internal/service/marketlists/marketlists.go
+  h_07352c0544a725 1-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1b630173aaf2a3bf4b4e9a58e824966598f89865",
+  "prompts": {},
+  "logical_commit_id": "1b630173aaf2a3bf4b4e9a58e824966598f89865",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
