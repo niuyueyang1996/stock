@@ -12,7 +12,7 @@ import (
 
 // 常量：收盘确认 / 网络 / 数据源开关（与 Python 端一致）
 const (
-	CloseConfirmMinutes = 5   // 交易日 now >= 15:00+5min 视为已收盘
+	CloseConfirmMinutes = 5 // 交易日 now >= 15:00+5min 视为已收盘
 	MarketClose         = "15:00"
 	MarketOpen          = "09:15" // 集合竞价起算；now < 09:15 视为未开盘
 	RequestTimeoutSec   = 10

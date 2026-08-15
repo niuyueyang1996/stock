@@ -17,14 +17,14 @@ func (Stock) TableName() string { return "stocks" }
 
 // Holding holdings
 type Holding struct {
-	Code         string   `gorm:"column:code;primaryKey"`
-	Quantity     float64  `gorm:"column:quantity"`
-	AvgCost      float64  `gorm:"column:avg_cost"`
-	TotalBuy     float64  `gorm:"column:total_buy"`
-	Status       string   `gorm:"column:status"`
-	AvgCostCny   *float64 `gorm:"column:avg_cost_cny"`
-	TotalBuyCny  *float64 `gorm:"column:total_buy_cny"`
-	Currency     *string  `gorm:"column:currency"`
+	Code        string   `gorm:"column:code;primaryKey"`
+	Quantity    float64  `gorm:"column:quantity"`
+	AvgCost     float64  `gorm:"column:avg_cost"`
+	TotalBuy    float64  `gorm:"column:total_buy"`
+	Status      string   `gorm:"column:status"`
+	AvgCostCny  *float64 `gorm:"column:avg_cost_cny"`
+	TotalBuyCny *float64 `gorm:"column:total_buy_cny"`
+	Currency    *string  `gorm:"column:currency"`
 }
 
 func (Holding) TableName() string { return "holdings" }
@@ -125,42 +125,42 @@ func (ValuationQuantileCache) TableName() string { return "valuation_quantile_ca
 
 // DailyFundflowCache daily_fundflow_cache
 type DailyFundflowCache struct {
-	Code           string   `gorm:"column:code;primaryKey"`
-	TradeDate      string   `gorm:"column:trade_date;primaryKey"`
-	Netamount      *float64 `gorm:"column:netamount"`
-	MainNet        *float64 `gorm:"column:main_net"`
-	SuperLargeNet  *float64 `gorm:"column:super_large_net"`
-	LargeNet       *float64 `gorm:"column:large_net"`
-	MediumNet      *float64 `gorm:"column:medium_net"`
-	SmallNet       *float64 `gorm:"column:small_net"`
-	MainNetPct     *float64 `gorm:"column:main_net_pct"`
-	P50            *float64 `gorm:"column:p50"`
-	P80            *float64 `gorm:"column:p80"`
-	P95            *float64 `gorm:"column:p95"`
-	XsNet          *float64 `gorm:"column:xs_net"`
-	P15            *float64 `gorm:"column:p15"`
-	P40            *float64 `gorm:"column:p40"`
-	P75            *float64 `gorm:"column:p75"`
-	BuyAmount      *float64 `gorm:"column:buy_amount"`
-	SellAmount     *float64 `gorm:"column:sell_amount"`
+	Code          string   `gorm:"column:code;primaryKey"`
+	TradeDate     string   `gorm:"column:trade_date;primaryKey"`
+	Netamount     *float64 `gorm:"column:netamount"`
+	MainNet       *float64 `gorm:"column:main_net"`
+	SuperLargeNet *float64 `gorm:"column:super_large_net"`
+	LargeNet      *float64 `gorm:"column:large_net"`
+	MediumNet     *float64 `gorm:"column:medium_net"`
+	SmallNet      *float64 `gorm:"column:small_net"`
+	MainNetPct    *float64 `gorm:"column:main_net_pct"`
+	P50           *float64 `gorm:"column:p50"`
+	P80           *float64 `gorm:"column:p80"`
+	P95           *float64 `gorm:"column:p95"`
+	XsNet         *float64 `gorm:"column:xs_net"`
+	P15           *float64 `gorm:"column:p15"`
+	P40           *float64 `gorm:"column:p40"`
+	P75           *float64 `gorm:"column:p75"`
+	BuyAmount     *float64 `gorm:"column:buy_amount"`
+	SellAmount    *float64 `gorm:"column:sell_amount"`
 }
 
 func (DailyFundflowCache) TableName() string { return "daily_fundflow_cache" }
 
 // Fundflow15mCache fundflow_15m_cache
 type Fundflow15mCache struct {
-	Code           string   `gorm:"column:code;primaryKey"`
-	TradeDate      string   `gorm:"column:trade_date;primaryKey"`
-	Ts             string   `gorm:"column:ts;primaryKey"`
-	MainNet        *float64 `gorm:"column:main_net"`
-	SuperLargeNet  *float64 `gorm:"column:super_large_net"`
-	LargeNet       *float64 `gorm:"column:large_net"`
-	MediumNet      *float64 `gorm:"column:medium_net"`
-	SmallNet       *float64 `gorm:"column:small_net"`
-	XsNet          *float64 `gorm:"column:xs_net"`
-	BuyAmount      *float64 `gorm:"column:buy_amount"`
-	SellAmount     *float64 `gorm:"column:sell_amount"`
-	Price          *float64 `gorm:"column:price"`
+	Code          string   `gorm:"column:code;primaryKey"`
+	TradeDate     string   `gorm:"column:trade_date;primaryKey"`
+	Ts            string   `gorm:"column:ts;primaryKey"`
+	MainNet       *float64 `gorm:"column:main_net"`
+	SuperLargeNet *float64 `gorm:"column:super_large_net"`
+	LargeNet      *float64 `gorm:"column:large_net"`
+	MediumNet     *float64 `gorm:"column:medium_net"`
+	SmallNet      *float64 `gorm:"column:small_net"`
+	XsNet         *float64 `gorm:"column:xs_net"`
+	BuyAmount     *float64 `gorm:"column:buy_amount"`
+	SellAmount    *float64 `gorm:"column:sell_amount"`
+	Price         *float64 `gorm:"column:price"`
 }
 
 func (Fundflow15mCache) TableName() string { return "fundflow_15m_cache" }
@@ -179,26 +179,26 @@ func (IndexIntradayCache) TableName() string { return "index_intraday_cache" }
 
 // FinancialCache financial_cache
 type FinancialCache struct {
-	Code                string   `gorm:"column:code;primaryKey"`
-	ReportDate          string   `gorm:"column:report_date;primaryKey"`
-	Roe                 *float64 `gorm:"column:roe"`
-	Roa                 *float64 `gorm:"column:roa"`
-	RevenueYoy          *float64 `gorm:"column:revenue_yoy"`
-	ProfitYoy           *float64 `gorm:"column:profit_yoy"`
-	GrossMargin         *float64 `gorm:"column:gross_margin"`
-	DvPerShare          *float64 `gorm:"column:dv_per_share"`
-	NetProfit           *float64 `gorm:"column:net_profit"`
-	NetAssets           *float64 `gorm:"column:net_assets"`
-	Eps                 *float64 `gorm:"column:eps"`
-	TotalShares         *float64 `gorm:"column:total_shares"`
-	PayoutRatio         *float64 `gorm:"column:payout_ratio"`
-	DvReport            *string  `gorm:"column:dv_report"`
-	ProfitSeries        *string  `gorm:"column:profit_series"`
-	RevenueSeries       *string  `gorm:"column:revenue_series"`
-	RoeAnnual           *float64 `gorm:"column:roe_annual"`
-	RevenueYoyAnnual    *float64 `gorm:"column:revenue_yoy_annual"`
-	ProfitYoyAnnual     *float64 `gorm:"column:profit_yoy_annual"`
-	LastYearNetAssets   *float64 `gorm:"column:last_year_net_assets"`
+	Code              string   `gorm:"column:code;primaryKey"`
+	ReportDate        string   `gorm:"column:report_date;primaryKey"`
+	Roe               *float64 `gorm:"column:roe"`
+	Roa               *float64 `gorm:"column:roa"`
+	RevenueYoy        *float64 `gorm:"column:revenue_yoy"`
+	ProfitYoy         *float64 `gorm:"column:profit_yoy"`
+	GrossMargin       *float64 `gorm:"column:gross_margin"`
+	DvPerShare        *float64 `gorm:"column:dv_per_share"`
+	NetProfit         *float64 `gorm:"column:net_profit"`
+	NetAssets         *float64 `gorm:"column:net_assets"`
+	Eps               *float64 `gorm:"column:eps"`
+	TotalShares       *float64 `gorm:"column:total_shares"`
+	PayoutRatio       *float64 `gorm:"column:payout_ratio"`
+	DvReport          *string  `gorm:"column:dv_report"`
+	ProfitSeries      *string  `gorm:"column:profit_series"`
+	RevenueSeries     *string  `gorm:"column:revenue_series"`
+	RoeAnnual         *float64 `gorm:"column:roe_annual"`
+	RevenueYoyAnnual  *float64 `gorm:"column:revenue_yoy_annual"`
+	ProfitYoyAnnual   *float64 `gorm:"column:profit_yoy_annual"`
+	LastYearNetAssets *float64 `gorm:"column:last_year_net_assets"`
 }
 
 func (FinancialCache) TableName() string { return "financial_cache" }
@@ -357,40 +357,40 @@ func (AIDailyReport) TableName() string { return "ai_daily_reports" }
 
 // AIFundflowReport ai_fundflow_reports
 type AIFundflowReport struct {
-	Code        string   `gorm:"column:code;primaryKey"`
-	TradeDate   string   `gorm:"column:trade_date;primaryKey"`
-	Source      string   `gorm:"column:source;primaryKey"`
-	Window      string   `gorm:"column:window;primaryKey"`
-	Correlation *string  `gorm:"column:correlation"`
-	Summary     *string  `gorm:"column:summary"`
-	MainForce   *string  `gorm:"column:main_force"`
-	Rhythm      *string  `gorm:"column:rhythm"`
-	Divergence  *string  `gorm:"column:divergence"`
-	Alerts      *string  `gorm:"column:alerts"`
-	Conclusion  *string  `gorm:"column:conclusion"`
-	HTML        *string  `gorm:"column:html"`
-	ModelName   *string  `gorm:"column:model_name"`
-	CreatedAt   *string  `gorm:"column:created_at"`
-	UpdatedAt   *string  `gorm:"column:updated_at"`
+	Code        string  `gorm:"column:code;primaryKey"`
+	TradeDate   string  `gorm:"column:trade_date;primaryKey"`
+	Source      string  `gorm:"column:source;primaryKey"`
+	Window      string  `gorm:"column:window;primaryKey"`
+	Correlation *string `gorm:"column:correlation"`
+	Summary     *string `gorm:"column:summary"`
+	MainForce   *string `gorm:"column:main_force"`
+	Rhythm      *string `gorm:"column:rhythm"`
+	Divergence  *string `gorm:"column:divergence"`
+	Alerts      *string `gorm:"column:alerts"`
+	Conclusion  *string `gorm:"column:conclusion"`
+	HTML        *string `gorm:"column:html"`
+	ModelName   *string `gorm:"column:model_name"`
+	CreatedAt   *string `gorm:"column:created_at"`
+	UpdatedAt   *string `gorm:"column:updated_at"`
 }
 
 func (AIFundflowReport) TableName() string { return "ai_fundflow_reports" }
 
 // AIFundflowCoherenceReport ai_fundflow_coherence_reports
 type AIFundflowCoherenceReport struct {
-	ID          int64    `gorm:"column:id;primaryKey"`
-	Scope       string   `gorm:"column:scope"`
-	ScopeKey    string   `gorm:"column:scope_key"`
-	TradeDate   string   `gorm:"column:trade_date"`
-	Window      string   `gorm:"column:window"`
-	Correlation *string  `gorm:"column:correlation"`
-	Summary     *string  `gorm:"column:summary"`
-	Points      *string  `gorm:"column:points"`
-	Conclusion  *string  `gorm:"column:conclusion"`
-	HTML        *string  `gorm:"column:html"`
-	ModelName   *string  `gorm:"column:model_name"`
-	CreatedAt   *string  `gorm:"column:created_at"`
-	UpdatedAt   *string  `gorm:"column:updated_at"`
+	ID          int64   `gorm:"column:id;primaryKey"`
+	Scope       string  `gorm:"column:scope"`
+	ScopeKey    string  `gorm:"column:scope_key"`
+	TradeDate   string  `gorm:"column:trade_date"`
+	Window      string  `gorm:"column:window"`
+	Correlation *string `gorm:"column:correlation"`
+	Summary     *string `gorm:"column:summary"`
+	Points      *string `gorm:"column:points"`
+	Conclusion  *string `gorm:"column:conclusion"`
+	HTML        *string `gorm:"column:html"`
+	ModelName   *string `gorm:"column:model_name"`
+	CreatedAt   *string `gorm:"column:created_at"`
+	UpdatedAt   *string `gorm:"column:updated_at"`
 }
 
 func (AIFundflowCoherenceReport) TableName() string { return "ai_fundflow_coherence_reports" }
@@ -415,19 +415,19 @@ func (AINewsReport) TableName() string { return "ai_news_reports" }
 
 // AITechReport ai_tech_reports
 type AITechReport struct {
-	Code        string  `gorm:"column:code;primaryKey"`
-	AsOf        string  `gorm:"column:as_of;primaryKey"`
-	Source      string  `gorm:"column:source;primaryKey"`
-	TrendShort  *string `gorm:"column:trend_short"`
-	TrendMid    *string `gorm:"column:trend_mid"`
-	Summary     *string `gorm:"column:summary"`
-	LevelsJSON  *string `gorm:"column:levels_json"`
-	SignalsJSON *string `gorm:"column:signals_json"`
+	Code         string  `gorm:"column:code;primaryKey"`
+	AsOf         string  `gorm:"column:as_of;primaryKey"`
+	Source       string  `gorm:"column:source;primaryKey"`
+	TrendShort   *string `gorm:"column:trend_short"`
+	TrendMid     *string `gorm:"column:trend_mid"`
+	Summary      *string `gorm:"column:summary"`
+	LevelsJSON   *string `gorm:"column:levels_json"`
+	SignalsJSON  *string `gorm:"column:signals_json"`
 	Invalidation *string `gorm:"column:invalidation"`
-	HTML        *string `gorm:"column:html"`
-	ModelName   *string `gorm:"column:model_name"`
-	CreatedAt   *string `gorm:"column:created_at"`
-	UpdatedAt   *string `gorm:"column:updated_at"`
+	HTML         *string `gorm:"column:html"`
+	ModelName    *string `gorm:"column:model_name"`
+	CreatedAt    *string `gorm:"column:created_at"`
+	UpdatedAt    *string `gorm:"column:updated_at"`
 }
 
 func (AITechReport) TableName() string { return "ai_tech_reports" }
@@ -477,13 +477,13 @@ func (AITechCoherenceReport) TableName() string { return "ai_tech_coherence_repo
 
 // IndexDef index_defs
 type IndexDef struct {
-	Code      string `gorm:"column:code;primaryKey"`
-	Name      string `gorm:"column:name"`
+	Code      string  `gorm:"column:code;primaryKey"`
+	Name      string  `gorm:"column:name"`
 	Symbol    *string `gorm:"column:symbol"`
 	LeguCode  *string `gorm:"column:legu_code"`
-	PeSource  string `gorm:"column:pe_source"`
-	PbSource  string `gorm:"column:pb_source"`
-	SortOrder int    `gorm:"column:sort_order"`
+	PeSource  string  `gorm:"column:pe_source"`
+	PbSource  string  `gorm:"column:pb_source"`
+	SortOrder int     `gorm:"column:sort_order"`
 }
 
 func (IndexDef) TableName() string { return "index_defs" }
