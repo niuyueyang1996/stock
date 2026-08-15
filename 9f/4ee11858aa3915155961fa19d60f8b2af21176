@@ -1,0 +1,19 @@
+static/js/common.js
+  h_07352c0544a725 1521,1545,1625,1652,1827-1831,1833,1835,1841-1842,1861-1864,1872,1879,1901,1906,1928
+static/portfolio.html
+  h_07352c0544a725 33-47,81,113,115,117-120,129,144,802
+static/stock.html
+  h_07352c0544a725 213,236,241,264,670,673-696,698-700
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9f4ee11858aa3915155961fa19d60f8b2af21176",
+  "prompts": {},
+  "logical_commit_id": "9f4ee11858aa3915155961fa19d60f8b2af21176",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
