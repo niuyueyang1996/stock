@@ -166,6 +166,10 @@ func main() {
 
 	// 交易/标签变更 → AI 每日重打分（对齐 Python _trigger_ai_daily；失败仅日志不阻断）
 	holdings.OnTradeChanged = aiSvc.MaybeAutoScoreDaily
+	// 全局全量刷新预拉持仓新闻（AI 消息面分析缓存复用；用户要求进刷新链路）
+	rfSvc.EnsureNews = func(code string) {
+		aiSvc.EnsureStockNews(code, 30, 1200, true)
+	}
 
 	// 详情服务（个股/指数详情组装）
 	detailSvc := &detail.Service{

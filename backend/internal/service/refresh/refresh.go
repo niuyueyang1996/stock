@@ -57,6 +57,8 @@ type Service struct {
 	BeforeOpen func(now time.Time) bool
 	// MarketClosed 收盘判定（>=15:05 定格）
 	MarketClosed func(now time.Time) bool
+	// EnsureNews 个股新闻预拉（main 注入 ai.EnsureStockNews force 包装；全局全量刷新时批量拉）
+	EnsureNews func(code string)
 }
 
 // New 构造刷新服务（依赖注入各异步/行情服务）

@@ -740,6 +740,7 @@ const REFRESH_OPTIONS = {
     ['fx', '港股汇率'],
     ['flow', '今日资金流'],
     ['portfolio', '组合历史估值重算'],
+    ['news', '个股新闻（AI 消息面用）'],
   ],
   stock_dynamic: [
     ['price', '现价'],
@@ -1517,7 +1518,7 @@ async function openPromptEditor(kind, onConfirm) {
 }
 
 // 触发个股资金流 AI 分析并把结果渲染进 panel（先弹窗确认/编辑指令；skipEditor=true 一键跳过编辑直接用默认要求）
-async function runFundflowAi({ code, window, btn, panel, skipEditor }) {
+async function runFundflowAi({ code, window, btn, panel, skipEditor, intensity }) {
   const doRun = async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
@@ -1541,7 +1542,7 @@ async function runFundflowAi({ code, window, btn, panel, skipEditor }) {
       btn.disabled = false;
     }
   };
-  if (skipEditor) { await doRun(null, 'normal'); return; }
+  if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
   openPromptEditor('fundflow', doRun);
 }
 
@@ -1621,7 +1622,7 @@ function renderFundflowBatchPanel(el, d) {
 
 // 批量分析资金面：POST 批量端点 → 渲染面板 → onDone 刷新列表列（先弹窗确认/编辑指令）
 // 持仓模式（tags）：先刷新持仓资金流；指数模式（codes/weights）：直接分析（资金流由全量刷新拉取）
-async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weights, skipEditor }) {
+async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weights, skipEditor, intensity }) {
   const doRun = async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
@@ -1648,7 +1649,7 @@ async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weigh
       btn.disabled = false;
     }
   };
-  if (skipEditor) { await doRun(null, 'normal'); return; }
+  if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
   openPromptEditor('batch', doRun);
 }
 
@@ -1820,20 +1821,29 @@ async function loadTechReports(codes) {
 // 批量分析消息面：POST 批量端点 → onDone 重载持久化面板（先弹窗确认/编辑指令）
 // ============ AI 扩展分析一键勾选弹窗（个股/组合共用） ============
 // items: [{key, label, checked}]；onRun(keys) 逐个执行选中项。
-function openAiExtPicker({ items, onRun, note }) {
+function openAiExtPicker({ items, onRun, note, withIntensity, title }) {
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
   mask.innerHTML = `
-    <div class="modal" style="width:460px;max-width:94vw">
-      <h3>🤖 AI 扩展分析</h3>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${note || '勾选要分析的内容（默认全选），将逐个进行分析，进度见顶部。'}</div>
+    <div class="modal" style="width:500px;max-width:94vw">
+      <h3>${title || '🤖 AI 分析'}</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${note || '勾选要分析的内容（默认不勾），将逐个进行分析，进度见顶部。'}</div>
       <div>
         ${(items || []).map((it) => `
           <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;margin:5px 0;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px">
             <input type="checkbox" data-key="${it.key}" ${it.checked === false ? '' : 'checked'}>
-            <b>${esc(it.label)}</b>
+            <b>${esc(it.label)}</b>${it.desc ? `<span class="muted" style="font-size:12px">${esc(it.desc)}</span>` : ''}
           </label>`).join('')}
       </div>
+      ${withIntensity ? `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px">
+        <b>分析强度</b>
+        <select id="extPickerIntensity" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)">
+          <option value="fast">快速</option>
+          <option value="normal" selected>普通</option>
+          <option value="deep">深入（HTML 详细报告）</option>
+        </select>
+      </div>` : ''}
       <div class="modal-actions" style="margin-top:14px">
         <button class="btn" id="extPickerCancel">取消</button>
         <span class="grow" style="flex:1"></span>
@@ -1845,16 +1855,17 @@ function openAiExtPicker({ items, onRun, note }) {
   mask.querySelector('#extPickerCancel').onclick = close;
   mask.querySelector('#extPickerStart').onclick = async () => {
     const keys = [...mask.querySelectorAll('input[data-key]:checked')].map((i) => i.dataset.key);
+    const intensity = withIntensity ? (mask.querySelector('#extPickerIntensity') || {}).value : null;
     close();
     if (!keys.length) return toast('请至少勾选一项');
-    if (typeof onRun === 'function') await onRun(keys);
+    if (typeof onRun === 'function') await onRun(keys, intensity);
   };
   mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
 }
 
 
 // 批量分析消息面：POST 批量端点 → onDone 重载持久化面板（先弹窗确认/编辑指令；skipEditor=true 一键跳过编辑直接用默认要求）
-async function runNewsBatch({ tags, btn, panel, onDone, codes, skipEditor }) {
+async function runNewsBatch({ tags, btn, panel, onDone, codes, skipEditor, intensity }) {
   const doRun = async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
@@ -1876,12 +1887,12 @@ async function runNewsBatch({ tags, btn, panel, onDone, codes, skipEditor }) {
       btn.disabled = false;
     }
   };
-  if (skipEditor) { await doRun(null, 'normal'); return; }
+  if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
   openPromptEditor('news_batch', doRun);
 }
 
 // 批量分析技术面：POST 批量端点 → onDone 重载持久化面板（先弹窗确认/编辑指令；skipEditor=true 一键跳过编辑直接用默认要求）
-async function runTechBatch({ tags, btn, panel, onDone, codes, skipEditor }) {
+async function runTechBatch({ tags, btn, panel, onDone, codes, skipEditor, intensity }) {
   const doRun = async (systemPrompt, intensity) => {
     btn.disabled = true;
     panel.style.display = 'block';
@@ -1903,7 +1914,7 @@ async function runTechBatch({ tags, btn, panel, onDone, codes, skipEditor }) {
       btn.disabled = false;
     }
   };
-  if (skipEditor) { await doRun(null, 'normal'); return; }
+  if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
   openPromptEditor('tech_batch', doRun);
 }
 

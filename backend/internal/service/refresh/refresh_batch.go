@@ -19,12 +19,13 @@ const (
 	ItemFlow       = "flow"       // 当日资金流
 	ItemFx         = "fx"         // 港股汇率（HKD/CNY）
 	ItemPortfolio  = "portfolio"  // 组合综合序列重算
+	ItemNews       = "news"       // 个股新闻预拉（AI 消息面用；用户要求进全局刷新）
 )
 
 // 全局动态/全量刷新的默认内容项（对齐 refresh.py DYNAMIC_ITEMS / FULL_ITEMS）。
 var (
 	globalDynamicItems = []string{ItemPrice, ItemValuation, ItemFlow}
-	globalFullItems    = []string{ItemBars, ItemFinancials, ItemValuation, ItemFx, ItemFlow, ItemPortfolio}
+	globalFullItems    = []string{ItemBars, ItemFinancials, ItemValuation, ItemFx, ItemFlow, ItemPortfolio, ItemNews}
 )
 
 // 单股刷新的内容项白名单（对齐 refresh.py STOCK_DYNAMIC_ITEMS / STOCK_FULL_ITEMS）。
@@ -219,6 +220,16 @@ func (s *Service) runGlobalStages(full bool, items map[string]bool) {
 	}
 	if !full {
 		return
+	}
+	// 个股新闻预拉（用户要求：全局刷新时批量拉全部持仓新闻，AI 消息面分析直接用缓存）
+	if items[ItemNews] {
+		log.Printf("[收尾] 预拉持仓新闻（news）")
+		codes := s.getHoldingsCodes()
+		for _, code := range codes {
+			if s.EnsureNews != nil {
+				s.EnsureNews(code)
+			}
+		}
 	}
 	// 全量收尾（对齐 run_full_stages）：除权 / 资金流买卖回填 / 组合序列 / AI 每日补打分。
 	// 上述阶段依赖 dividend/portfolio/ai_scoring 三服务，refresh 包当前未注入（不改 main.go/其它 service），

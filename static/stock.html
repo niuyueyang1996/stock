@@ -17,7 +17,7 @@
         <div id="searchBox"></div>
         <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
         <button class="btn danger" id="sellBtn" onclick="quickTrade('sell')">卖出</button>
-        <button class="btn" id="aiBtn" onclick="aiAnalyze()" title="用已配置的 AI 模型分析该股">🤖 AI诊股</button>
+        <button class="btn" id="aiBtn" onclick="aiAnalyzeMenu()" title="勾选要分析的 AI 内容（诊股/消息面/技术面/资金流，默认不勾）">🤖 AI诊股</button>
         <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 更新此股行情</button>
         <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 完整更新此股</button>
       </div>
@@ -68,7 +68,6 @@
         <h2 style="margin:0">🤖 AI 诊股报告</h2>
         <span class="grow"></span>
         <span class="muted" id="aiReportMeta" style="font-size:12px"></span>
-        <button class="btn primary" onclick="aiAnalyze()">重新诊股</button>
       </div>
       <div id="aiReportBody" style="margin-top:12px">
         <div class="empty" style="padding:20px">尚未生成报告，点右上角「🤖 AI诊股」。</div>
@@ -109,11 +108,9 @@
       <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
-    <div class="panel" style="padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div class="panel" style="padding:10px 12px">
       <b>🤖 AI 扩展分析</b>
-      <span class="muted" style="font-size:12px">消息面 / 技术面 / 资金流 · 勾选后一键逐个分析，进度见顶部</span>
-      <span class="grow"></span>
-      <button class="btn primary" id="extAllBtn">🤖 一键分析</button>
+      <span class="muted" style="font-size:12px">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI」勾选分析</span>
     </div>
 
     <div class="panel" id="newsAiPanel">
@@ -121,7 +118,6 @@
         <h2 style="margin:0">📰 消息面 AI <span class="sub">自动抓取该股近期新闻（akshare）供 AI 分析 · 时效由 AI 判定</span></h2>
         <span class="grow"></span>
         <span class="muted" id="newsAiMeta" style="font-size:12px"></span>
-        <button class="btn primary" id="newsAiBtn">🤖 分析消息面</button>
       </div>
       <div id="newsAiBody" style="margin-top:12px"></div>
     </div>
@@ -131,7 +127,6 @@
         <h2 style="margin:0">📈 技术面 <span class="sub">日/周/月K 走势 · 腾讯行情 · 红涨绿跌，AI 解读截至最近交易日</span></h2>
         <span class="grow"></span>
         <span class="muted" id="techAiMeta" style="font-size:12px"></span>
-        <button class="btn primary" id="techAiBtn">🤖 分析技术面</button>
       </div>
       <div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
         <div id="klineTabs" class="period-tabs"></div>
@@ -147,7 +142,6 @@
       <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
         <div id="flowTabs"></div>
         <div style="flex:1"></div>
-        <div id="flowAiBtn"></div>
       </div>
       <div id="flowAiPanel" style="margin:0 0 10px"><div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div></div>
       <div class="chart lg" id="flowPrice" style="height:200px"></div>
@@ -210,71 +204,13 @@
     }
     refreshAsOfPicker();
 
-    // AI 资金流分析按钮（个股模式）：按当前窗口发分时资金流 + 对应股价点
-    (function () {
-      const btnEl = document.getElementById('flowAiBtn');
-      const panel = document.getElementById('flowAiPanel');
-      if (!btnEl || !panel) return;
-      btnEl.innerHTML = fundflowAiButtonHtml();
-      btnEl.querySelector('[data-fundflow-ai]').onclick = () => {
-        if (!currentCode) return toast('请先选择股票');
-        // 统一时间窗：分钟窗口分析当日分时，天窗口分析多日逐日五档（后端按窗口取数）
-        runFundflowAi({ code: currentCode, window: flowWindow, btn: btnEl.querySelector('[data-fundflow-ai]'), panel });
-      };
-    })();
-
-    // AI 扩展分析一键按钮（个股模式）：勾选默认全选，逐个分析消息面/技术面/资金流
-    (function () {
-      const btn = document.getElementById('extAllBtn');
-      if (!btn) return;
-      btn.onclick = () => {
-        if (!currentCode) return toast('请先选择股票');
-        openAiExtPicker({
-          items: [
-            { key: 'news', label: '消息面' },
-            { key: 'tech', label: '技术面' },
-            { key: 'fundflow', label: '资金流' },
-          ],
-          onRun: async (keys) => {
-            for (const k of keys) {
-              if (k === 'news') {
-                await runNewsAi({ code: currentCode, btn, panel: document.getElementById('newsAiBody'), metaEl: document.getElementById('newsAiMeta'), skipEditor: true });
-              } else if (k === 'tech') {
-                await runTechAi({ code: currentCode, btn, panel: document.getElementById('techAiBody'), metaEl: document.getElementById('techAiMeta'), skipEditor: true });
-              } else if (k === 'fundflow') {
-                await runFundflowAi({ code: currentCode, window: flowWindow, btn, panel: document.getElementById('flowAiPanel'), skipEditor: true });
-              }
-            }
-          },
-        });
-      };
-    })();
-
     // 资金流 AI 分析完成（已刷新资金流缓存）→ 静默重拉详情重绘资金流图，无需手动刷新
     window.addEventListener('app-flow-analyzed', () => { if (currentCode) loadPage(true); });
 
-    // 消息面 / 技术面 AI 按钮（个股模式，指数隐藏消息面）
-    (function () {
-      const newsBtn = document.getElementById('newsAiBtn');
-      const techBtn = document.getElementById('techAiBtn');
-      const newsBody = document.getElementById('newsAiBody');
-      const techBody = document.getElementById('techAiBody');
-      if (newsBtn && newsBody) {
-        newsBtn.onclick = () => {
-          if (!currentCode) return toast('请先选择股票');
-          runNewsAi({ code: currentCode, btn: newsBtn, panel: newsBody, metaEl: document.getElementById('newsAiMeta') });
-        };
-      }
-      if (techBtn && techBody) {
-        techBtn.onclick = () => {
-          if (!currentCode) return toast('请先选择股票');
-          runTechAi({ code: currentCode, btn: techBtn, panel: techBody, metaEl: document.getElementById('techAiMeta') });
-        };
-      }
-    })();
+
 
     // 触发个股消息面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染（复用 openPromptEditor 流程；skipEditor=true 一键跳过编辑）
-    async function runNewsAi({ code, btn, panel, metaEl, skipEditor }) {
+    async function runNewsAi({ code, btn, panel, metaEl, skipEditor, intensity }) {
       const doRun = async (systemPrompt, intensity) => {
         btn.disabled = true;
         panel.style.display = 'block';
@@ -297,12 +233,12 @@
           btn.disabled = false;
         }
       };
-      if (skipEditor) { await doRun(null, 'normal'); return; }
+      if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
       openPromptEditor('news', doRun);
     }
 
     // 触发个股技术面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染（skipEditor=true 一键跳过编辑）
-    async function runTechAi({ code, btn, panel, metaEl, skipEditor }) {
+    async function runTechAi({ code, btn, panel, metaEl, skipEditor, intensity }) {
       const doRun = async (systemPrompt, intensity) => {
         btn.disabled = true;
         panel.style.display = 'block';
@@ -325,7 +261,7 @@
           btn.disabled = false;
         }
       };
-      if (skipEditor) { await doRun(null, 'normal'); return; }
+      if (skipEditor) { await doRun(null, intensity || 'normal'); return; }
       openPromptEditor('technical', doRun);
     }
 
@@ -699,9 +635,10 @@
       }
     }
 
-    async function aiAnalyze() {
+    // 诊股执行体（aiAnalyzeMenu 勾选「AI 诊股」时直接调用，跳过指令编辑）
+    async function aiAnalyzeDo(systemPrompt, intensity) {
       if (!currentCode) return toast('请先选择股票');
-      openPromptEditor('stock', async (systemPrompt, intensity) => {
+      {
         const btn = document.getElementById('aiBtn');
         btn.disabled = true;
         try {
@@ -721,7 +658,76 @@
         } finally {
           btn.disabled = false;
         }
-      });
+      }
+    }
+
+    // AI 诊股（保留：弹窗编辑指令后执行）
+    async function aiAnalyze() {
+      if (!currentCode) return toast('请先选择股票');
+      openPromptEditor('stock', aiAnalyzeDo);
+    }
+
+    // AI 分析统一入口：弹窗勾选（默认一个都不勾）+ 强度选择 → 逐个执行
+    async function aiAnalyzeMenu() {
+      if (!currentCode) return toast('请先选择股票');
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.innerHTML = `
+        <div class="modal" style="width:500px;max-width:94vw">
+          <h3>🤖 AI 分析</h3>
+          <div class="muted" style="font-size:12px;margin-bottom:10px">勾选要分析的内容（默认不勾），将逐个进行分析，进度见顶部；分析强度对勾选项统一生效。</div>
+          <div>
+            <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;margin:5px 0;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px">
+              <input type="checkbox" data-key="diagnose"><b>AI 诊股</b> <span class="muted" style="font-size:12px">（周期性/护城河/基本面/增长/股息/估值/同业/资金面/消息面/技术面 10 维）</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;margin:5px 0;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px">
+              <input type="checkbox" data-key="news"><b>消息面</b> <span class="muted" style="font-size:12px">（自动抓取该股近期新闻）</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;margin:5px 0;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px">
+              <input type="checkbox" data-key="tech"><b>技术面</b> <span class="muted" style="font-size:12px">（日/周/月K 结构，截至最近交易日）</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;padding:9px 12px;margin:5px 0;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:13px">
+              <input type="checkbox" data-key="flow"><b>资金流</b> <span class="muted" style="font-size:12px">（分时五档 × 股价，当前窗口）</span>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px">
+            <b>分析强度</b>
+            <select id="aiMenuIntensity" style="padding:5px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg)">
+              <option value="fast">快速</option>
+              <option value="normal" selected>普通</option>
+              <option value="deep">深入（HTML 详细报告）</option>
+            </select>
+          </div>
+          <div class="modal-actions" style="margin-top:14px">
+            <button class="btn" id="aiMenuCancel">取消</button>
+            <span class="grow" style="flex:1"></span>
+            <button class="btn primary" id="aiMenuStart">开始分析</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#aiMenuCancel').onclick = close;
+      mask.querySelector('#aiMenuStart').onclick = async () => {
+        const keys = [...mask.querySelectorAll('input[data-key]:checked')].map((i) => i.dataset.key);
+        const intensity = mask.querySelector('#aiMenuIntensity').value;
+        close();
+        if (!keys.length) return toast('请至少勾选一项');
+        const code = currentCode;
+        const dummy = document.createElement('span'); // 收敛后无独立按钮，占位防 btn.disabled 报错
+        for (const k of keys) {
+          if (k === 'diagnose') {
+            await aiAnalyzeDo(null, intensity);
+          } else if (k === 'news') {
+            await runNewsAi({ code, btn: dummy, panel: document.getElementById('newsAiBody'), metaEl: document.getElementById('newsAiMeta'), skipEditor: true, intensity });
+          } else if (k === 'tech') {
+            await runTechAi({ code, btn: dummy, panel: document.getElementById('techAiBody'), metaEl: document.getElementById('techAiMeta'), skipEditor: true, intensity });
+          } else if (k === 'flow') {
+            await runFundflowAi({ code, window: flowWindow, btn: dummy, panel: document.getElementById('flowAiPanel'), skipEditor: true, intensity });
+          }
+        }
+        toast('AI 分析完成');
+      };
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
     }
 
     const AI_TRAP_CN = { cycle_trap: '周期陷阱', value_trap: '价值陷阱', dividend_trap: '股息陷阱' };
