@@ -2,7 +2,6 @@
 package dao
 
 import (
-
 	"stockanalyzer/internal/db"
 )
 
