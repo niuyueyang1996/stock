@@ -22,7 +22,8 @@ func (d *CacheDAO) GetValuation(code string) *db.DailyValuationCache {
 	return &r
 }
 
-// GetQuantiles 分位缓存（指定日或最近；period 1y/3y/5y）
+// GetQuantiles 分位缓存（指定日或最近；period 1y/3y/5y）。
+// 输出键对齐 Python get_quantiles：pe_pct/pb_pct/sample_days（数据库列 pe_ttm_pct 映射）。
 func (d *CacheDAO) GetQuantiles(code string, asOf string) map[string]any {
 	out := map[string]any{}
 	for _, p := range []string{"1y", "3y", "5y"} {
@@ -33,7 +34,7 @@ func (d *CacheDAO) GetQuantiles(code string, asOf string) map[string]any {
 		}
 		if err := q.Order("calc_date DESC").First(&r).Error; err == nil {
 			out[p] = map[string]any{
-				"pe_ttm_pct": r.PeTtmPct, "pb_pct": r.PbPct, "calc_date": r.CalcDate,
+				"pe_pct": r.PeTtmPct, "pb_pct": r.PbPct, "sample_days": r.SampleDays,
 			}
 		}
 	}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"stockanalyzer/internal/db"
+	"stockanalyzer/internal/service/jobs"
 )
 
 // PortfolioDims 组合 7 维（共享 5 维 + structure/tag_fit）
@@ -788,6 +790,64 @@ func (s *Service) ScoreDaily(scoreDate, systemPrompt, intensity string) (map[str
 	}
 	return map[string]any{"score_date": scoreDate, "report": report,
 		"model_name": modelCfg.Name, "created_at": now}, nil
+}
+
+// MaybeAutoScoreDaily 交易变动后每日 AI 打分自动触发（对齐 Python maybe_auto_score_daily）。
+// 必须先同步失效该日旧报告（保证后续失败时页面为「未评分」而非陈旧结果）；
+// 有激活模型且当日有交易且已收盘才后台入队 AI 车道重打分——无模型/无交易/盘中未收盘
+// 不入队（保证测试确定、不触发网络），入队/打分失败只记日志，不 panic 不阻塞调用方。
+// 必须在写事务外调用：AI 打分自身会写 ai_daily_reports，事务内再开写连接会锁库。
+func (s *Service) MaybeAutoScoreDaily(scoreDate string) {
+	// 1) 先同步失效，保证失败时当日显示「未评分」而非陈旧结果
+	_ = s.DB.Where("score_date = ?", scoreDate).Delete(&db.AIDailyReport{}).Error
+	// 2) 无激活模型 → 直接返回（不触发）
+	if s.Models.GetActive() == nil {
+		return
+	}
+	// 3) 当日无 buy/sell 交易 → 不触发
+	if len(s.TradeRows(scoreDate)) == 0 {
+		return
+	}
+	// 4) 今日未收盘（盘中录入交易）→ 今日数据未定格，只失效不打分，收盘后由 catchup 补打
+	if scoreDate == time.Now().Format("2006-01-02") && !s.isMarketClosedNow() {
+		return
+	}
+	// 5) 后台 job 触发每日重打分；入队/打分失败只记日志
+	s.enqueueDailyScore(scoreDate)
+}
+
+// enqueueDailyScore 把自动打分入队到 AI 车道（jobs.Manager，lanes.ai 并发，/status/jobs
+// 可见可取消）。不再裸起线程。入队失败只记日志，当日保持「未评分」（后续可手动或 catchup 重试）。
+func (s *Service) enqueueDailyScore(scoreDate string) {
+	if s.Jobs == nil {
+		log.Printf("[AI打分] 自动打分未入队 %s：job 管理器未注入（OnTradeChanged 由 main 装配）", scoreDate)
+		return
+	}
+	s.Jobs.Start("ai.daily_auto", "每日 AI 打分 "+scoreDate, func(p *jobs.Progress) error {
+		s.safeScoreDaily(scoreDate)
+		return nil
+	})
+}
+
+// safeScoreDaily 后台执行体：失败只记日志，当日保持「未评分」（绝不抛到调用方）。
+func (s *Service) safeScoreDaily(scoreDate string) {
+	if _, err := s.ScoreDaily(scoreDate, "", "normal"); err != nil {
+		log.Printf("[AI打分] 后台自动打分 %s 失败：%v", scoreDate, err)
+	}
+}
+
+// isMarketClosedNow 当前是否已过收盘确认时间（交易日 15:05 后定格）。优先用注入的
+// MarketClosed；未注入时按「周末或已过 15:05」兜底（对齐 Python _is_market_closed_now）。
+func (s *Service) isMarketClosedNow() bool {
+	if s.MarketClosed != nil {
+		return s.MarketClosed(time.Now())
+	}
+	now := time.Now()
+	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+		return true
+	}
+	limit := time.Date(now.Year(), now.Month(), now.Day(), 15, 5, 0, 0, now.Location())
+	return !now.Before(limit)
 }
 
 // GetDailyDay 某日详情：交易行 + 笔数 + 净额（纯读）

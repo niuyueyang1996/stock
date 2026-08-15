@@ -69,11 +69,11 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 			row, err = aiSvc.UpsertTagPref(tag, body.RawPref, "", "")
 		}
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		if row == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "保存失败"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "保存失败"})
 			return
 		}
 		row["expanded"] = expanded
@@ -87,7 +87,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 		_ = c.ShouldBindJSON(&body)
 		row, err := aiSvc.ExpandTagPrompt(c.Param("tag"), body.RawPref)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": row})
@@ -95,7 +95,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 	api.POST("/ai-scoring/prefs/:tag/confirm", func(c *gin.Context) {
 		row, err := aiSvc.ConfirmTagPref(c.Param("tag"))
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": row})
@@ -115,7 +115,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 	})
 	api.POST("/ai-scoring/portfolio", func(c *gin.Context) {
 		if !configured() {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "未配置 AI 模型"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return
 		}
 		tags := parseTags(c)
@@ -161,7 +161,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 	})
 	api.POST("/ai-scoring/daily", func(c *gin.Context) {
 		if !configured() {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "未配置 AI 模型"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return
 		}
 		var body struct {
@@ -170,7 +170,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 			Intensity    string  `json:"intensity"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil || body.ScoreDate == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少 score_date"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 score_date"})
 			return
 		}
 		intensity := body.Intensity

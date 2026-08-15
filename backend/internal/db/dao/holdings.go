@@ -97,6 +97,12 @@ func (d *HoldingsDAO) EnsureStock(code, name, market, tag, currency string) erro
 		code, name, market, tag, currency).Error
 }
 
+// BackfillStockName 名称回填（对齐 Python stock_detail：只 INSERT code/name/market，冲突仅 SET name）
+func (d *HoldingsDAO) BackfillStockName(code, name, market string) error {
+	return d.DB.Exec("INSERT INTO stocks(code, name, market) VALUES(?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name",
+		code, name, market).Error
+}
+
 // SetStockTag 更新标签
 func (d *HoldingsDAO) SetStockTag(code, tag string) error {
 	return d.DB.Exec("UPDATE stocks SET tag=? WHERE code=?", tag, code).Error

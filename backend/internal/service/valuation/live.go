@@ -72,7 +72,7 @@ func (s *Service) getSeries(code, indicator, period string, asOf string) []db.Va
 	return rows
 }
 
-// segmentedKey 分段排序键：正 → 0 → 负（负按升序=绝对值大在前）
+// segmentedKey 分段排序键（对齐 Python _segmented_key）：正 (0,v) → 零 (1,0) → 负 (2,-v)（绝对值大在前）
 func segmentedKey(v *float64) [2]float64 {
 	if v == nil {
 		return [2]float64{3, 0}
@@ -83,14 +83,15 @@ func segmentedKey(v *float64) [2]float64 {
 	if *v == 0 {
 		return [2]float64{1, 0}
 	}
-	return [2]float64{2, *v}
+	return [2]float64{2, -*v}
 }
 
+// keyLess 分段键严格小于
 func keyLess(a, b [2]float64) bool {
 	if a[0] != b[0] {
 		return a[0] < b[0]
 	}
-	return a[1] <= b[1]
+	return a[1] < b[1]
 }
 
 // percentile target 在历史序列中的百分位（分段序）。样本不足返回 nil。
@@ -102,7 +103,7 @@ func percentile(hist []float64, target *float64) *float64 {
 	cnt := 0
 	for _, v := range hist {
 		vv := v
-		if keyLess(segmentedKey(&vv), tk) {
+		if !keyLess(tk, segmentedKey(&vv)) { // 对齐 Python：_segmented_key(v) <= tk（相等计数）
 			cnt++
 		}
 	}
@@ -238,7 +239,7 @@ func (s *Service) ComputeLive(code string, price *float64, asOf string, fxHKD *f
 	totalMV := *price * *totalShares
 	out["price"] = round3(*price)
 	out["total_shares"] = round2(*totalShares)
-	out["total_mv"] = float64(int64(totalMV))
+	out["total_mv"] = math.Round(totalMV) // 对齐 Python round(total_mv, 0)（四舍五入非截断）
 
 	// 货币统一：仅港股市值=港元 → mv_cny = mv×fx；缺汇率 → 序列回退。
 	// A股/ETF 人民币市值绝不乘汇率（000333 曾被 0.86 折掉 12% 的教训）
@@ -275,10 +276,10 @@ func (s *Service) ComputeLive(code string, price *float64, asOf string, fxHKD *f
 		}
 	}
 	if ttm != nil {
-		out["ttm_net_profit"] = float64(int64(*ttm))
+		out["ttm_net_profit"] = math.Round(*ttm)
 	}
 	if ttmRevenue != nil {
-		out["ttm_revenue"] = float64(int64(*ttmRevenue))
+		out["ttm_revenue"] = math.Round(*ttmRevenue)
 	}
 	out["pe"] = div2(mvCNY, ttm)
 	out["pb"] = div2(mvCNY, netAssets)
@@ -419,6 +420,7 @@ func (s *Service) ComputeLive(code string, price *float64, asOf string, fxHKD *f
 			out["fwd_pb_reason"] = "预测净资产为负"
 		} else {
 			out["fwd_pb_confidence"] = confidence
+			out["fwd_pb_reason"] = nil // 对齐 Python：键恒输出，非负时为 None
 		}
 	}
 	if lastYearNA != nil && fwdNetAssets != nil {
@@ -443,7 +445,13 @@ func (s *Service) ComputeLive(code string, price *float64, asOf string, fxHKD *f
 	peV, _ := out["pe"].(*float64)
 	pbV, _ := out["pb"].(*float64)
 	fwdPE, _ := out["fwd_pe"].(*float64)
-	fwdPB, _ := out["fwd_pb"].(*float64)
+	// fwd_pb 由 round2（值）写入 → 取 float64 再取址（对齐 Python fwd_pb_pct 计算）
+	var fwdPB *float64
+	if v, ok := out["fwd_pb"].(float64); ok {
+		fwdPB = &v
+	} else if v, ok := out["fwd_pb"].(*float64); ok {
+		fwdPB = v
+	}
 	out["pe_pct"] = s.percentileInSeries(code, "pe", "1y", peV, asOf)
 	out["pb_pct"] = s.percentileInSeries(code, "pb", "1y", pbV, asOf)
 	out["fwd_pe_pct"] = s.percentileInSeries(code, "pe", "1y", fwdPE, asOf)
@@ -471,7 +479,7 @@ func (s *Service) computeLiveSeriesFallback(code string, price *float64, asOf st
 	if fin := s.getFinancials(code); fin != nil {
 		if fin.TotalShares != nil && price != nil {
 			out["total_shares"] = round2(*fin.TotalShares)
-			out["total_mv"] = float64(int64(*price * *fin.TotalShares))
+			out["total_mv"] = math.Round(*price * *fin.TotalShares)
 		}
 		if fin.Roe != nil {
 			out["roe_ttm"] = fin.Roe
@@ -536,7 +544,7 @@ func round0p(v *float64) *float64 {
 	if v == nil {
 		return nil
 	}
-	out := float64(int64(*v))
+	out := math.Round(*v) // 对齐 Python round(v, 0)
 	return &out
 }
 func div2(a float64, b *float64) *float64 {

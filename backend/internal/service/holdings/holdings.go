@@ -200,13 +200,16 @@ func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
 		}
 		avgCostCny := h.AvgCostCny
 		if avgCostCny == nil && currency == "CNY" {
-			avgCostCny = &h.AvgCost
+			v := round(h.AvgCost, 4)
+			avgCostCny = &v
 		}
 		isETF := isETFCode(h.Code) || tag == "ETF"
+		// 输出舍入对齐 Python get_holdings：quantity 6 位 / avg_cost* 4 位 / total_buy* 2 位
 		out = append(out, map[string]any{
-			"code": h.Code, "quantity": h.Quantity, "avg_cost": h.AvgCost,
-			"avg_cost_cny": avgCostCny, "total_buy": h.TotalBuy, "total_buy_cny": h.TotalBuyCny,
-			"currency": currency, "status": h.Status, "name": h.Name, "tag": tag,
+			"code": h.Code, "quantity": round(h.Quantity, 6), "avg_cost": round(h.AvgCost, 4),
+			"avg_cost_cny": roundP(avgCostCny, 4), "total_buy": round(h.TotalBuy, 2),
+			"total_buy_cny": roundP(h.TotalBuyCny, 2),
+			"currency":      currency, "status": h.Status, "name": h.Name, "tag": tag,
 			"is_etf": isETF, "total_dividend": round(divMap[h.Code], 2),
 			"missing_fx": avgCostCny == nil && currency != "CNY",
 		})

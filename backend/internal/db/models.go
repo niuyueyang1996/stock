@@ -66,6 +66,19 @@ type DailyPriceCache struct {
 
 func (DailyPriceCache) TableName() string { return "daily_price_cache" }
 
+// PeriodPrice 周期K通用行（周/月K共用结构；表名由 dao 调用方指定）
+type PeriodPrice struct {
+	Code      string   `gorm:"column:code"`
+	TradeDate string   `gorm:"column:trade_date"`
+	Open      *float64 `gorm:"column:open"`
+	High      *float64 `gorm:"column:high"`
+	Low       *float64 `gorm:"column:low"`
+	Close     *float64 `gorm:"column:close"`
+	Volume    *float64 `gorm:"column:volume"`
+	PctChange *float64 `gorm:"column:pct_change"`
+	Source    *string  `gorm:"column:source"`
+}
+
 // WeeklyPriceCache weekly_price_cache
 type WeeklyPriceCache struct {
 	Code      string   `gorm:"column:code;primaryKey"`

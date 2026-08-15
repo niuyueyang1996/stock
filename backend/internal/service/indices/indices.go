@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"stockanalyzer/internal/db"
+	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
 )
 
@@ -16,12 +17,45 @@ type Service struct {
 	DB *gorm.DB
 	Tx *raw.Tencent
 	Lg *raw.Legu
+	// Cache 估值序列缓存读取
+	Cache *dao.CacheDAO
+	// SyncKline 周/月K同步（main 注入 refresh.SyncPeriodKline；指数刷新时调用，对齐 refresh_index）
+	SyncKline func(code string)
 	// IsIndex code 是否指数（注入注册表）
 	IsIndex func(code string) bool
 }
 
 func New(g *gorm.DB, tx *raw.Tencent, lg *raw.Legu) *Service {
 	return &Service{DB: g, Tx: tx, Lg: lg}
+}
+
+// Series 多指数估值序列（对齐 Python index_series：按 period→indicator→code 组织）
+func (s *Service) Series(codes []string) map[string]any {
+	out := map[string]any{}
+	for _, code := range codes {
+		if s.GetIndexDef(code) == nil {
+			continue
+		}
+		for _, period := range []string{"1y", "3y", "5y"} {
+			bucket, _ := out[period].(map[string]any)
+			if bucket == nil {
+				bucket = map[string]any{"pe": map[string]any{}, "pb": map[string]any{}}
+				out[period] = bucket
+			}
+			for _, ind := range []string{"pe", "pb"} {
+				rows := s.Cache.GetValuationSeries(code, ind, period)
+				if len(rows) == 0 {
+					continue
+				}
+				pts := make([]map[string]any, 0, len(rows))
+				for _, r := range rows {
+					pts = append(pts, map[string]any{"date": r.TradeDate, "value": r.Value})
+				}
+				bucket[ind].(map[string]any)[code] = pts
+			}
+		}
+	}
+	return map[string]any{"periods": out, "default": "3y"}
 }
 
 // IndexDef 指数定义
@@ -119,6 +153,10 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	def := s.GetIndexDef(code)
 	if def == nil || def.Symbol == nil {
 		return nil
+	}
+	// 周/月K跟随日K（对齐 refresh_index：out["kline"] = sync_kline_bars(code, now)）
+	if s.SyncKline != nil {
+		s.SyncKline(code)
 	}
 	// 腾讯指数行情
 	parts := s.Tx.QuoteRaw(ctx, *def.Symbol)

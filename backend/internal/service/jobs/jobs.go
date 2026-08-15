@@ -91,7 +91,16 @@ type Manager struct {
 	queues  map[string]chan *Job
 	started bool
 	prewarm string
+
+	// WebSocket 推送钩子（可选，nil 则跳过）：
+	// force=true 表示任务终态（完成/失败/取消），必须送达前端，跳过节流。
+	OnBroadcast func(data map[string]any, force bool)
+	// 推送节流状态（独立于 mu，避免回调持锁调用）
+	pushMu   sync.Mutex
+	lastPush time.Time
 }
+
+const pushInterval = 300 * time.Millisecond // 进度推送节流窗口（对齐 Python 0.3s）
 
 func New() *Manager {
 	m := &Manager{
@@ -153,7 +162,6 @@ func (m *Manager) runJob(job *Job) error {
 
 func (m *Manager) finalize(job *Job, err error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if job.CancelRequested || (err != nil && errors.Is(err, ErrCancelled)) {
 		job.Status = StatusCanceled
 		if err != nil {
@@ -175,6 +183,31 @@ func (m *Manager) finalize(job *Job, err error) {
 	}
 	if job.BatchID != "" {
 		m.finishBatchIfDone(job.BatchID)
+	}
+	m.mu.Unlock()
+	// 终态必须送达前端（force 跳过节流）
+	m.notify(true)
+}
+
+// notify 广播任务快照（节流）：先在节流锁内决定是否推送，再取快照并回调。
+// 注意：OnBroadcast 绝不能在持 m.mu 时调用（回调内会再进 hub 广播并发访问），
+// 因此这里先解锁 m.mu、由调用者保证已释放锁后才进入 notify。
+func (m *Manager) notify(force bool) {
+	if m.OnBroadcast == nil {
+		return
+	}
+	now := time.Now()
+	m.pushMu.Lock()
+	if !force && now.Sub(m.lastPush) < pushInterval {
+		m.pushMu.Unlock()
+		return
+	}
+	m.lastPush = now
+	m.pushMu.Unlock()
+	// 已释放 m.mu：Slapshot 内部重新加锁取快照，解锁后再回调
+	data := m.Snapshot()
+	if m.OnBroadcast != nil {
+		m.OnBroadcast(data, force)
 	}
 }
 
@@ -214,6 +247,37 @@ func (m *Manager) Start(kind, label string, fn func(p *Progress) error) string {
 	m.jobs[job.ID] = job
 	m.queues[job.Lane] <- job
 	return job.ID
+}
+
+// BatchChild 批量子任务描述：相比 EnqueueBatch 仅传 label，额外携带 Kind 与 Meta（供刷新扇出按股定位）。
+type BatchChild struct {
+	Kind  string
+	Label string
+	Meta  map[string]any
+}
+
+// EnqueueBatchWithMeta EnqueueBatch 的最小扩展：每个子任务可带独立 Kind 与 Meta。
+// BatchID 对子任务与一个可选的收尾 job 相同——把收尾 job 并入同一 batch，保证 batch 在收尾完成后才结束。
+// fn 收到该子任务的 BatchChild（含 Meta），便于在扇出中直接定位 code。
+func (m *Manager) EnqueueBatchWithMeta(kind, label string, children []BatchChild, fn func(child BatchChild, p *Progress) error) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// 各子任务的 batch_id 用 batch 自身的 ID
+	b := &Batch{ID: newID(), Kind: kind, Label: label, Status: StatusRunning, Total: len(children)}
+	m.batches[b.ID] = b
+	for _, ch := range children {
+		job := &Job{
+			ID: newID(), Kind: ch.Kind, Label: ch.Label, Lane: laneOf(kind),
+			Status: StatusQueued, BatchID: b.ID, Total: 1,
+			Meta: ch.Meta, UpdatedAt: nowStr(),
+		}
+		c := ch
+		job.Fn = func(p *Progress) error { return fn(c, p) }
+		b.ChildIDs = append(b.ChildIDs, job.ID)
+		m.jobs[job.ID] = job
+		m.queues[job.Lane] <- job
+	}
+	return b.ID
 }
 
 func (m *Manager) EnqueueBatch(kind, label string, childLabels []string, fn func(label string, p *Progress) error) string {
@@ -637,9 +701,9 @@ func (m *Manager) setTotal(jobID string, total int) {
 
 func (m *Manager) setStep(jobID, name string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	j, ok := m.jobs[jobID]
 	if !ok || j.Status != StatusRunning {
+		m.mu.Unlock()
 		return
 	}
 	j.Step = name
@@ -650,13 +714,16 @@ func (m *Manager) setStep(jobID, name string) {
 			j.Pct = 99
 		}
 	}
+	m.mu.Unlock()
+	// 进度变更 → 节流推送快照（300ms 合并）
+	m.notify(false)
 }
 
 func (m *Manager) completeStep(jobID, name string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	j, ok := m.jobs[jobID]
 	if !ok || j.Status != StatusRunning {
+		m.mu.Unlock()
 		return
 	}
 	exists := false
@@ -678,4 +745,7 @@ func (m *Manager) completeStep(jobID, name string) {
 		}
 	}
 	j.UpdatedAt = nowStr()
+	m.mu.Unlock()
+	// 进度变更 → 节流推送快照（300ms 合并）
+	m.notify(false)
 }

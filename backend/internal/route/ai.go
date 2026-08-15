@@ -29,12 +29,12 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 			APIKey  string `json:"api_key"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 			return
 		}
 		models, err := aiSvc.ListAvailableModels(body.BaseURL, body.APIKey)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"models": models}})
@@ -48,12 +48,12 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 			ID      int64  `json:"id"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 			return
 		}
 		row, err := aiSvc.SaveModel(body.Name, body.BaseURL, body.APIKey, body.Model, body.ID)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": row})
@@ -61,7 +61,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	api.DELETE("/ai/models/:model_id", func(c *gin.Context) {
 		id, _ := strconv.ParseInt(c.Param("model_id"), 10, 64)
 		if err := aiSvc.DeleteModel(id); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"deleted": id}})
@@ -70,7 +70,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		id, _ := strconv.ParseInt(c.Param("model_id"), 10, 64)
 		row, err := aiSvc.ActivateModel(id)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": row})
@@ -86,7 +86,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		_ = c.ShouldBindJSON(&body)
 		if err := aiSvc.SetReasoning(body.Effort); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"effort": body.Effort}})
@@ -106,7 +106,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		_ = c.ShouldBindJSON(&body)
 		out, err := aiSvc.SetRuntime(body.MaxTokens, body.RequestTimeout)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
@@ -123,7 +123,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 			Overrides map[string]*string `json:"overrides"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 			return
 		}
 		if body.Overrides == nil {
@@ -131,7 +131,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		saved, err := aiSvc.SavePromptOverrides(body.Overrides)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"saved": saved}})
@@ -145,7 +145,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	api.POST("/stocks/:code/ai-report", func(c *gin.Context) {
 		code := c.Param("code")
 		if aiSvc.GetActiveModel() == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "未配置 AI 模型"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return
 		}
 		var body struct {
@@ -220,7 +220,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	}
 	requireModel := func(c *gin.Context) bool {
 		if aiSvc.GetActiveModel() == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "未配置 AI 模型"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return false
 		}
 		return true
@@ -233,7 +233,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		code, _, _, prompt, intensity := batchBody(c)
 		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少 code"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
 			return
 		}
 		name := aiSvc.StockDisplayName(code)
@@ -260,7 +260,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		_, tags, codes, prompt, intensity := batchBody(c)
 		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "codes（指数组合）与 tags（持仓组合）只能二选一"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
 			return
 		}
 		jobID := s.Jobs.Start("ai.news_batch", "批量消息面 AI", func(p *jobs.Progress) error {
@@ -277,7 +277,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		code, _, _, prompt, intensity := batchBody(c)
 		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少 code"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
 			return
 		}
 		name := aiSvc.StockDisplayName(code)
@@ -304,7 +304,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		_, tags, codes, prompt, intensity := batchBody(c)
 		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "codes（指数组合）与 tags（持仓组合）只能二选一"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
 			return
 		}
 		jobID := s.Jobs.Start("ai.tech_batch", "批量技术面 AI", func(p *jobs.Progress) error {
@@ -362,7 +362,7 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	}
 	requireModel := func(c *gin.Context) bool {
 		if aiSvc.GetActiveModel() == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "未配置 AI 模型"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return false
 		}
 		return true
@@ -375,7 +375,7 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		code, window, _, _, _, prompt, intensity := flowBody(c)
 		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少 code"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
 			return
 		}
 		name := aiSvc.StockDisplayName(code)
@@ -392,12 +392,12 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		_, window, tags, codes, weights, prompt, intensity := flowBody(c)
 		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "codes（指数组合）与 tags（持仓组合）只能二选一"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
 			return
 		}
 		w := ai.NormFlowWindow(window)
 		if w == "1m" || w == "5m" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "批量分析窗口过小，请选择 15 分钟及以上"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "批量分析窗口过小，请选择 15 分钟及以上"})
 			return
 		}
 		jobID := s.Jobs.Start("ai.fundflow_batch", "批量资金流 AI", func(p *jobs.Progress) error {

@@ -24,12 +24,12 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 	api.POST("/holdings/import-excel", func(c *gin.Context) {
 		file, err := c.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "缺少上传文件（字段名 file）"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少上传文件（字段名 file）"})
 			return
 		}
 		f, err := file.Open()
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "文件读取失败"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "文件读取失败"})
 			return
 		}
 		data, _ := io.ReadAll(f)
@@ -37,17 +37,15 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 
 		items, skipped, err := parseHoldingsExcel(data)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Excel 解析失败: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "Excel 解析失败: " + err.Error()})
 			return
 		}
-		var n int64
-		s.DB.Raw("SELECT COUNT(*) FROM holdings WHERE status='active'").Scan(&n)
-		if n > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "当前非空仓，请先清仓后再一键导入"})
+		if s.Holdings.HasActiveHoldings() {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "当前非空仓，请先清仓后再一键导入"})
 			return
 		}
 		if len(items) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "Excel 中没有可导入的 A 股持仓"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "Excel 中没有可导入的 A 股持仓"})
 			return
 		}
 		jobID := s.Jobs.Start("holdings.import", fmt.Sprintf("导入持仓 %d 只", len(items)), func(p *jobs.Progress) error {

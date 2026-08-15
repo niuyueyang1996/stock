@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -36,6 +39,7 @@ const (
 // Service 刷新服务
 type Service struct {
 	DB        *gorm.DB
+	Tencent   *raw.Tencent
 	Cache     *dao.CacheDAO
 	Holdings  *holdings.Service
 	Market    *market.MarketManager
@@ -212,8 +216,15 @@ func (s *Service) syncFundflow(ctx context.Context, code string, now time.Time) 
 	if s.IsIndex != nil && s.IsIndex(code) {
 		return map[string]any{"code": code, "fetched": 0, "reason": "index_skipped"}
 	}
+	// 港股：非交易日继续补刷近5日窗口（对齐 Python has_multi_day_fundflow）；其余类型非交易日跳过
 	if s.IsTradeDay != nil && !s.IsTradeDay(now.Format("2006-01-02")) {
-		return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
+		if !isHKCode5(code) {
+			return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
+		}
+		return s.syncHKFundflow(ctx, code)
+	}
+	if isHKCode5(code) {
+		return s.syncHKFundflow(ctx, code)
 	}
 	today := now.Format("2006-01-02")
 	nowHM := now.Format("15:04")
@@ -255,6 +266,8 @@ func (s *Service) syncStockFull(ctx context.Context, code string) map[string]any
 	now := time.Now()
 	out := map[string]any{"code": code}
 	out["bars"] = s.syncDailyBars(ctx, code, now, true)
+	s.SyncPeriodKline(code, false) // 周/月K（对齐 sync_stock_full：force=False 增量，无缓存则全量）
+	out["kline"] = "synced"
 	out["financials"] = s.syncFinancials(ctx, code, true)
 	out["fundflow"] = s.syncFundflow(ctx, code, now)
 	return out
@@ -320,19 +333,8 @@ func (s *Service) RefreshFull(ctx context.Context) map[string]any {
 	return map[string]any{"total": len(codes)}
 }
 
-// RefreshStock 单股刷新（动态/全量）
-func (s *Service) RefreshStock(ctx context.Context, code string, full bool) map[string]any {
-	now := time.Now()
-	if full {
-		return s.syncStockFull(ctx, code)
-	}
-	out := map[string]any{"code": code}
-	if q := s.syncRealtimeQuote(ctx, code, now); q != nil {
-		out["quote"] = q
-	}
-	out["fundflow"] = s.syncFundflow(ctx, code, now)
-	return out
-}
+// RefreshStock 已移至 refresh_batch.go（签名：RefreshStock(ctx, code, full, items)）。
+// 保留 syncStockFull 供开仓新股等场景使用。
 
 // LogInfo 日志辅助
 func LogInfo(format string, args ...any) { log.Printf(format, args...) }
@@ -407,3 +409,184 @@ func addDays(dateStr string, days int) string {
 }
 func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
 func round4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }
+
+// SyncPeriodKline 周/月K同步（腾讯 fqkline，对齐 Python sync_kline_bars）：
+// force=false 增量：从缓存末条日期往前一个周期重拉（覆盖可能仍在变动/未收盘的当周当月），无缓存则全量；
+// force=true 重拉全量（800 根）覆盖；pct_change 按相邻段末收盘计算（首根用缓存中更早一条收盘衔接）；
+// UPSERT 主键 code+trade_date 天然覆盖。
+func (s *Service) SyncPeriodKline(code string, force bool) {
+	if s.Tencent == nil {
+		return
+	}
+	ctx := context.Background()
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	// 开盘前：源不产生当日周期行，用有效交易日（上一交易日）收口，避免拉到占位假K
+	if s.BeforeOpen != nil && s.BeforeOpen(now) {
+		today = lastTradeDateStr(now)
+	}
+	for _, cfg := range []struct {
+		period   string
+		table    dao.PeriodTable
+		lookback int
+	}{
+		{"week", dao.PeriodWeekly, 21},
+		{"month", dao.PeriodMonthly, 62},
+	} {
+		start, count := "", 800
+		rows := s.Cache.GetPeriodPrices(cfg.table, code, "", "")
+		if force {
+			start, count = "", 800
+			rows = nil // force 全量覆盖：衔接用不到旧缓存
+		} else if len(rows) > 0 {
+			last := rows[len(rows)-1].TradeDate
+			if d, err := time.Parse("2006-01-02", last); err == nil {
+				start = d.AddDate(0, 0, -cfg.lookback).Format("2006-01-02")
+			}
+			count = 60
+		}
+		bars := s.fetchPeriodBars(ctx, code, cfg.period, start, today, count)
+		if len(bars) == 0 {
+			continue
+		}
+		// pct_change：首根用缓存中更早一条收盘衔接
+		var prev *float64
+		if len(rows) > 0 && rows[len(rows)-1].Close != nil {
+			prev = rows[len(rows)-1].Close
+		}
+		pcts := make([]any, 0, len(bars))
+		for i, b := range bars {
+			var pct any
+			if prev != nil && *prev != 0 && b.Close != nil {
+				v := math.Round((*b.Close / *prev - 1)*10000) / 100
+				pct = v
+			}
+			pcts = append(pcts, pct)
+			if b.Close != nil {
+				prev = b.Close
+			}
+			_ = i
+		}
+		src := "tencent"
+		for i := range bars {
+			bars[i].Source = &src
+		}
+		s.Cache.UpsertPeriodPrices(cfg.table, code, bars, pcts)
+	}
+	// 过滤周末假K（旧版可能写入）
+	s.Cache.DB.Exec(`DELETE FROM weekly_price_cache WHERE trade_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND strftime('%w', trade_date) IN ('0','6')`)
+	s.Cache.DB.Exec(`DELETE FROM monthly_price_cache WHERE trade_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND strftime('%w', trade_date) IN ('0','6')`)
+}
+
+// fetchPeriodBars 拉取周期K（腾讯 fqkline）
+func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end string, count int) []db.PeriodPrice {
+	symbol := toSymbol2(code)
+	rows := s.Tencent.Kline(ctx, symbol, period, start, end, count)
+	out := make([]db.PeriodPrice, 0, len(rows))
+	for _, r := range rows {
+		if len(r) < 6 {
+			continue
+		}
+		d := r[0]
+		if len(d) > 10 {
+			d = d[:10]
+		}
+		if start != "" && d < start {
+			continue
+		}
+		if end != "" && d > end {
+			continue
+		}
+		b := db.PeriodPrice{Code: code, TradeDate: d}
+		b.Open = pf2(r, 1)
+		b.Close = pf2(r, 2)
+		b.High = pf2(r, 3)
+		b.Low = pf2(r, 4)
+		b.Volume = pf2(r, 5)
+		out = append(out, b)
+	}
+	return out
+}
+
+// lastTradeDateStr 最近交易日字符串（工作日近似）
+func lastTradeDateStr(now time.Time) string {
+	d := now
+	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+		d = now.AddDate(0, 0, -1)
+	}
+	for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d.Format("2006-01-02")
+}
+
+// toSymbol2 腾讯代码符号（sh/sz/hk 前缀）
+func toSymbol2(code string) string {
+	if len(code) == 5 {
+		return "hk" + code
+	}
+	if strings.HasPrefix(code, "6") {
+		return "sh" + code
+	}
+	return "sz" + code
+}
+
+// pf2 行内浮点解析
+func pf2(row []string, i int) *float64 {
+	if i >= len(row) {
+		return nil
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(row[i]), 64)
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
+// syncHKFundflow 港股资金流：腾讯分时分钟量价按价向派生（tick rule），近5个交易日逐日
+// 五档 + 1 分钟分时落库（对齐 Python sync_fundflow 港股分支 + instruments/hk.py fundflow_days/fundflow_intraday_by_date）。
+func (s *Service) syncHKFundflow(ctx context.Context, code string) map[string]any {
+	if s.Tencent == nil {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
+	}
+	days := s.Tencent.HKIntraday(ctx, code)
+	if len(days) == 0 {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
+	}
+	fetched := 0
+	for _, day := range days {
+		ticks := market.MinuteBarsToTicks([]raw.HKIntradayDay{day})
+		if len(ticks) == 0 {
+			continue
+		}
+		if f := market.TicksToDay(ticks, day.Date); f != nil {
+			_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, day.Date, f))
+			fetched++
+		}
+		points := market.AggregateTicks(ticks, 1)
+		rows := make([]dao.FundflowMinRow, 0, len(points))
+		for _, p := range points {
+			rows = append(rows, dao.FundflowMinRow{
+				Code: code, TradeDate: day.Date, Ts: p.Ts,
+				MainNet: &p.MainNet, SuperLargeNet: &p.SuperLargeNet, LargeNet: &p.LargeNet,
+				MediumNet: &p.MediumNet, SmallNet: &p.SmallNet, XsNet: &p.XsNet,
+				BuyAmount: &p.BuyAmount, SellAmount: &p.SellAmount, Price: p.Price,
+			})
+		}
+		_ = s.Cache.UpsertFundflowMin(code, day.Date, rows)
+	}
+	return map[string]any{"code": code, "fetched": fetched, "reason": "ok"}
+}
+
+// isHKCode5 港股五位代码判定
+func isHKCode5(code string) bool {
+	if len(code) != 5 {
+		return false
+	}
+	for _, c := range code {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}

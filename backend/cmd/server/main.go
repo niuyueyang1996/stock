@@ -18,6 +18,8 @@ import (
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/route"
 	"stockanalyzer/internal/service/ai"
+	"stockanalyzer/internal/service/datamanage"
+	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
@@ -29,7 +31,9 @@ import (
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/refresh"
 	"stockanalyzer/internal/service/settings"
+	"stockanalyzer/internal/service/stockmeta"
 	"stockanalyzer/internal/service/valuation"
+	"stockanalyzer/internal/service/ws"
 )
 
 func main() {
@@ -134,12 +138,14 @@ func main() {
 	rfSvc.MarketClosed = func(now time.Time) bool {
 		return now.Hour()*60+now.Minute() >= 15*60+5
 	}
+	holdings.SetIndexChecker(rfSvc.IsIndex)
 
 	// 指数服务
 	idxSvc := indices.New(gdb, tx, lg)
+	idxSvc.Cache = cacheDAO
 
 	// 组合服务
-	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY)
+	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY, cacheDAO, idxSvc)
 
 	// AI 服务
 	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
@@ -155,20 +161,56 @@ func main() {
 	aiSvc.FlowCoh = dao.NewAIFundflowCoherenceDAO(gdb)
 	aiSvc.PortReports = dao.NewAIPortfolioReportDAO(gdb)
 	aiSvc.Daily = dao.NewAIDailyReportDAO(gdb)
+	aiSvc.Jobs = jm
+	aiSvc.MarketClosed = rfSvc.MarketClosed
+
+	// 交易/标签变更 → AI 每日重打分（对齐 Python _trigger_ai_daily；失败仅日志不阻断）
+	holdings.OnTradeChanged = aiSvc.MaybeAutoScoreDaily
+
+	// 详情服务（个股/指数详情组装）
+	detailSvc := &detail.Service{
+		Cache: cacheDAO, Quote: quoteSvc, Live: liveSvc, Fx: fxSvc.GetFxRateCNY,
+		Indices: idxSvc, IsIndex: rfSvc.IsIndex, Stocks: holdingsDAO, DataDir: cfg.DataDir,
+	}
+	// 个股预期数据服务
+	stockMetaSvc := stockmeta.New(gdb)
+	// 数据管理服务（一键清空/批量初始化）
+	dataManageSvc := datamanage.New(gdb, holdSvc)
+	// 搜索辅助注入（quote service）
+	rfSvc.Tencent = tx
+	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
+	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
+	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
+	quoteSvc.DataDir = cfg.DataDir
+	quoteSvc.PrewarmRunning = func() bool {
+		snap := jm.Snapshot()
+		running, _ := snap["running"].(bool)
+		kind, _ := snap["kind"].(string)
+		return running && kind == "system.prewarm"
+	}
 
 	svcs := &route.Services{
-		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
+		Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
-		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
+		Jobs: jm, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
+		Detail: detailSvc, StockMeta: stockMetaSvc, DataManage: dataManageSvc,
 	}
 	_ = settingsSvc
 	_ = nw
 
+	// ---- WebSocket（任务进度推送 + 数据更新广播）----
+	hub := ws.NewHub()
+	hub.SetSnapshot(jm.Snapshot)
+	jm.OnBroadcast = func(data map[string]any, _ bool) {
+		hub.Broadcast(map[string]any{"type": "jobs", "data": data})
+	}
+
 	// ---- 路由 ----
 	router := setupRouter(cfg, svcs)
+	router.Any("/ws", gin.WrapH(ws.Handler(hub, jm.Snapshot))) // 根路径（前端连 ws://host/ws）
 
 	// ---- 后台任务 ----
-	startBackground(gdb, fxSvc, divSvc, rfSvc, settingsSvc, jm)
+	startBackground(gdb, fxSvc, divSvc, rfSvc, settingsSvc, jm, hub)
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.Port)
 	log.Printf("[启动] stockanalyzer-go 监听 http://%s", addr)
@@ -182,7 +224,7 @@ func main() {
 
 // startBackground 启动后台任务：预热（汇率/除权）+ 盘中动态刷新 + 每日收盘全量同步
 func startBackground(gdb *gorm.DB, fxSvc *fx.Service, divSvc *dividend.Service,
-	rfSvc *refresh.Service, settingsSvc *settings.Service, jm *jobs.Manager) {
+	rfSvc *refresh.Service, settingsSvc *settings.Service, jm *jobs.Manager, hub *ws.Hub) {
 	// 1) 启动预热（异步）
 	go func() {
 		jm.Prewarm([]string{"港股汇率", "今日除权"}, func(step string) error {
@@ -200,7 +242,11 @@ func startBackground(gdb *gorm.DB, fxSvc *fx.Service, divSvc *dividend.Service,
 		for {
 			time.Sleep(time.Duration(maxI(30, settingsSvc.GetDynamicIntervalSeconds())) * time.Second)
 			if rfSvc.ShouldRunDynamicLoop(time.Now(), jm.IsRefreshBusy()) {
-				rfSvc.RefreshDynamic(context.Background())
+				out := rfSvc.RefreshDynamic(context.Background())
+				// 盘中数据更新广播（对齐 Python：动态刷新后 data_updated）
+				if codes, ok := out["codes"].([]string); ok {
+					hub.DataUpdated(codes)
+				}
 			}
 		}
 	}()

@@ -17,6 +17,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
 	"stockanalyzer/internal/service/volatility"
@@ -37,10 +38,12 @@ type Service struct {
 	Live     *valuation.Service
 	Quote    QuoteReader
 	Fx       FxGetter
+	Cache    *dao.CacheDAO
+	Indices  *indices.Service
 }
 
-func New(g *gorm.DB, h *holdings.Service, live *valuation.Service, q QuoteReader, fx FxGetter) *Service {
-	return &Service{DB: g, Holdings: h, Live: live, Quote: q, Fx: fx}
+func New(g *gorm.DB, h *holdings.Service, live *valuation.Service, q QuoteReader, fx FxGetter, cache *dao.CacheDAO, idx *indices.Service) *Service {
+	return &Service{DB: g, Holdings: h, Live: live, Quote: q, Fx: fx, Cache: cache, Indices: idx}
 }
 
 func (s *Service) currencyOf(code string) string {
@@ -293,7 +296,7 @@ func (s *Service) StockSnapshot(code, name string, quantity, avgCost float64, ta
 		"price": round3(price), "prev_close": q.PrevClose,
 		"pct_chg": q.PctChg, "fx_rate": rate,
 		"quantity": quantity, "avg_cost": round3(avgCost),
-		"avg_cost_cny":   avgCostCny,
+		"avg_cost_cny":   round3p(avgCostCny), // 对齐 Python portfolio：round(avg_cost_cny, 3)
 		"total_dividend": round2(s.totalDividend(code)),
 		"value_native":   round2(valueNative),
 		"value_cny":      valueCNY, "cost_cny": costCNY,
@@ -305,16 +308,14 @@ func (s *Service) StockSnapshot(code, name string, quantity, avgCost float64, ta
 	if out["value"] == nil {
 		out["value"] = round2(valueNative)
 	}
-	// 精选字段映射（对齐 Python _stock_snapshot 输出，只暴露以下 live 键）
+	// live 键恒输出（对齐 Python live.get(k) → 无值时为 null；键集合与 Python _stock_snapshot 一致）
 	for _, k := range []string{
 		"pe", "pb", "pe_static", "pb_static", "fwd_pe", "fwd_pb", "fwd_pb_confidence",
 		"fwd_net_profit", "fwd_net_assets", "expected_revenue_growth", "pe_pct", "pb_pct",
 		"dv_static", "total_mv", "roe_static", "revenue_yoy_static", "profit_yoy_static",
 		"fwd_roe", "fwd_revenue_yoy", "fwd_profit_yoy", "fwd_dv_ratio", "ps_static", "ps_ttm", "ps_fwd",
 	} {
-		if v, ok := live[k]; ok {
-			out[k] = v
-		}
+		out[k] = live[k]
 	}
 	// 映射字段：dv ← dv_ratio；roe/profit_yoy/revenue_yoy ← *_ttm（Python 语义）
 	out["dv"] = live["dv_ratio"]
@@ -760,9 +761,173 @@ func (s *Service) ComputePortfolio(tags []string) map[string]any {
 	})
 	return map[string]any{
 		"portfolio": pf, "weights": weights, "stocks": valid,
-		"tag_weights": tagWeights, "tags": []map[string]any{}, "all_tags": allTagsList,
+		"tag_weights": tagWeights, "tags": tagSections(tagWeights, valid, totalValue), "all_tags": allTagsList,
 		"tag_cards": tagCards, "missing": []map[string]any{}, "series": series,
 	}
+}
+
+// tagSections 每标签组合摘要（对齐 Python _tag_section 列表，顺序同 tag_weights）
+func tagSections(tagWeights []map[string]any, stocks []map[string]any, totalValue float64) []map[string]any {
+	out := []map[string]any{}
+	for _, tw := range tagWeights {
+		tag, _ := tw["tag"].(string)
+		var sub []map[string]any
+		for _, s := range stocks {
+			if s["tag"] == tag {
+				sub = append(sub, s)
+			}
+		}
+		out = append(out, tagSection(tag, sub, totalValue))
+	}
+	return out
+}
+
+// tagSection 单个标签的组合摘要（对齐 Python _tag_section；人民币口径）
+func tagSection(tag string, stocks []map[string]any, totalValue float64) map[string]any {
+	value, cost, dayPnl := 0.0, 0.0, 0.0
+	var fund []map[string]any
+	for _, s := range stocks {
+		if s["value_cny"] != nil {
+			value += derefF(s["value_cny"])
+		}
+		if s["cost_cny"] != nil {
+			cost += derefF(s["cost_cny"])
+		}
+		if s["day_pnl"] != nil {
+			dayPnl += derefF(s["day_pnl"])
+		}
+		// 类型化 nil 判定（map[string]any(nil) 的 interface != nil 为 true，需解包再判）
+		if ps, ok := s["passthrough"].(map[string]any); ok && ps != nil {
+			fund = append(fund, s)
+		}
+	}
+	isETF := len(stocks) > 0
+	for _, s := range stocks {
+		if e, ok := s["is_etf"].(bool); ok && !e {
+			isETF = false
+			break
+		}
+	}
+	var weight any
+	if totalValue != 0 {
+		weight = round2(value / totalValue * 100)
+	}
+	var pnl any
+	pnl = round2(value - cost)
+	var pnlPct any
+	if cost != 0 {
+		pnlPct = round2((value/cost - 1) * 100)
+	}
+	sec := map[string]any{
+		"tag": tag, "is_etf": isETF, "stocks_count": len(stocks),
+		"total_value": round2(value), "total_cost": round2(cost),
+		"pnl": pnl, "pnl_pct": pnlPct, "day_pnl": round2(dayPnl),
+		"weight": weight,
+	}
+	for _, k := range []string{"pe", "pb", "pe_static", "pb_static", "fwd_pe", "fwd_pb",
+		"ps_static", "ps_ttm", "ps_fwd"} {
+		sec[k] = comboValue(fund, k)
+	}
+	for _, k := range []string{"pe_pct", "pb_pct"} {
+		sec[k] = pctAvg(fund, k)
+	}
+	for _, k := range []string{"dv", "dv_static", "fwd_dv_ratio", "roe", "revenue_yoy",
+		"profit_yoy", "roe_static", "revenue_yoy_static", "profit_yoy_static",
+		"fwd_roe", "fwd_revenue_yoy", "fwd_profit_yoy"} {
+		sec[k] = wavgValue(fund, k)
+	}
+	// 标签内股票列表（按 value_cny 降序，对齐 Python sorted(stocks, key=-value_cny)）
+	sortedSub := make([]map[string]any, len(stocks))
+	copy(sortedSub, stocks)
+	sort.SliceStable(sortedSub, func(i, j int) bool {
+		return derefF(sortedSub[i]["value_cny"]) > derefF(sortedSub[j]["value_cny"])
+	})
+	sec["stocks"] = sortedSub
+	return sec
+}
+
+// comboValue 指数式加权：1 / Σ(w_i/值_i)（对齐 Python _combo_value，市值口径）
+func comboValue(items []map[string]any, field string) any {
+	var sub []map[string]any
+	for _, s := range items {
+		if s[field] != nil {
+			sub = append(sub, s)
+		}
+	}
+	if len(sub) == 0 {
+		return nil
+	}
+	mktSum := 0.0
+	denom := 0.0
+	for _, s := range sub {
+		v := derefF(s["value"])
+		mktSum += v
+		f := derefF(s[field])
+		if f != 0 {
+			denom += v / f
+		}
+	}
+	if absF(denom) < 1e-9 {
+		return nil
+	}
+	return round2(mktSum / denom)
+}
+
+// wavgValue 市值加权平均（对齐 Python _wavg_value）
+func wavgValue(items []map[string]any, field string) any {
+	var sub []map[string]any
+	for _, s := range items {
+		if s[field] != nil {
+			sub = append(sub, s)
+		}
+	}
+	if len(sub) == 0 {
+		return nil
+	}
+	wsum := 0.0
+	acc := 0.0
+	for _, s := range sub {
+		v := derefF(s["value"])
+		wsum += v
+		acc += v * derefF(s[field])
+	}
+	if wsum == 0 {
+		return nil
+	}
+	return round2(acc / wsum)
+}
+
+// pctAvg 分位按持仓权重（%）加权平均（对齐 Python _pct_avg，round 1 位）
+func pctAvg(items []map[string]any, key string) any {
+	var sub []map[string]any
+	for _, s := range items {
+		if s[key] != nil {
+			sub = append(sub, s)
+		}
+	}
+	if len(sub) == 0 {
+		return nil
+	}
+	wsum := 0.0
+	acc := 0.0
+	for _, s := range sub {
+		w := derefF(s["weight"])
+		wsum += w
+		acc += w * derefF(s[key])
+	}
+	if wsum == 0 {
+		return nil
+	}
+	return round1(acc / wsum)
+}
+
+func round1(v float64) float64 { return math.Round(v*10) / 10 }
+
+func absF(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 type tagAgg struct {
@@ -786,6 +951,13 @@ func derefF(v any) float64 {
 }
 func round2(v float64) float64 { return math.Round(v*100) / 100 }
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
+func round3p(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	out := round3(*v)
+	return &out
+}
 func countETF(stocks []map[string]any) int {
 	n := 0
 	for _, st := range stocks {
@@ -1101,4 +1273,506 @@ func (s *Service) volatility(cny []map[string]any) (map[string]any, error) {
 func (s *Service) computeVol(codes []string, weights map[string]float64, currencies map[string]string) map[string]any {
 	v := volatility.New(s.DB)
 	return v.Compute(codes, weights, currencies)
+}
+
+// ---------- 首页精简模式 / 组合资金流穿透 / 指数量价（对齐 Python） ----------
+//
+// 以下三个方法由 route 层（stocks_extra2.go 的 portfolioFundflow/comboIndexVolume 等旧函数）
+// 迁移至 service 层，逐字段对齐 Python：
+//   - ComputePortfolioLite  ↔ app/analysis/portfolio.py compute_portfolio(lite=True)
+//   - Fundflow             ↔ app/analysis/portfolio.py portfolio_fundflow + combo_fundflow
+//   - IndexVolume          ↔ app/analysis/instrument_fundflow.py combo_index_volume（等价旧 comboIndexVolume）
+//
+// 红线：不改动本文件既有函数行为；route 旧函数留给外部清理，此处仅新增等价实现。
+
+// _stockLiteFields 首页（lite 模式）每只股票只回这些字段（对齐 Python _STOCK_LITE_FIELDS）：
+// 省略 passthrough/fwd/ps/静态等组合页才用的字段，显著减小 /api/portfolio payload。
+var _stockLiteFields = []string{
+	"code", "name", "tag", "is_etf", "price", "quantity", "avg_cost",
+	"value", "pnl", "pnl_pct", "day_pnl", "pe", "pb",
+	"pe_pct", "pb_pct", "dv", "roe", "total_dividend", "weight",
+}
+
+// ComputePortfolioLite 首页精简组合（对齐 Python compute_portfolio(lite=True)）：
+// 返回「汇总 + 精简持仓表 + 缺失」三键，省略 series/tags/weights/tag_cards/all_tags；
+// portfolio 中静态估值倍数 pe_static/pb_static/ps_static/ps_ttm/ps_fwd 恒为 null（lite 不读序列）。
+func (s *Service) ComputePortfolioLite(tags []string) map[string]any {
+	full := s.ComputePortfolio(tags)
+	pf, _ := full["portfolio"].(map[string]any)
+	// lite：静态估值倍数一律 null（Python lite 分支 combo_series 全为 None）
+	for _, k := range []string{"pe_static", "pb_static", "ps_static", "ps_ttm", "ps_fwd"} {
+		if pf != nil {
+			pf[k] = nil
+		}
+	}
+	// 精简持仓表：stocks 为非缺失持仓（valid），只保留 lite 字段
+	stocks, _ := full["stocks"].([]map[string]any)
+	liteStocks := make([]map[string]any, 0, len(stocks))
+	for _, st := range stocks {
+		m := map[string]any{}
+		for _, k := range _stockLiteFields {
+			// 缺键返回 nil（对齐 Python：无该键的字段为 None）
+			m[k] = st[k]
+		}
+		liteStocks = append(liteStocks, m)
+	}
+	missing := []map[string]any{}
+	if m, ok := full["missing"].([]map[string]any); ok {
+		missing = m
+	}
+	return map[string]any{
+		"portfolio": pf,
+		"stocks":    liteStocks,
+		"missing":   missing,
+	}
+}
+
+// ---------- 交易日历工具（复制自 detail 包，与 Python resolve_trade_day/market_status 一致） ----------
+
+// isWeekday 工作日（忽略节假日，与 Python is_trade_day 一致）
+func isWeekday(d time.Time) bool {
+	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
+}
+
+// lastTradeDate <=d 的最近交易日（工作日近似）
+func lastTradeDate(d time.Time) time.Time {
+	for !isWeekday(d) {
+		d = d.AddDate(0, 0, -1)
+	}
+	return d
+}
+
+// resolveLiveTradeDate 当前时刻有效交易日：已开盘（>=09:15 集合竞价）→ 当日；未开盘/非交易日 → 上一日再吸附
+func resolveLiveTradeDate(now time.Time) time.Time {
+	d := now
+	if isWeekday(d) && now.Hour()*60+now.Minute() >= 9*60+15 {
+		return lastTradeDate(d)
+	}
+	return lastTradeDate(d.AddDate(0, 0, -1))
+}
+
+// resolveTradeDay 解析有效交易日（对齐 Python resolve_trade_day）：
+// 空串 → 当前有效交易日（未开盘回退上一交易日；非交易日回退最近交易日）；
+// 给定日 → 退到 <=d 最近交易日。返回 (day, adjusted)。
+func (s *Service) resolveTradeDay(asOf string) (string, bool) {
+	now := time.Now()
+	var raw, resolved time.Time
+	if asOf == "" {
+		raw = now
+		resolved = resolveLiveTradeDate(now)
+	} else {
+		raw, _ = time.Parse("2006-01-02", asOf[:len(asOf)])
+		resolved = lastTradeDate(raw)
+	}
+	return resolved.Format("2006-01-02"), resolved.Format("2006-01-02") != raw.Format("2006-01-02")
+}
+
+// marketStatusStr 市场状态字符串（对齐 Python market_status()：open/pre_open/not_trade_day）
+func marketStatusStr() string {
+	now := time.Now()
+	if !isWeekday(now) {
+		return "not_trade_day"
+	}
+	if now.Hour()*60+now.Minute() < 9*60+15 {
+		return "pre_open"
+	}
+	return "open"
+}
+
+// isHKCode5 港股五位纯数字代码判定（港股无资金流参与）
+func isHKCode5(code string) bool {
+	if len(code) != 5 {
+		return false
+	}
+	for _, c := range code {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// addDays 日期字符串加 n 个自然日
+func addDays(day string, n int) string {
+	t, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		return day
+	}
+	return t.AddDate(0, 0, n).Format("2006-01-02")
+}
+
+// fundflowHistoryDays 日级历史回看天数（对齐 Python FUNDFLOW_HISTORY_DAYS）
+const fundflowHistoryDays = 760
+
+// ---------- 组合资金流穿透 ----------
+
+// flowBucket 分时五档净流入累计（super_large/large/medium/small/xs + 买卖盘）
+type flowBucket struct {
+	superLarge, large, medium, small, xs, buy, sell float64
+}
+
+// latestBucket 日级汇总字段（五档 + 净额 + 主力 + 买卖盘），对齐 Python _LATEST_KEYS
+type latestBucket struct {
+	netamount, mainNet, superLarge, large, medium, small, xs, buy, sell float64
+}
+
+// addLatest 把一条日级资金流按权重 w 累加进 latestBucket
+func addLatest(b *latestBucket, r *db.DailyFundflowCache, w float64) {
+	b.netamount += derefF(r.Netamount) * w
+	b.mainNet += derefF(r.MainNet) * w
+	b.superLarge += derefF(r.SuperLargeNet) * w
+	b.large += derefF(r.LargeNet) * w
+	b.medium += derefF(r.MediumNet) * w
+	b.small += derefF(r.SmallNet) * w
+	b.xs += derefF(r.XsNet) * w
+	b.buy += derefF(r.BuyAmount) * w
+	b.sell += derefF(r.SellAmount) * w
+}
+
+// latestToMap 日级汇总字段转输出 map（键序对齐 Python _LATEST_KEYS）
+func latestToMap(b *latestBucket) map[string]any {
+	return map[string]any{
+		"super_large_net": round2(b.superLarge),
+		"large_net":       round2(b.large),
+		"medium_net":      round2(b.medium),
+		"small_net":       round2(b.small),
+		"xs_net":          round2(b.xs),
+		"netamount":       round2(b.netamount),
+		"main_net":        round2(b.mainNet),
+		"buy_amount":      round2(b.buy),
+		"sell_amount":     round2(b.sell),
+	}
+}
+
+// comboFundflow 多 code 资金流按权重求和（等权=1.0 直接加总），对齐 Python combo_fundflow：
+// A股/ETF/指数参与、港股排除（持仓场景等价于排除五位港股）；读本地缓存零网络。
+// asOfRequested：原样输出 asOf（空串/未传 → null，对齐 Python as_of=None）。
+func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note string) map[string]any {
+	members := []string{}
+	for _, code := range codes {
+		if isHKCode5(code) {
+			continue // 港股无资金流排除（对齐 Python participates_fundflow=False）
+		}
+		members = append(members, code)
+	}
+	var asOfOut any
+	if asOfRequested != "" {
+		asOfOut = asOfRequested
+	}
+	base := func(total int) map[string]any {
+		return map[string]any{
+			"fundflow_15m": []any{}, "fundflow_latest": nil, "fundflow_history": []any{},
+			"fundflow_windows": []int{1, 5, 15, 30},
+			"covered":          0, "total": total, "trade_date": tradeDay,
+			"as_of": tradeDay, "as_of_adjusted": tradeDay != time.Now().Format("2006-01-02"),
+			"market_status": marketStatusStr(), "as_of_requested": asOfOut, "note": note,
+		}
+	}
+	if len(members) == 0 {
+		return base(len(members))
+	}
+	flowStart := addDays(tradeDay, -fundflowHistoryDays)
+
+	// 当日分时按 ts 并集求和
+	intraday := map[string]*flowBucket{}
+	covered := 0
+	for _, code := range members {
+		rows := s.Cache.GetFundflowMin(code, tradeDay)
+		if len(rows) > 0 {
+			covered++
+		}
+		for i := range rows {
+			r := &rows[i]
+			b := intraday[r.Ts]
+			if b == nil {
+				b = &flowBucket{}
+				intraday[r.Ts] = b
+			}
+			b.superLarge += derefF(r.SuperLargeNet)
+			b.large += derefF(r.LargeNet)
+			b.medium += derefF(r.MediumNet)
+			b.small += derefF(r.SmallNet)
+			b.xs += derefF(r.XsNet)
+			b.buy += derefF(r.BuyAmount)
+			b.sell += derefF(r.SellAmount)
+		}
+	}
+	var tsList []string
+	for ts := range intraday {
+		tsList = append(tsList, ts)
+	}
+	sort.Strings(tsList)
+	fundflow15m := make([]map[string]any, 0, len(tsList))
+	for _, ts := range tsList {
+		b := intraday[ts]
+		fundflow15m = append(fundflow15m, map[string]any{
+			"ts":              ts,
+			"super_large_net": round2(b.superLarge), "large_net": round2(b.large),
+			"medium_net": round2(b.medium), "small_net": round2(b.small), "xs_net": round2(b.xs),
+			"buy_amount": round2(b.buy), "sell_amount": round2(b.sell),
+		})
+	}
+
+	// 当日五档 + 近 2 年逐日历史
+	latest := &latestBucket{}
+	hist := map[string]*latestBucket{}
+	hasLatest := false
+	for _, code := range members {
+		if row := s.Cache.GetDailyFundflow(code, tradeDay); row != nil {
+			hasLatest = true
+			addLatest(latest, row, 1)
+		}
+		for _, r := range s.Cache.GetDailyFundflows(code, flowStart, tradeDay) {
+			b := hist[r.TradeDate]
+			if b == nil {
+				b = &latestBucket{}
+				hist[r.TradeDate] = b
+			}
+			addLatest(b, &r, 1)
+		}
+	}
+	var dateList []string
+	for d := range hist {
+		dateList = append(dateList, d)
+	}
+	sort.Strings(dateList)
+	fundflowHistory := make([]map[string]any, 0, len(dateList))
+	for _, d := range dateList {
+		pt := map[string]any{"trade_date": d}
+		for k, v := range latestToMap(hist[d]) {
+			pt[k] = v
+		}
+		fundflowHistory = append(fundflowHistory, pt)
+	}
+	var latestOut any
+	if hasLatest {
+		latestOut = latestToMap(latest)
+	}
+	out := base(len(members))
+	out["fundflow_15m"] = fundflow15m
+	out["fundflow_history"] = fundflowHistory
+	out["covered"] = covered
+	out["fundflow_latest"] = latestOut
+	return out
+}
+
+// Fundflow 组合资金流穿透（对齐 Python portfolio_fundflow）：
+// 持仓（tags 标签子集，None=全选）中参与资金流的 A股/ETF 按字段求和（港股无资金流排除），
+// 额外叠加组合净值线 price（Σ 价格×股数，仅参与资金流的 A股/ETF 人民币持仓，避免与港股混币）。
+// asOf：可选历史回看日（非交易日退到最近交易日；空=当前有效交易日，未开盘回退）。
+func (s *Service) Fundflow(tags []string, asOf string) map[string]any {
+	tradeDay, _ := s.resolveTradeDay(asOf)
+
+	// 持仓筛选：active + quantity>0 + tags 标签匹配；参与资金流即排除港股
+	tagSet := map[string]bool{}
+	for _, t := range tags {
+		tagSet[t] = true
+	}
+	var hs []db.Holding
+	s.DB.Where("status = ?", "active").Find(&hs)
+	codes := []string{}
+	qty := map[string]float64{}
+	for _, h := range hs {
+		if h.Quantity <= 0 || isHKCode5(h.Code) {
+			continue
+		}
+		if len(tagSet) > 0 {
+			var st db.Stock
+			if err := s.DB.Where("code = ?", h.Code).First(&st).Error; err != nil {
+				continue
+			}
+			if st.Tag == nil || !tagSet[*st.Tag] {
+				continue
+			}
+		}
+		codes = append(codes, h.Code)
+		qty[h.Code] = h.Quantity
+	}
+	note := "持仓穿透求和（A股/ETF 腾讯分笔；港股无资金流排除）"
+	out := s.comboFundflow(codes, tradeDay, asOf, note)
+	s.attachPriceLine(out, codes, qty, tradeDay)
+	return out
+}
+
+// attachPriceLine 组合净值线：Σ(价格×股数)，仅参与资金流的 A股/ETF（人民币口径，避免与港股混币）。
+// 分时价「前向沿用」：某持仓某分钟缺价（数据结束/盘后）→ 沿用最近一次价，保证净值线连续不砍半不 null。
+// 对齐 Python portfolio_fundflow 末尾净值线逻辑。
+func (s *Service) attachPriceLine(out map[string]any, codes []string, qty map[string]float64, tradeDay string) {
+	union15, _ := out["fundflow_15m"].([]map[string]any)
+	hist, _ := out["fundflow_history"].([]map[string]any)
+	if len(union15) == 0 && len(hist) == 0 {
+		return
+	}
+	unionTS := make([]string, 0, len(union15))
+	for _, pt := range union15 {
+		ts, _ := pt["ts"].(string)
+		unionTS = append(unionTS, ts)
+	}
+	start := addDays(tradeDay, -fundflowHistoryDays)
+	minVal := map[string]*float64{}
+	dayVal := map[string]*float64{}
+	for _, code := range codes {
+		if isHKCode5(code) {
+			continue // 仅参与资金流的 A股/ETF
+		}
+		rows := s.Cache.GetFundflowMin(code, tradeDay)
+		if len(rows) > 0 {
+			byTS := map[string]*float64{}
+			for i := range rows {
+				if rows[i].Price != nil {
+					byTS[rows[i].Ts] = rows[i].Price
+				}
+			}
+			var last *float64
+			for _, ts := range unionTS {
+				if v, ok := byTS[ts]; ok {
+					last = v
+				}
+				if last != nil {
+					cur := derefF(minVal[ts])
+					v := cur + *last*qty[code]
+					minVal[ts] = &v
+				}
+			}
+		}
+		for _, r := range s.Cache.GetDailyPrices(code, start, tradeDay) {
+			if r.Close == nil {
+				continue
+			}
+			cur := derefF(dayVal[r.TradeDate])
+			v := cur + *r.Close*qty[code]
+			dayVal[r.TradeDate] = &v
+		}
+	}
+	for _, pt := range union15 {
+		ts, _ := pt["ts"].(string)
+		if v, ok := minVal[ts]; ok {
+			pt["price"] = round2(*v)
+		} else {
+			pt["price"] = nil
+		}
+	}
+	for _, pt := range hist {
+		d, _ := pt["trade_date"].(string)
+		if v, ok := dayVal[d]; ok {
+			pt["price"] = round2(*v)
+		} else {
+			pt["price"] = nil
+		}
+	}
+}
+
+// ---------- 指数量价等权求和 ----------
+
+// IndexVolume 多指数量价等权求和（对齐 Python combo_index_volume，等价旧 comboIndexVolume）：
+// 仅指数参与（GetIndexDef 非空）；腾讯指数分时/日K只有量无额，用「行情实时成交额 ÷ 最新交易日量」
+// 得到每单位量→金额比例，再乘各分钟/各日量派生成交额，等权加总，叠加各指数价格线。读缓存零网络。
+func (s *Service) IndexVolume(codes []string) map[string]any {
+	tradeDay, _ := s.resolveTradeDay("")
+	members := []string{}
+	for _, code := range codes {
+		if s.Indices != nil && s.Indices.GetIndexDef(code) != nil {
+			members = append(members, code)
+		}
+	}
+	base := func(total int) map[string]any {
+		return map[string]any{
+			"mode": "index", "intraday": []any{}, "daily": []any{},
+			"covered": 0, "total": total, "trade_date": tradeDay,
+			"as_of": tradeDay, "as_of_adjusted": tradeDay != time.Now().Format("2006-01-02"),
+			"market_status": marketStatusStr(), "as_of_requested": nil, "note": "指数等权量价求和",
+		}
+	}
+	if len(members) == 0 {
+		return base(len(members))
+	}
+
+	// 每指数「每单位量→成交额」比例：行情实时成交额 / 最新交易日量
+	scale := map[string]float64{}
+	for _, code := range members {
+		amount, vol := 0.0, 0.0
+		if q := s.Quote.Get(code); q != nil && q.Amount != nil {
+			amount = *q.Amount
+		}
+		var last db.DailyPriceCache
+		if err := s.DB.Where("code = ?", code).Order("trade_date DESC").First(&last).Error; err == nil && last.Volume != nil {
+			vol = *last.Volume
+		}
+		if vol > 0 {
+			scale[code] = amount / vol
+		}
+	}
+
+	// 当日分时 Σ成交额 + 各指数分时价（同 ts 覆盖取末分钟）
+	intraday := map[string]float64{}
+	intradayPrice := map[string]map[string]*float64{}
+	covered := 0
+	for _, code := range members {
+		rows := s.Cache.GetIndexIntraday(code, tradeDay)
+		if len(rows) > 0 {
+			covered++
+		}
+		for i := range rows {
+			r := &rows[i]
+			intraday[r.Ts] += derefF(r.Volume) * scale[code]
+			m := intradayPrice[code]
+			if m == nil {
+				m = map[string]*float64{}
+				intradayPrice[code] = m
+			}
+			m[r.Ts] = r.Price
+		}
+	}
+	var tsList []string
+	for ts := range intraday {
+		tsList = append(tsList, ts)
+	}
+	sort.Strings(tsList)
+	intradayList := make([]map[string]any, 0, len(tsList))
+	for _, ts := range tsList {
+		prices := map[string]any{}
+		for code, m := range intradayPrice {
+			if v, ok := m[ts]; ok && v != nil {
+				prices[code] = v
+			}
+		}
+		intradayList = append(intradayList, map[string]any{"ts": ts, "amount": round2(intraday[ts]), "prices": prices})
+	}
+
+	// 近 2 年 Σ成交额 + 各指数日收盘
+	dailyAmt := map[string]float64{}
+	dailyClose := map[string]map[string]*float64{}
+	start := addDays(tradeDay, -fundflowHistoryDays)
+	for _, code := range members {
+		for _, r := range s.Cache.GetDailyPrices(code, start, tradeDay) {
+			dailyAmt[r.TradeDate] += derefF(r.Volume) * scale[code]
+			m := dailyClose[code]
+			if m == nil {
+				m = map[string]*float64{}
+				dailyClose[code] = m
+			}
+			m[r.TradeDate] = r.Close
+		}
+	}
+	var dateList []string
+	for d := range dailyAmt {
+		dateList = append(dateList, d)
+	}
+	sort.Strings(dateList)
+	dailyList := make([]map[string]any, 0, len(dateList))
+	for _, d := range dateList {
+		closes := map[string]any{}
+		for code, m := range dailyClose {
+			if v, ok := m[d]; ok && v != nil {
+				closes[code] = v
+			}
+		}
+		dailyList = append(dailyList, map[string]any{"date": d, "amount": round2(dailyAmt[d]), "closes": closes})
+	}
+
+	out := base(len(members))
+	out["intraday"] = intradayList
+	out["daily"] = dailyList
+	out["covered"] = covered
+	return out
 }

@@ -40,7 +40,7 @@ func openPortfolio(t *testing.T) (*Service, *holdings.Service, *gorm.DB) {
 	})
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
 	live := valuation.NewLive(g, nil)
-	s := New(g, h, live, &fakeQuote{}, nil)
+	s := New(g, h, live, &fakeQuote{}, nil, nil, nil)
 	return s, h, g
 }
 

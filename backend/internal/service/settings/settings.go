@@ -3,6 +3,8 @@
 package settings
 
 import (
+	"fmt"
+
 	"stockanalyzer/internal/db/dao"
 )
 
@@ -12,6 +14,16 @@ const (
 	DefaultMaxTokens       = 81920
 	DefaultRequestTimeout  = 300
 	DefaultReasoningEffort = "high"
+)
+
+// 刷新/界面配置缺省与数值界限（对齐 app/services/settings.py 的常量）
+const (
+	DefaultUIMode           = "simple" // simple=一切自动、无刷新按钮；advanced=显示刷新按钮+全列
+	DefaultStaticTTLMinutes = 60       // 静态数据 1h 内齐全则不重拉
+	ttlMin                  = 10
+	ttlMax                  = 1440
+	intervalMin             = 30
+	intervalMax             = 3600
 )
 
 // Service 配置服务
@@ -72,4 +84,60 @@ func (s *Service) GetReasoningEffort() string {
 		return v
 	}
 	return DefaultReasoningEffort
+}
+
+// GetUIMode 简单/高级模式，读 config 键 ui_mode，缺省 simple。
+// 非法值一律回落 simple（对齐 Python get_ui_mode）。
+func (s *Service) GetUIMode() string {
+	v := s.Cfg.GetDefault("ui_mode", DefaultUIMode)
+	if v == "simple" || v == "advanced" {
+		return v
+	}
+	return DefaultUIMode
+}
+
+// GetStaticTTLMinutes 静态刷新节流（分钟），读 refresh_static_ttl_minutes，缺省 60，钳制 10~1440。
+func (s *Service) GetStaticTTLMinutes() int {
+	v := s.Cfg.GetInt("refresh_static_ttl_minutes", DefaultStaticTTLMinutes)
+	if v < ttlMin {
+		return ttlMin
+	}
+	if v > ttlMax {
+		return ttlMax
+	}
+	return v
+}
+
+// SetRefreshSettings 批量写三个用户配置（mode / static_ttl_minutes / dynamic_interval_seconds）。
+// 各字段可选（nil 不写）；mode 校验 simple|advanced、static_ttl 校验 10~1440、dynamic_interval 校验 30~3600。
+// 校验失败返回带中文消息的 error；只写提供的字段（对齐 Python set_refresh_settings）。
+func (s *Service) SetRefreshSettings(mode *string, staticTTL, dynamicInterval *int) error {
+	if mode != nil {
+		v := *mode
+		if v != "simple" && v != "advanced" {
+			return fmt.Errorf("mode 需为 simple 或 advanced")
+		}
+		if err := s.Cfg.Set("ui_mode", v); err != nil {
+			return err
+		}
+	}
+	if staticTTL != nil {
+		v := *staticTTL
+		if v < ttlMin || v > ttlMax {
+			return fmt.Errorf("静态刷新限制需在 10~1440 分钟之间")
+		}
+		if err := s.Cfg.Set("refresh_static_ttl_minutes", fmt.Sprintf("%d", v)); err != nil {
+			return err
+		}
+	}
+	if dynamicInterval != nil {
+		v := *dynamicInterval
+		if v < intervalMin || v > intervalMax {
+			return fmt.Errorf("动态刷新间隔需在 30~3600 秒之间")
+		}
+		if err := s.Cfg.Set("dynamic_interval_seconds", fmt.Sprintf("%d", v)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

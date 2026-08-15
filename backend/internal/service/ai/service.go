@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/quote"
 )
 
@@ -61,6 +62,12 @@ type Service struct {
 	// 评分依赖
 	PortReports *dao.AIPortfolioReportDAO
 	Daily       *dao.AIDailyReportDAO
+
+	// 每日 AI 打分自动触发依赖（main 装配注入）：
+	Jobs         *jobs.Manager            // 后台任务管理器（None 时自动打分只记日志不触发）
+	MarketClosed func(now time.Time) bool // 收盘判定（nil 则按周末/15:05 兜底，对齐 Python _is_market_closed_now）
+	// SyncKline 周/月K同步（main 注入 refresh.SyncPeriodKline；技术面分析前缺数据时调用）
+	SyncKline func(code string)
 }
 
 func New(g *gorm.DB, client AIClient, config *dao.ConfigDAO, cache *dao.CacheDAO,

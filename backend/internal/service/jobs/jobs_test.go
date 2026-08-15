@@ -134,3 +134,49 @@ func TestPrewarm(t *testing.T) {
 		t.Fatalf("prewarm done_count = %v", snap["done_count"])
 	}
 }
+
+// TestOnBroadcastForce 验证 OnBroadcast 钩子在任务终态（finalize）处以 force=true 触发，
+// 且回调在锁外执行（快照数据非空、可正常读取）。
+func TestOnBroadcastForce(t *testing.T) {
+	m := New()
+	var mu sync.Mutex
+	var gotForce bool
+	var gotData map[string]any
+	m.OnBroadcast = func(data map[string]any, force bool) {
+		mu.Lock()
+		if force {
+			gotForce = true
+			gotData = data
+		}
+		mu.Unlock()
+	}
+	id := m.Start("test.broadcast", "广播任务", func(p *Progress) error {
+		p.SetTotal(2)
+		p.Step("step1")
+		p.CompleteStep("step1")
+		return nil
+	})
+	_ = id
+	// 等到终态（force=true）推送到来；步骤级节流推送是 force=false，应被本次忽略
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		f := gotForce
+		mu.Unlock()
+		if f {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !gotForce {
+		t.Fatalf("终态推送 force = %v, 应为 true", gotForce)
+	}
+	if gotData == nil {
+		t.Fatalf("推送快照为空")
+	}
+	if gotData["label"] != "广播任务" {
+		t.Fatalf("推送快照 label = %v", gotData["label"])
+	}
+}

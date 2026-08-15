@@ -215,6 +215,8 @@ func (s *Service) AnalyzeNews(code, systemPrompt, intensity string) (map[string]
 // AnalyzeTechnical 个股 AI 技术面分析，落库 source='single'
 func (s *Service) AnalyzeTechnical(code, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.requireModel()
+	// 周/月K最新一条缺失时同步一次（对齐 Python _ensure_tech_kline；失败不阻断分析）
+	s.ensureTechKline(code)
 	name := s.StockDisplayName(code)
 	asOf := NowAsOfDatetime()
 	ctx := map[string]any{"code": code, "name": name, "as_of_datetime": asOf,
@@ -536,4 +538,24 @@ func loadAnyList(p *string) []any {
 		return []any{}
 	}
 	return v
+}
+
+// ensureTechKline 周/月K最新一条缺失时同步一次（对齐 Python _ensure_tech_kline）。
+// SyncKline 由 main 装配注入 refresh.SyncPeriodKline；同步失败不阻断分析。
+func (s *Service) ensureTechKline(code string) {
+	if s.SyncKline == nil {
+		return
+	}
+	latest := func(table string) bool {
+		var n int64
+		s.DB.Table(table).Where("code = ?", code).Count(&n)
+		return n > 0
+	}
+	if latest("weekly_price_cache") && latest("monthly_price_cache") {
+		return
+	}
+	func() {
+		defer func() { recover() }() // 同步失败不阻断分析（对齐 Python try/except pass）
+		s.SyncKline(code)
+	}()
 }

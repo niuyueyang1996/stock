@@ -1,19 +1,20 @@
 // Package route 第1层：gin 路由 + handler（校验→调 service→组响应）。
 // 依赖注入在 main 装配；JSON 字段名与 Python 输出对齐（前端零改动）。
+// 分层红线：route 只调 service，不直接持有 db/dao 句柄。
 package route
 
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
-	"stockanalyzer/internal/db"
-	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/ai"
+	"stockanalyzer/internal/service/datamanage"
+	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
@@ -23,25 +24,26 @@ import (
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/refresh"
 	"stockanalyzer/internal/service/settings"
+	"stockanalyzer/internal/service/stockmeta"
 	"stockanalyzer/internal/service/valuation"
 )
 
-// Services 全部依赖（main 装配）
+// Services 全部依赖（main 装配；只暴露 service 接口，不暴露 db/dao）
 type Services struct {
-	DB        *gorm.DB
-	Cache     *dao.CacheDAO
-	Holdings  *holdings.Service
-	Settings  *settings.Service
-	Fx        *fx.Service
-	Quote     *quote.Service
-	Portfolio *portfolio.Service
-	Live      *valuation.Service
-	Refresh   *refresh.Service
-	Indices   *indices.Service
-	Jobs      *jobs.Manager
-	ConfigDAO *dao.ConfigDAO
-	AI        *ai.Service
-	Dividend  *dividend.Service
+	Holdings   *holdings.Service
+	Settings   *settings.Service
+	Fx         *fx.Service
+	Quote      *quote.Service
+	Portfolio  *portfolio.Service
+	Live       *valuation.Service
+	Refresh    *refresh.Service
+	Indices    *indices.Service
+	Jobs       *jobs.Manager
+	AI         *ai.Service
+	Dividend   *dividend.Service
+	Detail     *detail.Service
+	StockMeta  *stockmeta.Service
+	DataManage *datamanage.Service
 }
 
 // Setup 注册全部路由
@@ -49,6 +51,7 @@ func Setup(r *gin.Engine, s *Services) {
 	api := r.Group("/api")
 
 	setupAIRoutes(api, s)
+	setupGlobalRefreshRoutes(api, s)
 	setupStockExtra2Routes(api, s)
 	setupIndicesExtraRoutes(api, s)
 	setupPortfolioExtraRoutes(api, s)
@@ -65,7 +68,8 @@ func Setup(r *gin.Engine, s *Services) {
 		if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
 			isTradeDay = false
 		}
-		marketClosed := now.Hour()*60+now.Minute() >= 15*60+5
+		// 对齐 Python is_market_closed：非交易日恒 True；交易日按收盘确认时间 15:05
+		marketClosed := !isTradeDay || now.Hour()*60+now.Minute() >= 15*60+5
 		// 探测第一个持仓代码（对齐 Python _probe_source）
 		probeCode := ""
 		if hs := s.Holdings.GetHoldings(true); len(hs) > 0 {
@@ -89,21 +93,52 @@ func Setup(r *gin.Engine, s *Services) {
 		if s.Jobs.Cancel(c.Param("job_id")) {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
 		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "任务不存在或已结束"})
 		}
 	})
 	api.DELETE("/jobs/batch/:batch_id", func(c *gin.Context) {
 		if s.Jobs.CancelBatch(c.Param("batch_id")) {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
 		} else {
-			c.JSON(http.StatusNotFound, gin.H{"error": "batch not found"})
+			c.JSON(http.StatusNotFound, gin.H{"detail": "任务不存在或已结束"})
 		}
+	})
+	api.POST("/data/reset", func(c *gin.Context) {
+		var body struct {
+			Confirm bool `json:"confirm"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		if !body.Confirm {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "危险操作：需传 confirm=true 确认清空全部数据"})
+			return
+		}
+		total, err := s.DataManage.ResetData(true)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"deleted_rows": total}})
 	})
 
 	// ---- holdings ----
 	api.GET("/holdings", func(c *gin.Context) {
 		active := c.DefaultQuery("active", "true") != "false"
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.GetHoldings(active)})
+	})
+	api.POST("/holdings", func(c *gin.Context) {
+		var body struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
+			return
+		}
+		results, err := s.DataManage.InitHoldings(body.Items)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": results})
 	})
 
 	// ---- indices ----
@@ -124,30 +159,36 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 	api.GET("/indices/:code", func(c *gin.Context) {
 		code := c.Param("code")
-		d := s.Indices.GetIndexDef(code)
-		if d == nil {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "指数不存在"})
-			return
+		window := 15
+		if v := c.Query("window"); v != "" {
+			window, _ = strconv.Atoi(v)
 		}
-		status, body := stockDetail(s, code, true, 15, "")
-		if dd, ok := body["data"].(map[string]any); ok {
-			dd["is_index"] = true
-			dd["symbol"] = d.Symbol
-			dd["legu_code"] = d.LeguCode
-			dd["pe_source"] = d.PeSource
-			dd["pb_source"] = d.PbSource
-		}
+		status, body := s.Detail.StockDetail(code, true, window, "", false)
 		c.JSON(status, body)
 	})
 	api.PUT("/indices/:code", func(c *gin.Context) {
 		code := c.Param("code")
 		var body map[string]any
 		_ = c.ShouldBindJSON(&body)
-		if err := s.Indices.UpdateIndexDef(code, body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		if s.Indices.GetIndexDef(code) == nil {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		fields := map[string]any{}
+		for _, k := range []string{"name", "symbol", "legu_code", "pe_source", "pb_source"} {
+			if v, ok := body[k]; ok && v != nil {
+				fields[k] = v
+			}
+		}
+		if len(fields) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "无可更新字段"})
+			return
+		}
+		if err := s.Indices.UpdateIndexDef(code, fields); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetIndexDef(code)})
 	})
 	api.POST("/indices/refresh-all", func(c *gin.Context) {
 		out := s.Indices.RefreshAllIndices(c.Request.Context())
@@ -168,10 +209,10 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		_ = c.ShouldBindJSON(&body)
 		if err := s.Indices.SetETFIndexMap(c.Param("etf_code"), body.IndexCode, body.Source); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetETFIndexMap(c.Param("etf_code"))})
 	})
 
 	// ---- portfolio ----
@@ -181,17 +222,48 @@ func Setup(r *gin.Engine, s *Services) {
 		if tagsQS != "" {
 			tags = strings.Split(tagsQS, ",")
 		}
-		out := s.Portfolio.ComputePortfolio(tags)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
+		code := strings.TrimSpace(c.Query("code"))
+		lite := c.Query("lite") == "1" || c.Query("lite") == "true"
+		if code != "" {
+			lite = false // 单股贡献路径需要 weights/tags，回退全量（对齐 Python）
+		}
+		var p map[string]any
+		if lite {
+			p = s.Portfolio.ComputePortfolioLite(tags)
+		} else {
+			p = s.Portfolio.ComputePortfolio(tags)
+		}
+		if code != "" {
+			stock := findStock(p["stocks"], code)
+			if stock == nil {
+				missing := findStock(p["missing"], code)
+				if missing != nil {
+					reason, _ := missing["reason"].(string)
+					c.JSON(http.StatusNotFound, gin.H{"detail": fmt.Sprintf("%s 数据缺失: %s", code, reason)})
+					return
+				}
+				c.JSON(http.StatusNotFound, gin.H{"detail": code + " 不在持仓中"})
+				return
+			}
+			var weight any
+			if ws, ok := p["weights"].([]map[string]any); ok {
+				for _, w := range ws {
+					if w["code"] == code {
+						weight = w
+						break
+					}
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+				"portfolio": p["portfolio"], "stock": stock, "weight": weight,
+			}})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": p})
 	})
 	api.GET("/portfolio/weights", func(c *gin.Context) {
-		tagsQS := strings.TrimSpace(c.Query("tags"))
-		var tags []string
-		if tagsQS != "" {
-			tags = strings.Split(tagsQS, ",")
-		}
-		out := s.Portfolio.ComputePortfolio(tags)
-		// 对齐 Python：直接返回 compute_portfolio 的 weights（含 tag/is_etf/currency/weight/value）
+		// 对齐 Python portfolio_weights：无参数，compute_portfolio() 全量
+		out := s.Portfolio.ComputePortfolio(nil)
 		weights, _ := out["weights"].([]map[string]any)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": weights})
 	})
@@ -199,18 +271,27 @@ func Setup(r *gin.Engine, s *Services) {
 	// ---- settings ----
 	api.GET("/settings/refresh", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+			"mode":                     s.Settings.GetUIMode(),
+			"static_ttl_minutes":       s.Settings.GetStaticTTLMinutes(),
 			"dynamic_interval_seconds": s.Settings.GetDynamicIntervalSeconds(),
 		}})
 	})
 	api.PUT("/settings/refresh", func(c *gin.Context) {
 		var body struct {
-			DynamicIntervalSeconds *int `json:"dynamic_interval_seconds"`
+			Mode                   *string `json:"mode"`
+			StaticTTLMinutes       *int    `json:"static_ttl_minutes"`
+			DynamicIntervalSeconds *int    `json:"dynamic_interval_seconds"`
 		}
 		_ = c.ShouldBindJSON(&body)
-		if body.DynamicIntervalSeconds != nil {
-			_ = s.ConfigDAO.Set("dynamic_interval_seconds", fmt.Sprintf("%d", *body.DynamicIntervalSeconds))
+		if err := s.Settings.SetRefreshSettings(body.Mode, body.StaticTTLMinutes, body.DynamicIntervalSeconds); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+			"mode":                     s.Settings.GetUIMode(),
+			"static_ttl_minutes":       s.Settings.GetStaticTTLMinutes(),
+			"dynamic_interval_seconds": s.Settings.GetDynamicIntervalSeconds(),
+		}})
 	})
 
 	// ---- stocks ----
@@ -219,23 +300,27 @@ func Setup(r *gin.Engine, s *Services) {
 		partial := c.Query("partial") == "1"
 		window := 15
 		if v := c.Query("window"); v != "" {
-			fmt.Sscanf(v, "%d", &window)
+			window, _ = strconv.Atoi(v)
 		}
-		asOf := c.Query("as_of")
-		status, body := stockDetail(s, code, partial, window, asOf)
+		asOf, asOfGiven := c.GetQuery("as_of")
+		status, body := s.Detail.StockDetail(code, partial, window, asOf, asOfGiven)
 		c.JSON(status, body)
 	})
 
 	// ---- stocks 补充端点 ----
 	api.GET("/stocks/:code/kline", func(c *gin.Context) {
 		code := c.Param("code")
-		start := c.DefaultQuery("start", "")
-		end := c.DefaultQuery("end", "")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": klineOut(s, code, start, end)})
+		period := c.DefaultQuery("period", "day")
+		status, data, errMsg := s.Quote.Kline(code, period)
+		if errMsg != "" {
+			c.JSON(status, gin.H{"detail": errMsg})
+			return
+		}
+		c.JSON(status, gin.H{"ok": true, "data": data})
 	})
 	api.GET("/stocks/:code/cache-status", func(c *gin.Context) {
 		code := c.Param("code")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": cacheStatusOut(s, code)})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Detail.CacheStatus(code)})
 	})
 	api.PUT("/stocks/:code/tag", func(c *gin.Context) {
 		code := c.Param("code")
@@ -244,80 +329,79 @@ func Setup(r *gin.Engine, s *Services) {
 			Name string `json:"name"`
 		}
 		_ = c.ShouldBindJSON(&body)
-		if body.Tag == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "标签不能为空"})
+		tag, err := s.Holdings.SetStockTag(code, body.Tag, body.Name)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		if err := s.Holdings.DB.SetStockTag(code, body.Tag); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": body.Tag})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "tag": tag}})
 	})
 	api.GET("/stocks/search", func(c *gin.Context) {
-		kw := strings.TrimSpace(c.Query("keyword"))
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": searchStocks(s.DB, kw)})
+		q := c.Query("q")
+		limit := 10
+		if v := c.Query("limit"); v != "" {
+			limit, _ = strconv.Atoi(v)
+		}
+		data, ready, hint := s.Quote.Search(q, limit)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": data, "lists_ready": ready, "hint": hint})
 	})
 	// 预期增速/营收增速/支付率（对齐 Python：GET 返回 {code, growth, updated_at}）
 	api.GET("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
-		var g db.StockExpectedGrowth
-		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": nil, "updated_at": nil}})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g.Growth, "updated_at": g.UpdatedAt}})
+		g, ts := s.StockMeta.GetExpectedGrowth(code)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
 	api.PUT("/stocks/:code/expected-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
-			Growth float64 `json:"growth"`
+			Growth *float64 `json:"growth"`
 		}
-		_ = c.ShouldBindJSON(&body)
-		_ = s.DB.Exec("INSERT INTO stock_expected_growth(code, growth, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET growth=excluded.growth, updated_at=excluded.updated_at", code, body.Growth).Error
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": body.Growth}})
+		if err := c.ShouldBindJSON(&body); err != nil || body.Growth == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "growth 必填"})
+			return
+		}
+		s.StockMeta.SetExpectedGrowth(code, *body.Growth)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": *body.Growth}})
 	})
 	api.GET("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
 		code := c.Param("code")
-		var g db.StockExpectedRevenueGrowth
-		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": nil, "updated_at": nil}})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g.Growth, "updated_at": g.UpdatedAt}})
+		g, ts := s.StockMeta.GetExpectedRevenueGrowth(code)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
 	api.PUT("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
-			Growth float64 `json:"growth"`
+			Growth *float64 `json:"growth"`
 		}
-		_ = c.ShouldBindJSON(&body)
-		_ = s.DB.Exec("INSERT INTO stock_expected_revenue_growth(code, growth, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET growth=excluded.growth, updated_at=excluded.updated_at", code, body.Growth).Error
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": body.Growth}})
+		if err := c.ShouldBindJSON(&body); err != nil || body.Growth == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "growth 必填"})
+			return
+		}
+		s.StockMeta.SetExpectedRevenueGrowth(code, *body.Growth)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": *body.Growth}})
 	})
 	api.GET("/stocks/:code/expected-payout", func(c *gin.Context) {
 		code := c.Param("code")
-		var g db.StockExpectedPayout
-		if err := s.DB.Where("code = ?", code).First(&g).Error; err != nil {
-			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": nil, "updated_at": nil}})
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": g.Payout, "updated_at": g.UpdatedAt}})
+		g, ts := s.StockMeta.GetExpectedPayout(code)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": g, "updated_at": ts}})
 	})
 	api.PUT("/stocks/:code/expected-payout", func(c *gin.Context) {
 		code := c.Param("code")
 		var body struct {
-			Growth float64 `json:"growth"`
+			Payout *float64 `json:"payout"`
 		}
-		_ = c.ShouldBindJSON(&body)
-		_ = s.DB.Exec("INSERT INTO stock_expected_payout(code, payout, updated_at) VALUES(?,?,datetime('now','localtime')) ON CONFLICT(code) DO UPDATE SET payout=excluded.payout, updated_at=excluded.updated_at", code, body.Growth).Error
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": body.Growth}})
+		if err := c.ShouldBindJSON(&body); err != nil || body.Payout == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "payout 必填"})
+			return
+		}
+		s.StockMeta.SetExpectedPayout(code, *body.Payout)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": *body.Payout}})
 	})
 
 	// ---- trades ----
 	api.GET("/trades", func(c *gin.Context) {
 		code := c.Query("code")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": listTrades(s.DB, code)})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.ListTrades(code)})
 	})
 	api.POST("/trades", func(c *gin.Context) {
 		var body struct {
@@ -331,75 +415,43 @@ func Setup(r *gin.Engine, s *Services) {
 			Name      *string `json:"name"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误: " + err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误: " + err.Error()})
+			return
+		}
+		if body.Code == "" || body.Side == "" || body.Price <= 0 || body.Quantity <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "code/side/price/quantity 必填"})
 			return
 		}
 		id, h, err := s.Holdings.RecordTrade(body.Code, body.Side, body.Price, body.Quantity,
 			body.Fee, body.TradeTime, body.Note, body.Name, true)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"trade_id": id, "holding": h}})
 	})
 	api.PUT("/trades/:trade_id", func(c *gin.Context) {
-		var id int64
-		fmt.Sscanf(c.Param("trade_id"), "%d", &id)
-		t := s.Holdings.DB.GetTrade(id)
-		if t == nil {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "trade not found"})
-			return
-		}
+		id, _ := strconv.ParseInt(c.Param("trade_id"), 10, 64)
 		var body map[string]any
-		_ = c.ShouldBindJSON(&body)
-		updates := map[string]any{}
-		if v, ok := body["price"].(float64); ok {
-			updates["price"] = v
-		}
-		if v, ok := body["quantity"].(float64); ok {
-			updates["quantity"] = v
-		}
-		if v, ok := body["fee"].(float64); ok {
-			updates["fee"] = v
-		}
-		if v, ok := body["trade_time"].(string); ok {
-			updates["trade_time"] = v
-		}
-		if v, ok := body["note"].(string); ok {
-			updates["note"] = v
-		}
-		if len(updates) > 0 {
-			s.DB.Model(&dao.Trade{}).Where("id = ?", id).Updates(updates)
-			// amount 重算（价格/数量变化时）
-			if _, ok := updates["price"]; ok {
-				s.DB.Exec("UPDATE trades SET amount = ROUND(price*quantity, 4) WHERE id=?", id)
-			}
-		}
-		_, err := s.Holdings.Rebuild(t.Code)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		if err := c.ShouldBindJSON(&body); err != nil || len(body) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未提供任何修改字段"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		result, err := s.Holdings.UpdateTrade(id, body)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
 	})
 	api.DELETE("/trades/:trade_id", func(c *gin.Context) {
-		var id int64
-		fmt.Sscanf(c.Param("trade_id"), "%d", &id)
-		t := s.Holdings.DB.GetTrade(id)
-		if t == nil {
-			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "trade not found"})
-			return
-		}
-		if err := s.Holdings.DB.DeleteTrade(id); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
-			return
-		}
-		_, err := s.Holdings.Rebuild(t.Code)
+		id, _ := strconv.ParseInt(c.Param("trade_id"), 10, 64)
+		result, err := s.Holdings.DeleteTrade(id)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": result})
 	})
 
 	// ---- holdings 写操作 ----
@@ -412,15 +464,29 @@ func Setup(r *gin.Engine, s *Services) {
 			IsDividend bool    `json:"is_dividend"`
 		}
 		if err := c.ShouldBindJSON(&body); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "参数错误"})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 			return
 		}
 		h, err := s.Holdings.AdjustCost(c.Param("code"), body.Amount, body.DeltaQty,
 			body.Note, body.TradeTime, body.IsDividend, nil)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": h})
 	})
+}
+
+// findStock 在 stocks/missing 列表中按 code 查找
+func findStock(list any, code string) map[string]any {
+	rows, ok := list.([]map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, r := range rows {
+		if r["code"] == code {
+			return r
+		}
+	}
+	return nil
 }
