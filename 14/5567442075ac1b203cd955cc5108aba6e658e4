@@ -1,0 +1,97 @@
+README.md
+  h_07352c0544a725 1,3,5,13-14,26-27,31-32,36-37,39,43-44,48,58-64,68,70,72,74-80,82-84,86,88-94,97,101,103-159,163-175,177-179,181-187,189,191-196,198,200-204,208,210,212-219,223,225,227-239,244-246,252-256
+backend/internal/route/ai.go
+  h_07352c0544a725 21,27,44,64,73,85,89,103,109,125,131,152,157-158,244-245,262,266,270,276-277,295-296,313,317,321,327,399-400,418-419,441,447,458
+backend/internal/route/ai_scoring.go
+  h_07352c0544a725 32-33,45,49-50,88,101,110,118-119,126-127,159,165,176-177
+backend/internal/route/import_excel.go
+  h_07352c0544a725 24-26
+backend/internal/route/router.go
+  h_07352c0544a725 61-62,67-68,90,94,98,106,114-115,134,139,157-158,174-175,185-186,211,216,225,240-242,288,297,305,325-327,341,352,357,372-373,384,390,403,409,422,428,443,448-449,477,492,504-505
+backend/internal/route/stocks_extra2.go
+  h_07352c0544a725 20-21,38-39,53-54,72,77,86-87,101,118,126,138-139
+backend/internal/service/ai/client.go
+  h_07352c0544a725 35,40,65,117,216
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 56,68,178,632,639
+backend/internal/service/ai/models.go
+  h_07352c0544a725 14,39
+backend/internal/service/ai/news_tech.go
+  h_07352c0544a725 72,140,192,505,514,522,530,539
+backend/internal/service/ai/prompts.go
+  h_07352c0544a725 8-9,32-33,56,73,103,113,123,133
+backend/internal/service/ai/prompts_fundflow.go
+  h_07352c0544a725 55,65
+backend/internal/service/ai/prompts_scoring.go
+  h_07352c0544a725 10,80,90
+backend/internal/service/ai/report.go
+  h_07352c0544a725 155,229,239,247,456,481,487,564-565
+backend/internal/service/ai/scorecard.go
+  h_07352c0544a725 162,185
+backend/internal/service/ai/scoring.go
+  h_07352c0544a725 40,280,402,446,457,477,490,496,935,943
+backend/internal/service/ai/service.go
+  h_07352c0544a725 73
+backend/internal/service/calendar/calendar.go
+  h_07352c0544a725 20
+backend/internal/service/datamanage/datamanage.go
+  h_07352c0544a725 135,144
+backend/internal/service/detail/detail.go
+  h_07352c0544a725 571,599,610
+backend/internal/service/dividend/dividend.go
+  h_07352c0544a725 36,80,87,127,129-130
+backend/internal/service/finance/manager.go
+  h_07352c0544a725 24,32,43,62
+backend/internal/service/finance/normalizer.go
+  h_07352c0544a725 104
+backend/internal/service/finance/provider_em.go
+  h_07352c0544a725 13,16,19,43
+backend/internal/service/finance/provider_sina.go
+  h_07352c0544a725 22,27,36,71,121,134,235
+backend/internal/service/fx/fx.go
+  h_07352c0544a725 130
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 24-25,228,236
+backend/internal/service/holdings/trades.go
+  h_07352c0544a725 226
+backend/internal/service/indices/indices.go
+  h_07352c0544a725 28,200,210
+backend/internal/service/jobs/jobs.go
+  h_07352c0544a725 67,70,78-79,88,110,121,128,131,139,155,167,175-176,228,254,299-300,321,333,380,401,411-412,538,548,569,576-577,584-585,592-593,600-601,608-609,616-617,624-625,632-633,640-641,649,657,683,718,730,738,753-754,775
+backend/internal/service/market/manager.go
+  h_07352c0544a725 15,20
+backend/internal/service/market/normalizer.go
+  h_07352c0544a725 18,72,129,256
+backend/internal/service/market/providers.go
+  h_07352c0544a725 17,20,23,37,46,57,60,63,68,73,130,133,136,174,188,191,199,207,217,225,236,249
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 45,50,55,119,128,233,240-241,932,935,953,963-964,966-967,969-970,978-979,989-990,1001-1002,1012-1013,1023-1024,1058-1059,1066-1067,1078-1079
+backend/internal/service/quote/quote.go
+  h_07352c0544a725 31,77-78,133,273,299
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 61,403,411-412,414-415
+backend/internal/service/settings/settings.go
+  h_07352c0544a725 34
+backend/internal/service/stockmeta/stockmeta.go
+  h_07352c0544a725 16
+backend/internal/service/valuation/live.go
+  h_07352c0544a725 28,33,42,51,60,119,131,140,195,211,520,534,541-542,544-545,547-548,550-551,559-560,565-566,574-575,583-584,592-593,606-607,618-619
+backend/internal/service/valuation/normalizer.go
+  h_07352c0544a725 88,103
+backend/internal/service/valuation/providers.go
+  h_07352c0544a725 21,26,29,60,63,66,79,82,98,103
+backend/internal/service/volatility/volatility.go
+  h_07352c0544a725 28,223,241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "145567442075ac1b203cd955cc5108aba6e658e4",
+  "prompts": {},
+  "logical_commit_id": "145567442075ac1b203cd955cc5108aba6e658e4",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
