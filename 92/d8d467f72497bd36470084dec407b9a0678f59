@@ -1,0 +1,29 @@
+backend/cmd/server/main.go
+  h_07352c0544a725 148-155
+backend/internal/db/dao/ai.go
+  h_07352c0544a725 289,292-296,401,404-408,429,432-436
+backend/internal/route/ai.go
+  h_07352c0544a725 9,13,171-172,186-367,369-429
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 1-705
+backend/internal/service/ai/news_tech.go
+  h_07352c0544a725 1-539
+backend/internal/service/ai/prompts.go
+  h_07352c0544a725 1-131
+backend/internal/service/ai/prompts_fundflow.go
+  h_07352c0544a725 1-71
+backend/internal/service/ai/service.go
+  h_07352c0544a725 51-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "92d8d467f72497bd36470084dec407b9a0678f59",
+  "prompts": {},
+  "logical_commit_id": "92d8d467f72497bd36470084dec407b9a0678f59",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
