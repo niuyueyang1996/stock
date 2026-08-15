@@ -21,6 +21,7 @@ import (
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/portfolio"
@@ -133,13 +134,16 @@ func main() {
 		return now.Hour()*60+now.Minute() >= 15*60+5
 	}
 
+	// 指数服务
+	idxSvc := indices.New(gdb, tx, lg)
+
 	// 组合服务
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY)
 
 	svcs := &route.Services{
 		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
-		Jobs: jm, ConfigDAO: cfgDAO,
+		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc,
 	}
 	_ = divSvc
 	_ = settingsSvc

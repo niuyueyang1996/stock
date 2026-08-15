@@ -15,6 +15,7 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
@@ -34,6 +35,7 @@ type Services struct {
 	Portfolio *portfolio.Service
 	Live      *valuation.Service
 	Refresh   *refresh.Service
+	Indices   *indices.Service
 	Jobs      *jobs.Manager
 	ConfigDAO *dao.ConfigDAO
 }
@@ -92,6 +94,74 @@ func Setup(r *gin.Engine, s *Services) {
 	api.GET("/holdings", func(c *gin.Context) {
 		active := c.DefaultQuery("active", "true") != "false"
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.GetHoldings(active)})
+	})
+
+	// ---- indices ----
+	api.GET("/indices", func(c *gin.Context) {
+		var out []map[string]any
+		for _, d := range s.Indices.GetIndexDefs() {
+			item := map[string]any{
+				"code": d.Code, "name": d.Name, "symbol": d.Symbol,
+				"legu_code": d.LeguCode, "pe_source": d.PeSource, "pb_source": d.PbSource,
+			}
+			item["quote"] = indexQuoteOut(s, d.Code)
+			item["turnover"] = map[string]any{
+				"amount": nil, "prev_amount": nil, "chg_pct": nil, "state": nil, "as_of": nil, "basis": nil,
+			}
+			out = append(out, item)
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
+	})
+	api.GET("/indices/:code", func(c *gin.Context) {
+		code := c.Param("code")
+		d := s.Indices.GetIndexDef(code)
+		if d == nil {
+			c.JSON(http.StatusNotFound, gin.H{"ok": false, "error": "指数不存在"})
+			return
+		}
+		status, body := stockDetail(s, code, true, 15, "")
+		if dd, ok := body["data"].(map[string]any); ok {
+			dd["is_index"] = true
+			dd["symbol"] = d.Symbol
+			dd["legu_code"] = d.LeguCode
+			dd["pe_source"] = d.PeSource
+			dd["pb_source"] = d.PbSource
+		}
+		c.JSON(status, body)
+	})
+	api.PUT("/indices/:code", func(c *gin.Context) {
+		code := c.Param("code")
+		var body map[string]any
+		_ = c.ShouldBindJSON(&body)
+		if err := s.Indices.UpdateIndexDef(code, body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	api.POST("/indices/refresh-all", func(c *gin.Context) {
+		out := s.Indices.RefreshAllIndices(c.Request.Context())
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
+	})
+	api.GET("/indices/etf-map/:etf_code", func(c *gin.Context) {
+		m := s.Indices.GetETFIndexMap(c.Param("etf_code"))
+		if m == nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": m})
+	})
+	api.PUT("/indices/etf-map/:etf_code", func(c *gin.Context) {
+		var body struct {
+			IndexCode string `json:"index_code"`
+			Source    string `json:"source"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		if err := s.Indices.SetETFIndexMap(c.Param("etf_code"), body.IndexCode, body.Source); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
 	// ---- portfolio ----
