@@ -1,0 +1,31 @@
+packaging/android/README.md
+  h_07352c0544a725 1-48
+packaging/android/app/build.gradle.kts
+  h_07352c0544a725 1-42
+packaging/android/app/src/main/AndroidManifest.xml
+  h_07352c0544a725 1-23
+packaging/android/app/src/main/java/com/stockanalyzer/app/GoServer.kt
+  h_07352c0544a725 1-67
+packaging/android/app/src/main/java/com/stockanalyzer/app/MainActivity.kt
+  h_07352c0544a725 1-60
+packaging/android/build.gradle.kts
+  h_07352c0544a725 1-5
+packaging/android/build.sh
+  h_07352c0544a725 1-17
+packaging/android/gradle.properties
+  h_07352c0544a725 1-3
+packaging/android/settings.gradle.kts
+  h_07352c0544a725 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7fec699700568dc2791803e70ae62cf405db9d4a",
+  "prompts": {},
+  "logical_commit_id": "7fec699700568dc2791803e70ae62cf405db9d4a",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
