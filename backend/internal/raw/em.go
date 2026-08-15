@@ -173,3 +173,39 @@ func (e *EM) ETFHist(ctx context.Context, symbol, start, end string) [][]string 
 	}
 	return out
 }
+
+// DividendRowEM 东财分红送配详情单行（字段名与 datacenter 原始一致）
+type DividendRowEM struct {
+	ExDividendDate string   `json:"EX_DIVIDEND_DATE"`
+	ReportDate     string   `json:"REPORT_DATE"`
+	PretaxBonusRMB *float64 `json:"PRETAX_BONUS_RMB"` // 每10股派息(税前)
+	AssignProgress string   `json:"ASSIGN_PROGRESS"`
+}
+
+// DividendDetail 东财分红送配详情（RPT_SHAREBONUS_DET，按报告期降序）。失败返回 nil。
+func (e *EM) DividendDetail(ctx context.Context, code string) []DividendRowEM {
+	b, err := e.dc.Get(ctx, "https://datacenter-web.eastmoney.com/api/data/v1/get", url.Values{
+		"sortColumns":  {"REPORT_DATE"},
+		"sortTypes":    {"-1"},
+		"pageSize":     {"500"},
+		"pageNumber":   {"1"},
+		"reportName":   {"RPT_SHAREBONUS_DET"},
+		"columns":      {"ALL"},
+		"quoteColumns": {""},
+		"source":       {"WEB"},
+		"client":       {"WEB"},
+		"filter":       {fmt.Sprintf("(SECURITY_CODE=\"%s\")", code)},
+	})
+	if err != nil {
+		return nil
+	}
+	var data struct {
+		Result struct {
+			Data []DividendRowEM `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil
+	}
+	return data.Result.Data
+}

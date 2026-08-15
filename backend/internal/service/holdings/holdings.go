@@ -195,3 +195,47 @@ func round(v float64, digits int) float64 {
 	}
 	return float64(int64(v*p+0.5)) / p
 }
+
+// AdjustCost 成本/股数调整（POST /holdings/{code}/cost-adjust）。
+// amount：成本变化额（正=加 负=减）；deltaQty：股数变化（拆股/送股）。
+// 插入 adjust 交易并重放；isDividend=1 标记计入累计分红。
+func (s *Service) AdjustCost(code string, amount, deltaQty float64, note string, tradeTime string, isDividend bool, name *string) (*HoldingResult, error) {
+	if tradeTime == "" {
+		tradeTime = time.Now().Format("2006-01-02 15:04:05")
+	}
+	// adjust 用微秒时间戳避免与同日交易 UNIQUE 冲突（对齐 Python：adjust 排在同日买入前）
+	currency := s.DB.CurrencyOf(code)
+	var fxRate, amountCny *float64
+	if currency == "CNY" {
+		v1, v2 := 1.0, round(amount, 2)
+		fxRate, amountCny = &v1, &v2
+	} else if s.FxEnsure != nil {
+		if rate := s.FxEnsure("HKD", tradeTime[:10]); rate != nil {
+			v1 := round(*rate, 6)
+			v2 := round(amount**rate, 2)
+			fxRate, amountCny = &v1, &v2
+		}
+	}
+	dv := 0
+	if isDividend {
+		dv = 1
+	}
+	t := &dao.Trade{
+		Code: code, Side: "adjust", Price: 0, Quantity: deltaQty, Amount: amount,
+		TradeTime: tradeTime, Note: strptr(note), IsDividend: dv, FxRate: fxRate, AmountCny: amountCny,
+	}
+	if _, err := s.DB.InsertTrade(t); err != nil {
+		return nil, err
+	}
+	return s.Rebuild(code)
+}
+
+// CumulativeDividend 累计分红 = adjust 且 is_dividend=1 的 SUM(-amount)
+func (s *Service) CumulativeDividend(code string) float64 {
+	var sum *float64
+	s.DB.DB.Raw("SELECT SUM(-amount) FROM trades WHERE code=? AND side='adjust' AND is_dividend=1", code).Scan(&sum)
+	if sum == nil {
+		return 0
+	}
+	return *sum
+}
