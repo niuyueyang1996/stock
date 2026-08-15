@@ -224,13 +224,25 @@ func strF(s string) float64 {
 
 // toSymbol 代码→行情符号（港股 hk 前缀，沪市 sh，深市 sz）
 func toSymbol(code string) string {
+	// 对齐 Python to_symbol：沪 60/68/90/50/51/56/58；深 00/30/39/15/16/20；北 43/82/83/87/92
 	if isHKCode(code) {
 		return "hk" + code
 	}
-	if strings.HasPrefix(code, "6") {
+	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") ||
+		strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") ||
+		strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
 		return "sh" + code
 	}
-	return "sz" + code
+	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") ||
+		strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") ||
+		strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
+		return "sz" + code
+	}
+	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") ||
+		strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
+		return "bj" + code
+	}
+	return code
 }
 
 // isHKCode 五位纯数字代码为港股

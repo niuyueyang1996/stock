@@ -405,16 +405,23 @@ func (t *Tencent) HKIntraday(ctx context.Context, code string) []HKIntradayDay {
 
 // toSymbol 代码→行情符号（对齐 app/data/base.py to_symbol）
 func toSymbol(code string) string {
-	if len(code) >= 6 {
-		if strings.HasPrefix(code, "6") {
-			return "sh" + code
-		}
-		if strings.HasPrefix(code, "0") || strings.HasPrefix(code, "3") {
-			return "sz" + code
-		}
-		if strings.HasPrefix(code, "4") || strings.HasPrefix(code, "8") {
-			return "bj" + code
-		}
+	// 对齐 Python to_symbol：沪 60/68/90/50/51/56/58；深 00/30/39/15/16/20；北 43/82/83/87/92
+	if isHKCode(code) {
+		return "hk" + code
+	}
+	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") ||
+		strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") ||
+		strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
+		return "sh" + code
+	}
+	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") ||
+		strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") ||
+		strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
+		return "sz" + code
+	}
+	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") ||
+		strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
+		return "bj" + code
 	}
 	return code
 }

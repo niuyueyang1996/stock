@@ -648,8 +648,31 @@ func (s *Service) ComputePortfolio(tags []string) map[string]any {
 	psStatic := comboValue("ps_static")
 	psTTM := comboValue("ps_ttm")
 	psFwd := comboValue("ps_fwd")
-	// 组合打包序列（含 1y 分位），对齐 get_portfolio_series
-	series := s.portfolioSeries(pe, pb, cny, totalValue)
+	// 组合打包序列：tags 子集 → 按选中持仓实时打包（对齐 Python compute_portfolio_series，
+	// 不读缓存、逐日覆盖率门槛）；全部 → 读 portfolio_valuation_cache（对齐 get_portfolio_series）
+	var series map[string]any
+	if len(tags) > 0 {
+		weights := map[string]float64{}
+		tot := 0.0
+		for _, st := range cny {
+			if st["value_cny"] != nil {
+				code, _ := st["code"].(string)
+				v := derefF(st["value_cny"])
+				weights[code] = v
+				tot += v
+			}
+		}
+		if tot > 0 {
+			for c := range weights {
+				weights[c] /= tot
+			}
+			series = s.ComputePortfolioSeries(weights, cny, "")
+		} else {
+			series = map[string]any{}
+		}
+	} else {
+		series = s.portfolioSeries(pe, pb, cny, totalValue)
+	}
 	var pePct, pbPct *float64
 	if s1, ok := series["1y"].(map[string]any); ok {
 		pePct, _ = s1["pe_pct"].(*float64)
@@ -1256,26 +1279,18 @@ func anyF64(v any) (float64, bool) {
 
 // pfPercentile 分段排序分位：正小→大 → 0 → 负（绝对值大→小）；样本不足返回 nil
 func pfPercentile(hist []float64, target *float64) *float64 {
-	if target == nil || len(hist) < 5 {
+	// 对齐 Python _percentile：样本 < QUANTILE_MIN_SAMPLES(60) → nil；≤ 计数；round 1 位
+	if target == nil || len(hist) < 60 {
 		return nil
 	}
-	key := func(v float64) [2]float64 {
-		if v > 0 {
-			return [2]float64{0, v}
-		}
-		if v == 0 {
-			return [2]float64{1, 0}
-		}
-		return [2]float64{2, -v}
-	}
-	lt := 0
+	tk := segKey(*target)
+	cnt := 0
 	for _, v := range hist {
-		k1, k2 := key(v), key(*target)
-		if k1[0] < k2[0] || (k1[0] == k2[0] && k1[1] < k2[1]) {
-			lt++
+		if !segLess(tk, segKey(v)) { // segKey(v) <= tk（相等计数）
+			cnt++
 		}
 	}
-	p := float64(lt) / float64(len(hist)) * 100
+	p := math.Round(float64(cnt)/float64(len(hist))*1000) / 10
 	return &p
 }
 
