@@ -1,0 +1,31 @@
+backend/internal/db/dao/fx.go
+  h_07352c0544a725 1-64
+backend/internal/db/dao/holdings.go
+  h_07352c0544a725 1-120
+backend/internal/raw/sina.go
+  h_07352c0544a725 10,13,123-150
+backend/internal/service/calendar/calendar.go
+  h_07352c0544a725 1-66
+backend/internal/service/fx/fx.go
+  h_07352c0544a725 1-132
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 1-197
+backend/internal/service/holdings/holdings_test.go
+  h_07352c0544a725 1-133
+backend/internal/service/quote/quote.go
+  h_07352c0544a725 1-73
+backend/internal/service/settings/settings.go
+  h_07352c0544a725 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b8e1937b2bbaee5591532889b659b655c7232a41",
+  "prompts": {},
+  "logical_commit_id": "b8e1937b2bbaee5591532889b659b655c7232a41",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
