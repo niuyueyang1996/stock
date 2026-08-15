@@ -9,3 +9,5 @@ data/data/
 .server.log
 build/
 dist/
+backend/data/*.db
+backend/data/
