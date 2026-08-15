@@ -1,0 +1,33 @@
+backend/cmd/dbcheck/main.go
+  h_07352c0544a725 1-36
+backend/go.mod
+  h_07352c0544a725 5-9,16,19,25-27,37,47-50
+backend/go.sum
+  h_07352c0544a725 12-13,20-23,39-46,55-56,70-72,109-120
+backend/internal/db/dao/config.go
+  h_07352c0544a725 1-87
+backend/internal/db/dao/config_test.go
+  h_07352c0544a725 1-75
+backend/internal/db/db.go
+  h_07352c0544a725 1-67
+backend/internal/db/db_test.go
+  h_07352c0544a725 1-158
+backend/internal/db/migrate.go
+  h_07352c0544a725 1-233
+backend/internal/db/models.go
+  h_07352c0544a725 1-508
+backend/internal/db/schema.go
+  h_07352c0544a725 1-480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ac91146687720072d21adcef6b957238f1d30c1f",
+  "prompts": {},
+  "logical_commit_id": "ac91146687720072d21adcef6b957238f1d30c1f",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
