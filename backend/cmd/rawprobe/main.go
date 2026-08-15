@@ -105,4 +105,3 @@ func main() {
 		fmt.Println("[news] FAIL")
 	}
 }
-

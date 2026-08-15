@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -88,7 +87,7 @@ type Manager struct {
 	mu      sync.Mutex
 	jobs    map[string]*Job
 	batches map[string]*Batch
-	recent  []*Job
+	recent  []RecentPublic
 	queues  map[string]chan *Job
 	started bool
 	prewarm string
@@ -170,7 +169,7 @@ func (m *Manager) finalize(job *Job, err error) {
 	job.OK = &ok
 	job.Pct = 100
 	job.UpdatedAt = nowStr()
-	m.recent = append(m.recent, job)
+	m.recent = append(m.recent, recentPublic(job))
 	if len(m.recent) > recentMax {
 		m.recent = m.recent[len(m.recent)-recentMax:]
 	}
@@ -283,6 +282,24 @@ type JobPublic struct {
 	Cancellable bool           `json:"cancellable"`
 }
 
+// RecentPublic 最近任务精简结构（对齐 Python _recent 元素）
+type RecentPublic struct {
+	JobID   string `json:"job_id"`
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Status  Status `json:"status"`
+	OK      *bool  `json:"ok"`
+	Error   any    `json:"error"`
+	BatchID any    `json:"batch_id"`
+}
+
+func recentPublic(j *Job) RecentPublic {
+	return RecentPublic{
+		JobID: j.ID, Kind: j.Kind, Label: j.Label, Status: j.Status,
+		OK: j.OK, Error: strOrNil(j.Error), BatchID: batchIDOf(j),
+	}
+}
+
 type BatchPublic struct {
 	BatchID      string   `json:"batch_id"`
 	Kind         string   `json:"kind"`
@@ -308,54 +325,223 @@ func (m *Manager) jobPublic(j *Job) JobPublic {
 func (m *Manager) Snapshot() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var running, queued []JobPublic
+	var active []*Job
 	for _, j := range m.jobs {
-		switch j.Status {
-		case StatusRunning:
-			running = append(running, m.jobPublic(j))
-		case StatusQueued:
-			queued = append(queued, m.jobPublic(j))
+		if j.Status == StatusQueued || j.Status == StatusRunning {
+			active = append(active, j)
 		}
 	}
-	sort.Slice(running, func(i, jj int) bool { return running[i].JobID < running[jj].JobID })
-	sort.Slice(queued, func(i, jj int) bool { return queued[i].JobID < queued[jj].JobID })
-	var recents []JobPublic
-	for _, j := range m.recent {
-		recents = append(recents, m.jobPublic(j))
-	}
-	var batches []BatchPublic
+	// primary：优先 batch，其次 refresh 车道 running，其次任意 running/queued，最后 recent
+	var primary map[string]any
+	// batch 优先
 	for _, b := range m.batches {
-		bp := BatchPublic{BatchID: b.ID, Kind: b.Kind, Label: b.Label, Status: b.Status,
-			DoneCount: b.DoneCount, Total: b.Total, Pct: b.Pct}
-		for _, id := range b.ChildIDs {
-			if j, ok := m.jobs[id]; ok {
-				if j.Status == StatusRunning {
-					bp.Running = append(bp.Running, j.Label)
-				} else if j.Status == StatusQueued {
-					bp.Queued = append(bp.Queued, j.Label)
+		if b.Status == StatusRunning {
+			bp := m.batchPublic(b)
+			primary = map[string]any{
+				"running": true, "job_id": bp.BatchID, "kind": bp.Kind, "label": bp.Label,
+				"step": bp.CurrentLabel, "done": []string{}, "done_count": bp.DoneCount,
+				"current": bp.DoneCount, "total": bp.Total, "pct": bp.Pct,
+				"error": nil, "ok": nil, "batch_id": bp.BatchID,
+			}
+			break
+		}
+	}
+	if primary == nil {
+		for _, lane := range []string{LaneRefresh, LaneAI} {
+			for _, j := range active {
+				if j.Lane == lane && j.Status == StatusRunning {
+					primary = m.primaryOf(j)
+					break
 				}
 			}
+			if primary != nil {
+				break
+			}
 		}
-		if len(bp.Running) > 0 {
-			bp.CurrentLabel = bp.Running[0]
-		} else if len(bp.Queued) > 0 {
-			bp.CurrentLabel = bp.Queued[0]
+	}
+	if primary == nil && len(active) > 0 {
+		primary = m.primaryOf(active[0])
+	}
+	if primary == nil {
+		var last *RecentPublic
+		if len(m.recent) > 0 {
+			r := m.recent[0]
+			last = &r
 		}
-		batches = append(batches, bp)
+		okV := any(nil)
+		if last != nil {
+			okV = last.OK
+		}
+		pct := 0
+		if last != nil && last.OK != nil && *last.OK {
+			pct = 100
+		}
+		primary = map[string]any{
+			"running": false, "job_id": jobIDOf2(last), "kind": kindOf2(last), "label": labelOf2(last),
+			"step": "", "done": []string{}, "done_count": 0, "current": 0, "total": 1,
+			"pct": pct, "error": errOf2(last), "ok": okV, "batch_id": batchIDOf2(last),
+		}
 	}
-	step := ""
-	var done []string
-	doneCount, current, total, pct := 0, 0, 1, 0
-	runningAny := len(running) > 0
-	if len(running) > 0 {
-		r := running[0]
-		step, done, doneCount, current, total, pct = r.Step, r.Done, r.DoneCount, r.Current, r.Total, r.Pct
+
+	laneSnap := func(lane string) map[string]any {
+		var run, q []JobPublic
+		for _, j := range active {
+			if j.Lane != lane {
+				continue
+			}
+			if j.Status == StatusRunning {
+				run = append(run, m.jobPublic(j))
+			} else if j.Status == StatusQueued {
+				q = append(q, m.jobPublic(j))
+			}
+		}
+		if run == nil {
+			run = []JobPublic{}
+		}
+		if q == nil {
+			q = []JobPublic{}
+		}
+		return map[string]any{"running": run, "queue": q}
 	}
+	var queue, jobsPub, batchesPub, recents []any
+	for _, j := range active {
+		jp := m.jobPublic(j)
+		jobsPub = append(jobsPub, jp)
+		if j.Status == StatusQueued {
+			queue = append(queue, jp)
+		}
+	}
+	for _, b := range m.batches {
+		if b.Status == StatusRunning {
+			batchesPub = append(batchesPub, m.batchPublic(b))
+		}
+	}
+	for _, r := range m.recent {
+		recents = append(recents, r)
+	}
+	if jobsPub == nil {
+		jobsPub = []any{}
+	}
+	if queue == nil {
+		queue = []any{}
+	}
+	if batchesPub == nil {
+		batchesPub = []any{}
+	}
+	if recents == nil {
+		recents = []any{}
+	}
+	for k, v := range primary {
+		primary[k] = v
+	}
+	out := map[string]any{
+		"running": primary["running"], "job_id": primary["job_id"],
+		"kind": primary["kind"], "label": primary["label"], "step": primary["step"],
+		"done": primary["done"], "done_count": primary["done_count"],
+		"current": primary["current"], "total": primary["total"], "pct": primary["pct"],
+		"error": primary["error"], "ok": primary["ok"], "batch_id": primary["batch_id"],
+		"updated_at": nowStr(), "queue": queue, "jobs": jobsPub,
+		"batches": batchesPub, "recent": recents,
+		"lanes": map[string]any{LaneRefresh: laneSnap(LaneRefresh), LaneAI: laneSnap(LaneAI)},
+	}
+	return out
+}
+
+func (m *Manager) primaryOf(j *Job) map[string]any {
 	return map[string]any{
-		"running": runningAny, "step": step, "done": done,
-		"done_count": doneCount, "current": current, "total": total, "pct": pct,
-		"updated_at": nowStr(), "jobs": running, "queued": queued, "recent": recents, "batches": batches,
+		"running": true, "job_id": j.ID, "kind": j.Kind, "label": j.Label,
+		"step": j.Step, "done": append([]string{}, j.Done...), "done_count": j.DoneCount,
+		"current": j.Current, "total": j.Total, "pct": j.Pct,
+		"error": strOrNil(j.Error), "ok": j.OK, "batch_id": j.BatchID,
 	}
+}
+
+func (m *Manager) batchPublic(b *Batch) BatchPublic {
+	bp := BatchPublic{BatchID: b.ID, Kind: b.Kind, Label: b.Label, Status: b.Status,
+		DoneCount: b.DoneCount, Total: b.Total, Pct: b.Pct}
+	for _, id := range b.ChildIDs {
+		if j, ok := m.jobs[id]; ok {
+			if j.Status == StatusRunning {
+				bp.Running = append(bp.Running, j.Label)
+			} else if j.Status == StatusQueued {
+				bp.Queued = append(bp.Queued, j.Label)
+			}
+		}
+	}
+	if len(bp.Running) > 0 {
+		bp.CurrentLabel = bp.Running[0]
+	} else if len(bp.Queued) > 0 {
+		bp.CurrentLabel = bp.Queued[0]
+	}
+	return bp
+}
+
+func jobIDOf(j *Job) any {
+	if j == nil {
+		return nil
+	}
+	return j.ID
+}
+func kindOf(j *Job) string {
+	if j == nil {
+		return ""
+	}
+	return j.Kind
+}
+func labelOf(j *Job) string {
+	if j == nil {
+		return ""
+	}
+	return j.Label
+}
+func errOf(j *Job) any {
+	if j == nil || j.Error == "" {
+		return nil
+	}
+	return j.Error
+}
+func batchIDOf(j *Job) any {
+	if j == nil || j.BatchID == "" {
+		return nil
+	}
+	return j.BatchID
+}
+func jobIDOf2(j *RecentPublic) any {
+	if j == nil {
+		return nil
+	}
+	return j.JobID
+}
+func kindOf2(j *RecentPublic) string {
+	if j == nil {
+		return ""
+	}
+	return j.Kind
+}
+func labelOf2(j *RecentPublic) string {
+	if j == nil {
+		return ""
+	}
+	return j.Label
+}
+func errOf2(j *RecentPublic) any {
+	if j == nil || j.Error == nil {
+		return nil
+	}
+	return j.Error
+}
+func batchIDOf2(j *RecentPublic) any {
+	if j == nil || j.BatchID == nil {
+		return nil
+	}
+	return j.BatchID
+}
+
+func strOrNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (m *Manager) Prewarm(steps []string, fn func(step string) error) string {
@@ -401,13 +587,19 @@ func (m *Manager) PrewarmSnapshot() map[string]any {
 	}
 	if j == nil {
 		return map[string]any{"running": false, "step": "", "done": []string{}, "done_count": 0,
-			"current": 0, "total": 1, "pct": 0, "updated_at": nowStr()}
+			"current": 0, "total": 1, "pct": 0, "updated_at": nowStr(),
+			"kind": "", "label": "", "job_id": nil, "ok": nil, "error": nil}
 	}
 	running := j.Status == StatusRunning || j.Status == StatusQueued
+	pct := j.Pct
+	if !running && j.OK != nil && *j.OK {
+		pct = 100
+	}
 	return map[string]any{
 		"running": running, "step": j.Step, "done": append([]string{}, j.Done...),
 		"done_count": j.DoneCount, "current": j.Current, "total": j.Total,
-		"pct": j.Pct, "updated_at": j.UpdatedAt,
+		"pct": pct, "updated_at": j.UpdatedAt,
+		"kind": j.Kind, "label": j.Label, "job_id": j.ID, "ok": j.OK, "error": strOrNil(j.Error),
 	}
 }
 

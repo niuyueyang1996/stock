@@ -51,7 +51,13 @@ func main() {
 	x := raw.NewXueqiu()
 	info := x.CompanyInfo(ctx, "SH600519")
 	if len(info) > 0 {
-		fmt.Printf("[xueqiu] keys=%v reg_asset=%v\n", func() []string { var ks []string; for k := range info { ks = append(ks, k) }; return ks }(), info["reg_asset"])
+		fmt.Printf("[xueqiu] keys=%v reg_asset=%v\n", func() []string {
+			var ks []string
+			for k := range info {
+				ks = append(ks, k)
+			}
+			return ks
+		}(), info["reg_asset"])
 	} else {
 		fmt.Println("[xueqiu] FAIL")
 	}
