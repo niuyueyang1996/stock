@@ -17,6 +17,7 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/route"
+	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/dividend"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
@@ -140,10 +141,15 @@ func main() {
 	// 组合服务
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY)
 
+	// AI 服务
+	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
+		dao.NewAIModelDAO(gdb), dao.NewAIReportDAO(gdb), dao.NewTagPrefDAO(gdb),
+		quoteSvc, liveSvc, portSvc, fxSvc)
+
 	svcs := &route.Services{
 		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
-		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc,
+		Jobs: jm, ConfigDAO: cfgDAO, Indices: idxSvc, AI: aiSvc,
 	}
 	_ = divSvc
 	_ = settingsSvc

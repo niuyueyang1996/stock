@@ -13,6 +13,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
@@ -38,11 +39,14 @@ type Services struct {
 	Indices   *indices.Service
 	Jobs      *jobs.Manager
 	ConfigDAO *dao.ConfigDAO
+	AI        *ai.Service
 }
 
 // Setup 注册全部路由
 func Setup(r *gin.Engine, s *Services) {
 	api := r.Group("/api")
+
+	setupAIRoutes(api, s)
 
 	// ---- system ----
 	api.GET("/health", func(c *gin.Context) {
