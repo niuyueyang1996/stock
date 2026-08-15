@@ -1,0 +1,162 @@
+package dao
+
+// CacheDAO 派生缓存读写（daily_price_cache/financial_cache/fundflow 等）。
+// GET 只读缓存零网络；写入仅刷新路径。
+
+import (
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"stockanalyzer/internal/db"
+)
+
+type CacheDAO struct{ DB *gorm.DB }
+
+func NewCacheDAO(g *gorm.DB) *CacheDAO { return &CacheDAO{DB: g} }
+
+// DailyPrice 日K行
+type DailyPrice struct {
+	Code      string   `gorm:"column:code;primaryKey"`
+	TradeDate string   `gorm:"column:trade_date;primaryKey"`
+	Open      *float64 `gorm:"column:open"`
+	High      *float64 `gorm:"column:high"`
+	Low       *float64 `gorm:"column:low"`
+	Close     *float64 `gorm:"column:close"`
+	Volume    *float64 `gorm:"column:volume"`
+	Amount    *float64 `gorm:"column:amount"`
+	PctChange *float64 `gorm:"column:pct_change"`
+	TotalMv   *float64 `gorm:"column:total_mv"`
+	IsClosed  int      `gorm:"column:is_closed"`
+	Source    *string  `gorm:"column:source"`
+	UpdatedAt *string  `gorm:"column:updated_at"`
+}
+
+func (DailyPrice) TableName() string { return "daily_price_cache" }
+
+// GetLatestDailyPrice 最近一条日K
+func (d *CacheDAO) GetLatestDailyPrice(code string) *DailyPrice {
+	var r DailyPrice
+	if err := d.DB.Where("code = ?", code).Order("trade_date DESC").First(&r).Error; err != nil {
+		return nil
+	}
+	return &r
+}
+
+// GetDailyPrice 指定日
+func (d *CacheDAO) GetDailyPrice(code, date string) *DailyPrice {
+	var r DailyPrice
+	if err := d.DB.Where("code = ? AND trade_date = ?", code, date).First(&r).Error; err != nil {
+		return nil
+	}
+	return &r
+}
+
+// GetDailyPrices 区间（升序）
+func (d *CacheDAO) GetDailyPrices(code, start, end string) []DailyPrice {
+	var rows []DailyPrice
+	q := d.DB.Where("code = ?", code)
+	if start != "" {
+		q = q.Where("trade_date >= ?", start)
+	}
+	if end != "" {
+		q = q.Where("trade_date <= ?", end)
+	}
+	q.Order("trade_date").Find(&rows)
+	return rows
+}
+
+// PrevClose code 在 date 之前（含）最近一条收盘
+func (d *CacheDAO) PrevClose(code, date string) *float64 {
+	var r DailyPrice
+	if err := d.DB.Where("code = ? AND trade_date <= ? AND close IS NOT NULL", code, date).
+		Order("trade_date DESC").First(&r).Error; err != nil {
+		return nil
+	}
+	return r.Close
+}
+
+// UpsertDailyPrices 批量 upsert 日K
+func (d *CacheDAO) UpsertDailyPrices(rows []DailyPrice) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	now := time.Now().Format("2006-01-02T15:04:05")
+	for i := range rows {
+		rows[i].UpdatedAt = &now
+	}
+	return d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}},
+		DoUpdates: clause.AssignmentColumns([]string{"open", "high", "low", "close", "volume", "amount", "pct_change", "total_mv", "is_closed", "source", "updated_at"}),
+	}).Create(&rows).Error
+}
+
+// MarkClosed 标记当日已收盘定格
+func (d *CacheDAO) MarkClosed(code, date string) {
+	_ = d.DB.Exec("UPDATE daily_price_cache SET is_closed=1 WHERE code=? AND trade_date=?", code, date)
+}
+
+// PurgeWeekend 清理周末假K（trade_date 落在周六/周日）
+func (d *CacheDAO) PurgeWeekend(code string) {
+	_ = d.DB.Exec("DELETE FROM daily_price_cache WHERE code=? AND (strftime('%w', trade_date) IN ('0','6'))", code)
+}
+
+// PurgeFundflowFuture 清理 code+trade_date 下超前时刻的 15m 分时（盘前污染）
+func (d *CacheDAO) PurgeFundflowFuture(code, date, ts string) {
+	_ = d.DB.Exec("DELETE FROM fundflow_15m_cache WHERE code=? AND trade_date=? AND ts>?", code, date, ts)
+}
+
+// UpsertFinancials 财务落库
+func (d *CacheDAO) UpsertFinancials(f *db.FinancialCache) error {
+	return d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "code"}, {Name: "report_date"}},
+		DoUpdates: clause.AssignmentColumns([]string{"roe", "roa", "revenue_yoy", "profit_yoy", "gross_margin", "dv_per_share", "net_profit", "net_assets", "eps", "total_shares", "payout_ratio", "dv_report", "profit_series", "revenue_series", "roe_annual", "revenue_yoy_annual", "profit_yoy_annual", "last_year_net_assets"}),
+	}).Create(f).Error
+}
+
+// FundflowMinRow 15m 分时行
+type FundflowMinRow struct {
+	Code          string   `gorm:"column:code;primaryKey"`
+	TradeDate     string   `gorm:"column:trade_date;primaryKey"`
+	Ts            string   `gorm:"column:ts;primaryKey"`
+	MainNet       *float64 `gorm:"column:main_net"`
+	SuperLargeNet *float64 `gorm:"column:super_large_net"`
+	LargeNet      *float64 `gorm:"column:large_net"`
+	MediumNet     *float64 `gorm:"column:medium_net"`
+	SmallNet      *float64 `gorm:"column:small_net"`
+	XsNet         *float64 `gorm:"column:xs_net"`
+	BuyAmount     *float64 `gorm:"column:buy_amount"`
+	SellAmount    *float64 `gorm:"column:sell_amount"`
+	Price         *float64 `gorm:"column:price"`
+}
+
+func (FundflowMinRow) TableName() string { return "fundflow_15m_cache" }
+
+// UpsertFundflowMin 15m 分时落库
+func (d *CacheDAO) UpsertFundflowMin(code, date string, points []FundflowMinRow) error {
+	if len(points) == 0 {
+		return nil
+	}
+	return d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}, {Name: "ts"}},
+		DoUpdates: clause.AssignmentColumns([]string{"main_net", "super_large_net", "large_net", "medium_net", "small_net", "xs_net", "buy_amount", "sell_amount", "price"}),
+	}).Create(&points).Error
+}
+
+// UpsertDailyFundflow 日级资金流落库
+func (d *CacheDAO) UpsertDailyFundflow(f *db.DailyFundflowCache) error {
+	return d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}},
+		DoUpdates: clause.AssignmentColumns([]string{"netamount", "main_net", "super_large_net", "large_net", "medium_net", "small_net", "main_net_pct", "p95", "xs_net", "p15", "p40", "p75", "buy_amount", "sell_amount"}),
+	}).Create(f).Error
+}
+
+// GetDailyFundflowCount 窗口内资金流天数与最新日
+func (d *CacheDAO) GetDailyFundflowCount(code, windowStart string) (int64, string) {
+	var n int64
+	var mx string
+	row := d.DB.Raw("SELECT COUNT(*), COALESCE(MAX(trade_date),'') FROM daily_fundflow_cache WHERE code=? AND trade_date>=?", code, windowStart).Row()
+	_ = row.Scan(&n, &mx)
+	return n, mx
+}

@@ -1,0 +1,95 @@
+package refresh
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"gorm.io/gorm"
+
+	"stockanalyzer/internal/db"
+	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/service/market"
+)
+
+func openRefresh(t *testing.T) (*Service, *gorm.DB) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	g, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		sqlDB, _ := g.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
+	h := holdings.New(dao.NewHoldingsDAO(g), nil)
+	mm := market.NewMarketManager()
+	s := New(g, dao.NewCacheDAO(g), h, mm, nil, nil, nil, nil, jobs.New())
+	s.IsTradeDay = func(string) bool { return true }
+	s.BeforeOpen = func(time.Time) bool { return false }
+	s.MarketClosed = func(time.Time) bool { return true }
+	return s, g
+}
+
+func TestShouldRunDynamicLoop(t *testing.T) {
+	s, _ := openRefresh(t)
+	// 盘中 10:00 周五 → true
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local) // 周五
+	if !s.ShouldRunDynamicLoop(now, false) {
+		t.Fatal("盘中应运行")
+	}
+	// 16:35 → false
+	now2 := time.Date(2026, 8, 14, 16, 35, 0, 0, time.Local)
+	if s.ShouldRunDynamicLoop(now2, false) {
+		t.Fatal("16:30 后不应运行")
+	}
+	// 周末 → false
+	now3 := time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local) // 周六
+	if s.ShouldRunDynamicLoop(now3, false) {
+		t.Fatal("周末不应运行")
+	}
+	// busy → false
+	if s.ShouldRunDynamicLoop(now, true) {
+		t.Fatal("busy 不应运行")
+	}
+}
+
+func TestShouldRunDailySync(t *testing.T) {
+	s, _ := openRefresh(t)
+	// 16:10 后且当日未同步 → true
+	now := time.Date(2026, 8, 14, 16, 20, 0, 0, time.Local)
+	if !s.ShouldRunDailySync(now, "2026-08-13") {
+		t.Fatal("收盘后应同步")
+	}
+	// 当日已同步 → false
+	if s.ShouldRunDailySync(now, "2026-08-14") {
+		t.Fatal("当日已同步不应重复")
+	}
+	// 16:10 前 → false
+	now2 := time.Date(2026, 8, 14, 16, 0, 0, 0, time.Local)
+	if s.ShouldRunDailySync(now2, "2026-08-13") {
+		t.Fatal("16:10 前不应同步")
+	}
+}
+
+func TestSyncDailyBarsIncremental(t *testing.T) {
+	s, g := openRefresh(t)
+	_ = g.Exec("INSERT INTO stocks(code,name,market,currency) VALUES('600519','贵州茅台','sh','CNY')").Error
+	// 预置前一日缓存
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	closeV := 100.0
+	src := "tencent"
+	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{
+		Code: "600519", TradeDate: yesterday, Close: &closeV, Source: &src,
+	}})
+	// 增量：无行情源（mock 管理器空链）→ source_fail（合理，不 panic）
+	r := s.syncDailyBars(t.Context(), "600519", time.Now(), false)
+	if r["reason"] != "source_fail" && r["reason"] != "ok" {
+		t.Fatalf("reason = %v", r["reason"])
+	}
+}
