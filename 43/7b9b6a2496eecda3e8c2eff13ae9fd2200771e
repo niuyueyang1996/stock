@@ -1,0 +1,19 @@
+backend/internal/db/dao/cache.go
+  h_07352c0544a725 1-162
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 1-409
+backend/internal/service/refresh/refresh_test.go
+  h_07352c0544a725 1-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "437b9b6a2496eecda3e8c2eff13ae9fd2200771e",
+  "prompts": {},
+  "logical_commit_id": "437b9b6a2496eecda3e8c2eff13ae9fd2200771e",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
