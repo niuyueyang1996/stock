@@ -240,9 +240,13 @@ func (s *Service) ComputeLive(code string, price *float64, asOf string, fxHKD *f
 	out["total_shares"] = round2(*totalShares)
 	out["total_mv"] = float64(int64(totalMV))
 
-	// 货币统一：港股市值=港元 → mv_cny = mv×fx；缺汇率 → 序列回退
+	// 货币统一：仅港股市值=港元 → mv_cny = mv×fx；缺汇率 → 序列回退。
+	// A股/ETF 人民币市值绝不乘汇率（000333 曾被 0.86 折掉 12% 的教训）
 	mvCNY := totalMV
-	if fxHKD != nil {
+	if s.isHKStock(code) {
+		if fxHKD == nil {
+			return s.computeLiveSeriesFallback(code, price, asOf)
+		}
 		mvCNY = totalMV * *fxHKD
 	}
 
@@ -588,4 +592,11 @@ func itoa(n int) string {
 		b = append([]byte{'-'}, b...)
 	}
 	return string(b)
+}
+
+// isHKStock 港股判定：stocks.currency=HKD（查缓存表，零网络）
+func (s *Service) isHKStock(code string) bool {
+	var cur string
+	_ = s.DB.Raw("SELECT COALESCE(currency,'CNY') FROM stocks WHERE code=?", code).Scan(&cur).Error
+	return cur == "HKD"
 }

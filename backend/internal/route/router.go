@@ -24,6 +24,7 @@ import (
 // Services 全部依赖（main 装配）
 type Services struct {
 	DB        *gorm.DB
+	Cache     *dao.CacheDAO
 	Holdings  *holdings.Service
 	Settings  *settings.Service
 	Fx        *fx.Service
@@ -89,6 +90,19 @@ func Setup(r *gin.Engine, s *Services) {
 	api.GET("/holdings", func(c *gin.Context) {
 		active := c.DefaultQuery("active", "true") != "false"
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.GetHoldings(active)})
+	})
+
+	// ---- stocks ----
+	api.GET("/stocks/:code", func(c *gin.Context) {
+		code := c.Param("code")
+		partial := c.Query("partial") == "1"
+		window := 15
+		if v := c.Query("window"); v != "" {
+			fmt.Sscanf(v, "%d", &window)
+		}
+		asOf := c.Query("as_of")
+		status, body := stockDetail(s, code, partial, window, asOf)
+		c.JSON(status, body)
 	})
 
 	// ---- trades ----

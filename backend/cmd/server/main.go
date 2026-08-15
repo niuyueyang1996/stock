@@ -102,6 +102,9 @@ func main() {
 	// 刷新服务
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
+	quoteSvc.BeforeOpen = func(now time.Time) bool {
+		return now.Hour()*60+now.Minute() < 9*60+15
+	}
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 
 	calIsOpen := func(dateStr string) bool {
@@ -134,7 +137,7 @@ func main() {
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY)
 
 	svcs := &route.Services{
-		DB: gdb, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
+		DB: gdb, Cache: cacheDAO, Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
 		Jobs: jm, ConfigDAO: cfgDAO,
 	}
