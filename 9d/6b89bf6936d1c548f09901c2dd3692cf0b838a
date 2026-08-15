@@ -1,0 +1,17 @@
+backend/internal/service/jobs/jobs.go
+  h_07352c0544a725 1-489
+backend/internal/service/jobs/jobs_test.go
+  h_07352c0544a725 1-136
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9d6b89bf6936d1c548f09901c2dd3692cf0b838a",
+  "prompts": {},
+  "logical_commit_id": "9d6b89bf6936d1c548f09901c2dd3692cf0b838a",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
