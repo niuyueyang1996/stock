@@ -1,0 +1,15 @@
+backend/internal/route/import_excel.go
+  h_07352c0544a725 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1f1fd74202ae97d9cd7ec1856f844ffb8e552c63",
+  "prompts": {},
+  "logical_commit_id": "1f1fd74202ae97d9cd7ec1856f844ffb8e552c63",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
