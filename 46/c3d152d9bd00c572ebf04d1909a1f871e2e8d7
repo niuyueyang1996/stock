@@ -1,0 +1,19 @@
+backend/internal/route/router.go
+  h_07352c0544a725 8,14,97-154,166-218
+backend/internal/route/stocks_extra.go
+  h_07352c0544a725 1-78
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 8,18,71,126-233,270-271,289-292,295-299,304-311,315-319,325,327-331,334-335,341,343-346,348-350,366-370,373-382,385-483,485-522,524-574,577-585,588-717
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "46c3d152d9bd00c572ebf04d1909a1f871e2e8d7",
+  "prompts": {},
+  "logical_commit_id": "46c3d152d9bd00c572ebf04d1909a1f871e2e8d7",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
