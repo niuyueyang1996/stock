@@ -25,6 +25,36 @@ function initChart(el) {
   // 容器曾被 display:none / 清空过：先恢复可见，否则 init 宽高为 0，切回有数据也画不出来
   if (el.style.display === 'none') el.style.display = '';
   const chart = echarts.getInstanceByDom(el) || echarts.init(el);
+  // 手机端（≤700px）：收紧所有 canvas 图的 grid 左右留白——
+  // 固定 px 边距（left 60~90 / right 16~70）在窄屏上占比过大，造成绘图区两侧大片空白。
+  // 规则：左轴为数值轴时 left 压到 46px（够 10px 字号刻度）；右侧无轴时压到 8px，
+  //      有右轴（双 yAxis / 系列用 yAxisIndex 1）保留 50px 给右轴刻度；左轴为类目轴（名称标签）不动。
+  if (!chart._dsTightenGrid) {
+    chart._dsTightenGrid = true;
+    const origSetOption = chart.setOption.bind(chart);
+    chart.setOption = (option, ...rest) => {
+      if (option && window.innerWidth <= 700 && option.grid) {
+        const hasRightAxis = (Array.isArray(option.yAxis) && option.yAxis.length > 1) ||
+          (Array.isArray(option.series) && option.series.some((s) => s && s.yAxisIndex === 1));
+        // yAxis 可能是数组或单对象；左轴为类目轴（名称标签）时多留空间防截断
+        const y0 = Array.isArray(option.yAxis) ? option.yAxis[0] : option.yAxis;
+        const leftIsCategory = !!(y0 && y0.type === 'category');
+        const leftClamp = leftIsCategory ? 64 : 46;
+        const rightClamp = hasRightAxis ? 50 : 8;
+        // grid 可能是单对象（多数图）或数组（K 线双 grid）
+        const isArr = Array.isArray(option.grid);
+        const grids = isArr ? option.grid : [option.grid];
+        const tightened = grids.map((g) => {
+          const g2 = Object.assign({}, g);
+          if (typeof g2.left === 'number' && g2.left > leftClamp) g2.left = leftClamp;
+          if (typeof g2.right === 'number' && g2.right > rightClamp) g2.right = rightClamp;
+          return g2;
+        });
+        option.grid = isArr ? tightened : tightened[0];
+      }
+      return origSetOption(option, ...rest);
+    };
+  }
   if (!_chartResizeWired.has(chart)) {
     _chartResizeWired.add(chart);
     window.addEventListener('resize', () => chart.resize());
@@ -528,7 +558,7 @@ function fundflowIntraday(el, points, window) {
     legend: { data: ['特大单', '大单', '中单', '小单', '特小单'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 70, right: 30, top: 60, bottom: 40 },
-    xAxis: { type: 'category', data: ts, axisLabel: { interval: 'auto' } },
+    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: { interval: 'auto' } },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
     series,
@@ -575,7 +605,7 @@ function fundflowBuySell(el, points, window) {
     legend: { data: ['买盘', '卖盘', '净流入', '窗口净流入'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 70, right: 70, top: 60, bottom: 40 },
-    xAxis: { type: 'category', data: ts, axisLabel: { interval: 'auto' } },
+    xAxis: { type: 'category', data: ts, boundaryGap: false, axisLabel: { interval: 'auto' } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
       { type: 'value', splitLine: { show: false }, axisLabel: { formatter: (v) => fmtFlow(v) } },
@@ -704,7 +734,7 @@ function fundflowStacked(el, days, windowLabel) {
     legend: { data: ['特大单', '大单', '中单', '小单', '特小单'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 75, right: 30, top: 60, bottom: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
+    xAxis: { type: 'category', data: labels, boundaryGap: false, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     dataZoom: [
       { type: 'inside', start: zr.start, end: zr.end },
@@ -752,7 +782,7 @@ function fundflowBandsCum(el, days, windowLabel) {
     legend: { data: KEYS.map((k) => k[1]), top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 75, right: 30, top: 60, bottom: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
+    xAxis: { type: 'category', data: labels, boundaryGap: false, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
     yAxis: { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
     dataZoom: [
       { type: 'inside', start: zr.start, end: zr.end },
@@ -798,7 +828,7 @@ function fundflowDayBuySell(el, days, windowLabel) {
     legend: { data: ['买盘', '卖盘', '净流入', windowLabel + '净流入'], top: 26, type: 'scroll',
               icon: 'roundRect', itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 75, right: 70, top: 60, bottom: 56 },
-    xAxis: { type: 'category', data: labels, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
+    xAxis: { type: 'category', data: labels, boundaryGap: false, axisLabel: { interval: 'auto', rotate: labels.length > 12 ? 35 : 0 } },
     yAxis: [
       { type: 'value', axisLabel: { formatter: (v) => fmtFlow(v) } },
       { type: 'value', splitLine: { show: false }, axisLabel: { formatter: (v) => fmtFlow(v) } },
@@ -857,7 +887,8 @@ function fundflowPrice(el, points, windowLabel) {
       },
     },
     grid: { left: 62, right: 20, top: 36, bottom: 46 },
-    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 10, hideOverlap: true },
+    xAxis: { type: 'category', data: labels, boundaryGap: false,
+             axisLabel: { fontSize: 10, hideOverlap: true },
              axisPointer: { label: { show: false } } },
     yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
     dataZoom: [
@@ -939,7 +970,7 @@ function indexVolumePrice(el, points, windowLabel, names) {
     legend: { data: series.map((s) => s.name), top: 26, type: 'scroll', icon: 'roundRect',
               itemWidth: 22, itemHeight: 10, itemGap: 10 },
     grid: { left: 60, right: 62, top: 60, bottom: 46 },
-    xAxis: { type: 'category', data: labels, boundaryGap: true,
+    xAxis: { type: 'category', data: labels, boundaryGap: false,
              axisLabel: { fontSize: 10, hideOverlap: true, rotate: labels.length > 20 ? 35 : 0 } },
     yAxis: [
       { type: 'value', scale: true, name: '点位', nameTextStyle: { fontSize: 10, color: '#8b95a5' },

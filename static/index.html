@@ -2,18 +2,19 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
   <title>持仓总览 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
-<body>
+<body class="page-index">
   <nav></nav>
   <div class="container">
     <div class="cards" id="summary"></div>
     <div class="panel">
-      <div class="row">
-        <h2 style="margin:0">持仓明细</h2>
+      <div class="row panel-head-row">
+        <h2>持仓明细</h2>
         <span class="sub">现价在交易时段自动更新（约每 5 分钟），无需手动刷新</span>
         <span class="grow"></span>
         <select id="sortSel" title="排序">
@@ -48,9 +49,9 @@
           <div class="eg-h">没有同花顺也没关系</div>
           <p>直接去 <a href="/static/trade.html">交易评分</a> 页，搜索股票代码，录入一笔买入即可。</p>
         </div>
-        <p class="muted" style="margin-top:12px;font-size:12px">导入或录入后，建议点右上角「完整更新」拉一次历史数据。详见 <a href="/static/help.html">使用帮助</a>。</p>
+        <p class="muted eg-note">导入或录入后，建议点右上角「完整更新」拉一次历史数据。详见 <a href="/static/help.html">使用帮助</a>。</p>
       </div>
-      <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <div class="row end mt-14">
         <button class="btn danger" id="resetBtn" onclick="resetAll()" title="清空交易、持仓和缓存（不可恢复）">清空全部数据</button>
       </div>
     </div>
@@ -92,9 +93,9 @@
       const more = missing.length > 4 ? ` 等 ${missing.length} 只` : '';
       bar.style.display = 'block';
       bar.innerHTML = `
-        <div class="row" style="background:#fff5f5;border:1px solid #ffc9c9;border-radius:8px;padding:10px 14px;margin:0 0 12px;align-items:center;gap:12px;flex-wrap:wrap">
-          <span style="flex:1;min-width:200px;color:#c92a2a;font-size:13px">⚠ 有 ${missing.length} 只持仓还没下载到行情数据：${esc(names)}${more}。</span>
-          <button class="btn primary" id="dlMissingBtn" style="padding:4px 14px;font-size:12px">一键下载全部数据</button>
+        <div class="alert-bar">
+          <span class="alert-msg">⚠ 有 ${missing.length} 只持仓还没下载到行情数据：${esc(names)}${more}。</span>
+          <button class="btn primary" id="dlMissingBtn">一键下载全部数据</button>
         </div>`;
       bar.querySelector('#dlMissingBtn').onclick = async () => {
         const btn = bar.querySelector('#dlMissingBtn');
@@ -299,6 +300,15 @@
       loadPage();
     });
     setupViewToggle();
+    // 手机端默认卡片视图（窄屏下列表表格需横向滚动，卡片更顺手）
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      document.querySelectorAll('#viewToggle button').forEach((b) => b.classList.remove('active'));
+      const cardBtn = document.querySelector('#viewToggle [data-view="card"]');
+      if (cardBtn) cardBtn.classList.add('active');
+      viewMode = 'card';
+      document.getElementById('listView').style.display = 'none';
+      document.getElementById('cardView').style.display = 'grid';
+    }
     // 简单/高级模式变化 → 重渲染列；页面加载时同模式的首次事件不重复重载
     let _uiMode = (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
     window.addEventListener('app-settings', (e) => {

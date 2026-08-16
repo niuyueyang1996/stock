@@ -1,46 +1,47 @@
 :root {
-  /* 品牌蓝阶（全站唯一蓝） */
-  --blue-600: #2f6fed;
-  --blue-700: #1f56cf;
-  --blue-050: #eef3ff;
-  --blue-100: #e3ecff;
+  /* 品牌蓝阶（antd-mobile 规范：brand #1677ff） */
+  --blue-600: #1677ff;
+  --blue-700: #0e5fd8;
+  --blue-050: #e8f1ff;
+  --blue-100: #d6e8ff;
   --primary: var(--blue-600);
   --primary-deep: var(--blue-700);
   --primary-weak: var(--blue-050);
   --primary-weak-2: var(--blue-100);
-  /* 表面 */
-  --bg: #f4f6fb;
-  --bg-grad: linear-gradient(180deg, #f8fafd 0%, #eef2f9 100%);
+  /* 表面：antd-mobile 页面底色 #f5f5f5（--adm-color-box），卡片纯白 */
+  --bg: #f5f5f5;
+  --bg-grad: linear-gradient(180deg, #f8f8f9 0%, #f1f2f4 100%);
   --card: #ffffff;
-  --border: #e6e9f0;
-  --border-strong: #d9deea;
-  --text: #1d2129;
-  --text-2: #2a3140;
-  --muted: #8792a4;
-  --muted-2: #a0a8b5;
-  /* 语义色：A股涨红跌绿 */
+  --border: #eeeeee;              /* antd-mobile --adm-color-border */
+  --border-strong: #e2e4e8;
+  --text: #333333;                /* antd-mobile --adm-color-text */
+  --text-2: #666666;              /* --adm-color-text-secondary */
+  --muted: #999999;               /* --adm-color-weak */
+  --muted-2: #cccccc;             /* --adm-color-light */
+  /* 语义色：A股涨红跌绿（行情语义，保持） */
   --up: #d13b3b;
   --down: #2b9a4a;
-  --red: #e03131;
-  --green: #2f9e44;
-  --warn: #e8590c;
+  /* UI 语义色：antd-mobile 官方令牌 */
+  --red: #ff3141;                 /* --adm-color-danger */
+  --green: #00b578;               /* --adm-color-success */
+  --warn: #ff8f1f;                /* --adm-color-warning */
   --amber: #f59f00;
-  /* 评级：badge 与折叠摘要共用 */
-  --grade-a: #2f9e44;
+  /* 评级：badge 与折叠摘要共用（对齐 antd-mobile 语义色） */
+  --grade-a: var(--green);
   --grade-b: var(--blue-600);
-  --grade-c: #e8590c;
-  --grade-d: #e03131;
+  --grade-c: var(--warn);
+  --grade-d: var(--red);
   --grade-n: #aeb6c2;
-  /* 阴影 */
-  --shadow-sm: 0 1px 2px rgba(20, 28, 50, .04);
-  --shadow-md: 0 2px 10px rgba(20, 28, 50, .06);
-  --shadow-lg: 0 14px 34px rgba(20, 28, 50, .13);
-  --shadow-primary: 0 2px 8px rgba(47, 111, 237, .22);
-  /* 圆角三档 */
-  --radius: 14px;
-  --radius-sm: 9px;
-  --radius-xs: 6px;
-  /* 字号 / 间距 */
+  /* 阴影：antd-mobile 极轻 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .03);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, .04);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, .08);
+  --shadow-primary: 0 2px 8px rgba(22, 119, 255, .25);
+  /* 圆角：antd-mobile 三档（12 / 8 / 4） */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 4px;
+  /* 字号 / 间距（antd-mobile 文字层级） */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
@@ -52,9 +53,9 @@
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 22px;
-  /* 字体 */
+  /* 字体：antd-mobile 系统字体栈 */
   --font-num: "SF Mono", ui-monospace, "SFMono-Regular", Menlo, "PingFang SC", monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { -webkit-text-size-adjust: 100%; }
@@ -138,7 +139,7 @@ a:hover { color: var(--primary-deep); }
 .panel.foldable .panel-summary .grade.N { background: var(--grade-n); }
 .panel.foldable.folded {
   background: #fff;
-  border-color: #e4e8f0;
+  border-color: var(--border);
 }
 .panel.foldable.folded > .panel-head {
   background: transparent;
@@ -175,7 +176,7 @@ a:hover { color: var(--primary-deep); }
   margin-right: 4px; vertical-align: middle;
 }
 .status-dot.ok { background: var(--green); }
-.status-dot.draft { background: #f59f00; }
+.status-dot.draft { background: var(--warn); }
 .status-dot.off { background: #adb5bd; }
 .status-chip {
   font-size: 11px; color: var(--muted); font-weight: 500;
@@ -264,11 +265,31 @@ a:hover { color: var(--primary-deep); }
 .tag-sidebar h3 { margin: 0 0 8px; font-size: var(--fs-base); }
 .tag-sidebar h3 .sub { font-size: var(--fs-xs); color: var(--muted); font-weight: 400; }
 
-/* 交易录入主/次行 */
-.form-row-main, .form-row-secondary {
-  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+/* ============ 表单（antd-mobile Form：标签在上、控件在下，桌面网格多列） ============ */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
 }
-.form-row-secondary { margin-top: 8px; opacity: .95; }
+.form-grid .form-item.wide { grid-column: 1 / -1; }
+.form-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.form-item > label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.form-item input, .form-item select { width: 100%; min-width: 0; }
+.form-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.form-tip { margin-top: 8px; line-height: 1.55; font-size: 12px; color: var(--muted); }
+/* 设置列表（个股页标的设置）：antd List 行，标签左、控件右 */
+.form-list { display: flex; flex-direction: column; }
+.form-list .form-item {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 12px 0; border-bottom: 1px solid var(--border);
+}
+.form-list .form-item:last-child { border-bottom: none; padding-bottom: 2px; }
+.form-list .form-item > label { flex: none; min-width: 70px; }
+.form-list .form-item .form-meta { flex: 1; min-width: 140px; }
+.form-list .form-item .grow { flex: 1; }
+/* 输入框定宽（桌面设置行） */
+.input-sm { width: 80px; }
+.input-mid { width: 120px; }
 
 @media (max-width: 900px) {
   .day-split-row {
@@ -350,7 +371,7 @@ a:hover { color: var(--primary-deep); }
   transition: width .3s ease;
 }
 .progress-fill.error {
-  background: #e03131;
+  background: var(--red);
 }
 
 /* ============ 导航（磨砂） ============ */
@@ -393,6 +414,13 @@ nav button:disabled { opacity: .5; cursor: wait; }
   font-size: var(--fs-sm); color: var(--muted);
   max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 导航分组容器：桌面下不产生盒子，子元素直接参与导航 flex 排布（视觉与旧版一致）；
+   手机端（≤700px）由下方媒体查询改造成 顶部工具栏 + 底部 Tab 栏 */
+.nav-links, .nav-actions { display: contents; }
+/* 桌面端导航保持纯文字：隐藏 Tab 图标 */
+.nav-links .nav-ic { display: none; }
+/* 顶部帮助按钮：仅手机端显示（桌面端帮助仍在导航链接里） */
+.nav-help-btn { display: none; }
 
 /* ============ 视图切换 / 周期 tab ============ */
 .view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: #fff; }
@@ -419,6 +447,21 @@ nav button:disabled { opacity: .5; cursor: wait; }
 
 /* ============ 布局 ============ */
 .container { max-width: 1320px; margin: 22px auto; padding: 0 var(--sp-5); }
+/* 页面级布局辅助（原内联样式收敛为类） */
+.layout-with-sidebar { display: flex; align-items: flex-start; gap: 16px; }
+.layout-main { flex: 1; min-width: 0; }
+.day-split-row { display: flex; align-items: stretch; gap: 0; margin: 0; height: 70vh; flex-wrap: nowrap; }
+.panel-head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.panel-head-row h2 { margin: 0; }
+.panel-head-row .grow, .panel-action-bar .grow { flex: 1; }
+.panel-action-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; }
+.panel-action-note { font-size: 12px; }
+.flow-toolbar { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.flow-toolbar > div { min-width: 0; max-width: 100%; }
+.chart-row { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; }
+.chart-row .chart { flex: 1; min-width: 280px; }
+.row.end { justify-content: flex-end; }
+.mt-14 { margin-top: 14px; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px; }
 /* 持仓卡片：加宽，一排大约 2～3 张，避免挤成一排小格子 */
@@ -481,6 +524,8 @@ nav button:disabled { opacity: .5; cursor: wait; }
   background: var(--primary); opacity: .55;
 }
 .panel .sub { color: var(--muted); font-size: var(--fs-sm); font-weight: 400; margin-left: 2px; }
+/* 组合页：标签偏好列表（AI 打分依据） */
+.tag-pref-list { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 
 /* 分组标题（持仓页标签分组 / 卡片视图分组） */
 .panel h3, .cards h3 {
@@ -509,7 +554,7 @@ td.wrap, td.ai-comment {
 }
 th {
   color: var(--muted); font-weight: 600; font-size: var(--fs-sm);
-  background: #fff;
+  background: #fafafa;
   border-bottom: 1px solid var(--border-strong);
 }
 th:first-child { border-radius: 8px 0 0 0; }
@@ -526,8 +571,8 @@ td.ai-comment, th.ai-comment {
   line-height: 1.45;
   font-variant-numeric: normal;
 }
-tbody tr:nth-child(even) td { background: #fafbfe; }
-tbody tr:hover td { background: #f5f6f9; }
+tbody tr:nth-child(even) td { background: #fafafa; }
+tbody tr:hover td { background: #f5f5f5; }
 tbody tr:last-child td { border-bottom: none; }
 tr.sumrow td {
   background: #f2f5fb;
@@ -589,9 +634,11 @@ input:focus, select:focus {
   box-shadow: var(--shadow-primary);
 }
 .btn.primary:hover { background: var(--primary-deep); box-shadow: 0 4px 14px rgba(47, 111, 237, .32); }
-.btn.danger { color: var(--red); border-color: #f3c9c9; background: #fff7f7; }
-.btn.danger:hover { border-color: var(--red); background: #ffeded; }
+.btn.danger { color: var(--red); border-color: #ffc9c9; background: #fff5f5; }
+.btn.danger:hover { border-color: var(--red); background: #ffecec; }
 .btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* 通栏按钮（指数页「刷新全部」） */
+.full-btn { width: 100%; margin-bottom: 8px; }
 
 /* ============ 估值分位 ============ */
 /* 图例说明条：实时/前瞻 的颜色+图案对应关系 */
@@ -652,6 +699,19 @@ input:focus, select:focus {
 .chart { width: 100%; height: 320px; }
 .chart.sm { height: 240px; }
 .chart.lg { height: 340px; }
+/* 各页内联高度收敛为规则（手机端由媒体查询 !important 收紧） */
+#klineChart { height: 420px; }
+#flowPrice { height: 200px; }
+#flowIntraday, #flowBandsCum, #flowBuySell { height: 300px; }
+#peBars, #pbBars { height: 420px; }
+#weightChart { height: 340px; }
+body.page-portfolio #pfFlowIntraday,
+body.page-portfolio #pfFlowBandsCum,
+body.page-portfolio #pfFlowBuySell,
+body.page-portfolio #pfFlowBars { height: 280px; }
+body.page-indices #pfFlowIntraday { height: 340px; }
+/* 资金流图下的说明行 */
+.flow-band-note { padding: 2px 0 6px; font-size: 13px; }
 
 /* ============ 持仓卡片 ============ */
 .stock-card {
@@ -725,16 +785,29 @@ input:focus, select:focus {
   font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text);
 }
 
-/* ============ Toast ============ */
+/* ============ 警示条 / 提示行（antd-mobile NoticeBar 观感） ============ */
+.alert-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; margin: 0 0 12px;
+  border-radius: 8px; border: 1px solid #ffe7ba; background: #fffbe8;
+}
+.alert-bar .alert-msg { flex: 1; min-width: 200px; color: var(--warn); font-size: 13px; line-height: 1.5; font-weight: 500; }
+.alert-bar .btn { height: 32px; min-height: 32px; padding: 0 14px; font-size: 12px; }
+.tip-line { margin-top: 6px; font-size: 12px; }
+.tip-line.warn-text { color: var(--warn); }
+
+/* ============ Toast（antd-mobile：圆角矩形 8px） ============ */
 #toast {
   position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
-  background: #1f2329; color: #fff; padding: 10px 18px; border-radius: 999px;
+  background: rgba(0, 0, 0, .78); color: #fff; padding: 9px 16px; border-radius: 8px;
   font-size: 13px; z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none;
   box-shadow: var(--shadow-lg);
+  max-width: min(88vw, 360px);
+  text-align: center;
 }
 #toast.show { opacity: 1; }
-#toast.ok { background: #2e7d32; }
-#toast.err { background: #b71c1c; }
+#toast.ok { background: var(--green); }
+#toast.err { background: var(--red); }
 
 /* ============ 弹窗 ============ */
 .modal-mask {
@@ -768,6 +841,7 @@ input:focus, select:focus {
 .empty-guide .eg-h { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
 .empty-guide ol { margin: 0 0 0 18px; padding: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
 .empty-guide p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+.eg-note { margin-top: 12px; font-size: 12px; }
 .ai-preset {
   border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
   background: rgba(47, 111, 237, 0.04);
@@ -805,6 +879,9 @@ input:focus, select:focus {
   .help-or { justify-self: center; transform: none !important; margin: 4px 0; }
   .help-flow-h { flex-direction: column; }
   .help-arrow-h { transform: rotate(90deg); }
+  /* 手机端日期选择条：标题/提示独占一行，控件行不超宽 */
+  .asof-label, .asof-hint { flex: 1 1 100% !important; }
+  .asof-input { width: 100px !important; }
 }
 .help-or {
   align-self: center;
@@ -840,7 +917,7 @@ input:focus, select:focus {
   border-radius: 50%; font-size: 12px; font-weight: 700;
   background: var(--primary-weak); color: var(--primary);
 }
-.help-step-ok .help-n { background: #d8f0df; color: #2f9e44; }
+.help-step-ok .help-n { background: #d8f0df; color: var(--green); }
 .help-step-t { font-size: 13px; font-weight: 600; }
 .help-step-d { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
 .help-hint { font-size: 11.5px; color: #a06a00; margin-top: 4px; }
@@ -917,11 +994,12 @@ input:focus, select:focus {
 .help-faq-a { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
 .help-faq-a strong { color: var(--red); font-weight: 600; }
 .help-footer { text-align: center; margin-top: 8px; font-size: 12px; }
+.help-note { margin-top: 10px; font-size: 12px; }
 
 /* ============ 滚动条微调 ============ */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: #cdd4e0; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
-::-webkit-scrollbar-thumb:hover { background: #b4bdcf; background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: #d4d4d4; border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #b8b8b8; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ============ 全局请求 loading 屏障 ============ */
@@ -984,6 +1062,7 @@ input:focus, select:focus {
 @media (max-width: 1000px) {
   .layout-with-sidebar {
     flex-direction: column !important;
+    align-items: stretch !important;
   }
   .tag-sidebar-sticky,
   .index-sidebar.tag-sidebar-sticky {
@@ -998,12 +1077,363 @@ input:focus, select:focus {
   .index-sidebar .tag-card {
     flex: 1 1 140px; margin-bottom: 0; max-width: 220px;
   }
+  /* 卡片列表容器转 flex：标签/指数卡才能真正排成多列 */
+  .tag-sidebar-sticky #tagList,
+  .index-sidebar #indexList {
+    display: flex; flex-wrap: wrap; gap: 8px; width: 100%;
+  }
+  /* 「全选」卡通栏 */
+  .tag-sidebar-sticky #tagAllCard,
+  .index-sidebar #indexAllCard { flex: 0 0 100%; max-width: none; }
+  /* 「刷新全部指数」：通栏按钮置于卡片列表下方 */
   .tag-sidebar-sticky #indexRefreshAll,
-  .index-sidebar #indexRefreshAll { width: auto; flex: none; margin: 0; }
+  .index-sidebar #indexRefreshAll {
+    flex: 0 0 100%; width: 100%; order: 5; margin: 2px 0 0;
+  }
+  .tag-sidebar-sticky #indexList,
+  .index-sidebar #indexList { order: 4; }
 }
 @media (max-width: 760px) {
   .container { padding: 0 12px; margin: 14px auto; }
   nav a { padding: 6px 8px; }
   nav button { padding: 6px 8px; }
   .panel { padding: 14px 14px; }
+}
+
+/* ============================================================
+   手机端（≤700px）：整体转「底部 Tab 栏 + 顶部工具栏」的 App 样式
+   覆盖范围：导航、弹窗、卡片栅格、表格、图表高度、触控尺寸、安全区
+   ============================================================ */
+@media (max-width: 700px) {
+  /* ============ 导航（antd-mobile）：底部 TabBar + 顶部 NavBar ============ */
+  nav {
+    position: static;
+    display: block;
+    padding: 0;
+    background: transparent;
+    border-bottom: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .nav-links, .nav-actions { display: flex; }
+  /* 底部 TabBar：白底 50px、图标+文字、选中品牌蓝 */
+  .nav-links {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    height: 50px;
+    padding: 0 0 env(safe-area-inset-bottom);
+    background: #fff;
+    border-top: 1px solid var(--border);
+  }
+  .nav-links a {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 1px;
+    padding: 0;
+    border-radius: 0;
+    color: var(--muted);
+    font-size: 10px; font-weight: 500;
+    line-height: 1.2;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .nav-links a .nav-ic { display: block; font-size: 21px; line-height: 1; }
+  .nav-links a .nav-tx { display: block; }
+  .nav-links a:active { background: #f5f5f5; }
+  .nav-links a.active {
+    color: var(--primary);
+    font-weight: 600;
+    background: transparent;
+    box-shadow: none;
+  }
+  /* 帮助从底部 Tab 挪到顶部「设置」旁 */
+  .nav-links a.nav-help { display: none; }
+  nav .spacer { display: none; }
+  /* 顶部 NavBar：白底 + 胶囊按钮组 */
+  .nav-actions {
+    position: sticky; top: 0; z-index: 55;
+    align-items: center; gap: 8px;
+    padding: calc(7px + env(safe-area-inset-top)) 12px 7px;
+    background: #fff;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .nav-actions .nav-help-btn { display: inline-block; }
+  .nav-actions button {
+    height: 32px; padding: 0 14px;
+    border: 1px solid #e5e5e5; border-radius: 999px;
+    background: #fff; color: var(--text);
+    font-size: 13px; font-weight: 500;
+    white-space: nowrap;
+  }
+  .nav-actions button.primary {
+    background: var(--primary);
+    border-color: var(--primary); color: #fff;
+    box-shadow: none;
+  }
+  .nav-actions button:active { background: #f0f0f0; }
+  .nav-actions button.primary:active { background: var(--primary-deep); }
+  .nav-actions #navCustomRefresh { display: none; }
+  #statusText { display: none; }
+  /* 任务进度条：NavBar 下方独占一行 */
+  .prewarm-bar {
+    flex: none; width: 100%;
+    padding: 6px 12px;
+    background: #fffbe6;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .prewarm-bar .prewarm-track { flex: 0 1 90px; }
+  /* 页面底部留出 TabBar 空间 + 刘海安全区 */
+  body { padding-bottom: calc(50px + env(safe-area-inset-bottom)); }
+  #toast { bottom: calc(66px + env(safe-area-inset-bottom)); }
+
+  /* 个股页：买入/卖出固定为底部操作栏（TabBar 之上，antd-mobile 大号按钮 48px） */
+  body.page-stock { padding-bottom: calc(98px + env(safe-area-inset-bottom)); }
+  body.page-stock #toast { bottom: calc(112px + env(safe-area-inset-bottom)); }
+  body.page-stock #buyBtn, body.page-stock #sellBtn {
+    position: fixed; z-index: 59;
+    bottom: calc(50px + env(safe-area-inset-bottom));
+    width: 50%; margin: 0;
+    height: 48px; min-height: 48px;
+    border-radius: 0;
+    font-size: 16px; font-weight: 600;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.page-stock #buyBtn {
+    left: 0;
+    background: var(--primary); border: none; color: #fff;
+    box-shadow: none;
+  }
+  body.page-stock #buyBtn:active { background: var(--primary-deep); }
+  body.page-stock #sellBtn {
+    left: 50%;
+    background: #fff; color: var(--red);
+    border: none; border-top: 1px solid var(--border); border-left: 1px solid var(--border);
+    box-shadow: none;
+  }
+  body.page-stock #sellBtn:active { background: #f5f5f5; }
+
+  /* ---- 容器 / 面板：纯白卡片浮于 #f5f5f5 底色（antd-mobile） ---- */
+  body { background: #f5f5f5; }
+  .container { padding: 0 10px; margin: 10px auto 16px; }
+  .panel {
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 12px; margin-bottom: 12px; box-shadow: none;
+  }
+  .panel.panel-tight { padding: 8px 12px; margin-bottom: 10px; }
+  .panel h2 { font-size: 15px; margin-bottom: 10px; gap: 7px; }
+  /* antd 卡片标题：纯文字，去掉竖条/圆点装饰 */
+  .panel h2::before, .panel h3::before, .cards h3::before { display: none; }
+  /* 手机空间有限：面板标题旁的说明文字收掉（图例/tab 仍在，关键信息不丢） */
+  .panel h2 .sub { display: none; }
+  .row > .sub { display: none; }
+  .panel h3, .cards h3 { font-size: 13.5px; margin: 4px 0 10px; }
+  .row { gap: 8px; }
+  .sub { font-size: 11px; }
+
+  /* ---- 卡片：白卡无边框、2 列栅格；持仓大卡片保持 1 列 ---- */
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  #cardView.cards { grid-template-columns: 1fr; gap: 14px; }
+  .summary-main { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .summary-sub { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .card {
+    background: #fff; border: none; box-shadow: none;
+    border-radius: 12px; padding: 12px 12px;
+  }
+  .summary-main .card { border-top: none; padding: 12px; }
+  .card .label { font-size: 11px; margin-bottom: 5px; }
+  .card .value { font-size: 17px; font-weight: 600; }
+  .summary-main .card .value { font-size: 17px; }
+  .card .value.small { font-size: 14px; }
+  /* 持仓大卡片：白底、细边框、左侧涨跌色条保留 */
+  .stock-card {
+    background: #fff;
+    border: 1px solid var(--border);
+  }
+  .stock-card .sc-pnl { font-size: 20px; }
+
+  /* ---- 表格：antd List 分割线（#eeeeee），保留横向滚动 ---- */
+  table { font-size: 12px; }
+  th, td { padding: 8px 9px; border-bottom: 1px solid var(--border); }
+  th { background: #fafafa; }
+  tbody tr:nth-child(even) td { background: #fafafa; }
+  td.wrap, td.ai-comment { min-width: 110px; max-width: 220px; font-size: 12px; }
+  .holdings-group > h3 { font-size: 13.5px; }
+
+  /* ---- 按钮：antd-mobile 中号（44px 胶囊），主按钮品牌蓝 ---- */
+  .btn {
+    border-radius: 999px; height: 44px; min-height: 44px;
+    padding: 0 20px; font-size: 15px;
+    border: 1px solid #e5e5e5; background: #fff; color: var(--text);
+  }
+  .btn:active { background: #f0f0f0; }
+  .btn.primary {
+    background: var(--primary); border-color: var(--primary); color: #fff;
+    box-shadow: none;
+  }
+  .btn.primary:active { background: var(--primary-deep); }
+  .btn.danger { color: var(--red); border-color: #ffc9c9; background: #fff; }
+  .btn.danger:active { background: #fff0f0; }
+  .btn:disabled { opacity: .45; }
+  /* 周期切换：antd-mobile Tabs（下划线指示器 + 横向滚动） */
+  .period-tabs {
+    display: flex; flex-wrap: nowrap; gap: 0;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    width: 100%; margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+  .period-tabs::-webkit-scrollbar { display: none; }
+  .period-tabs .ptab {
+    flex: none; white-space: nowrap;
+    padding: 9px 14px;
+    border: none; border-radius: 0; background: transparent;
+    color: var(--muted); font-size: 14px; position: relative;
+  }
+  .period-tabs .ptab::after {
+    content: ''; position: absolute; left: 12px; right: 12px; bottom: -1px;
+    height: 3px; border-radius: 2px; background: transparent;
+  }
+  .period-tabs .ptab.active {
+    background: transparent; border-color: transparent;
+    color: var(--primary); font-weight: 600;
+  }
+  .period-tabs .ptab.active::after { background: var(--primary); }
+  .qbtn { padding: 5px 12px; border-radius: 999px; }
+  /* 视图切换：antd-mobile Segmented（灰底轨道 + 白色选中滑块） */
+  .view-toggle {
+    background: #f5f5f5; border: none; border-radius: 6px; padding: 2px;
+  }
+  .view-toggle button {
+    padding: 6px 14px; border-radius: 4px; font-size: 13px;
+    color: var(--text-2); background: transparent; transition: background .15s, box-shadow .15s;
+  }
+  .view-toggle button.active {
+    background: #fff; color: var(--text); font-weight: 600;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+  }
+  .tag-badge { font-size: 11px; padding: 2px 8px; }
+
+  /* ---- 图表高度收紧（!important 覆盖各页内联 height） ---- */
+  .chart, .chart.sm, .chart.lg { height: 220px !important; }
+  #klineChart { height: 300px !important; }
+  #flowPrice { height: 150px !important; }
+  #flowBars { height: 200px !important; }
+  #flowIntraday, #flowBandsCum, #flowBuySell { height: 220px !important; }
+  #peQ, #pbQ, #peGauge, #pbGauge { height: 190px !important; }
+  #peBars, #pbBars { height: 240px !important; }
+  #peLine, #pbLine, #peSeriesLine, #pbSeriesLine, #weightChart { height: 240px !important; }
+  #pfFlowIntraday { height: 240px !important; }
+  #pfFlowPrice { height: 240px !important; }
+  #pfFlowBandsCum, #pfFlowBuySell, #pfFlowBars { height: 220px !important; }
+
+  /* ---- 股票搜索框全宽 + 下拉适配 ---- */
+  .stock-autocomplete { width: 100%; }
+  .stock-autocomplete input { width: 100% !important; }
+  .stock-sug { min-width: 0; width: 100%; max-height: 220px; border-radius: 8px; }
+  /* 个股页/交易页的搜索框独立占一行 */
+  #searchBox { flex: 0 0 100%; }
+  /* 表单输入：antd-mobile 触控高度 44px、圆角 8px */
+  input, select { padding: 9px 10px; min-height: 44px; border-radius: 8px; border-color: #e5e5e5; }
+
+  /* ---- 弹窗：antd-mobile Dialog（宽 286px、圆角 16px；窄屏按 88vw 收缩） ---- */
+  .modal {
+    min-width: 0 !important;
+    width: min(88vw, 286px) !important;
+    max-width: min(88vw, 286px) !important;
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+  .modal h3 { font-size: 17px; margin-bottom: 12px; font-weight: 600; }
+  .modal .row input, .modal .row select { flex: 1 1 40%; min-width: 0; width: auto !important; }
+  #adjustSearch { flex: 0 0 100%; }
+  .modal-actions { flex-wrap: wrap; }
+  .modal-actions .btn { min-height: 44px; }
+  .modal-items .mi { padding: 6px 0; }
+
+  /* ---- 表单：手机端单列（antd-mobile Form 堆叠） ---- */
+  .form-grid { grid-template-columns: 1fr; gap: 12px; }
+  .form-grid .form-item.wide { grid-column: auto; }
+  .form-actions { margin-top: 10px; gap: 8px; }
+  .form-actions .btn { flex: 1 1 auto; }
+  .form-actions .btn.primary { flex: 1 1 100%; }
+  .form-list .form-item { padding: 12px 0; }
+  .form-list .form-item > label { min-width: 0; flex: 0 0 68px; }
+  .chart-row { gap: 10px; }
+  .chart-row .chart { min-width: 0; }
+  /* 左右并排的柱形图（估值分位横向条形）：手机上改为上下堆叠、各占 100% 宽 */
+  #quantilePanel .chart-row,
+  #peBarPanel .chart-row {
+    flex-direction: column;
+  }
+  #quantilePanel .chart-row .chart,
+  #peBarPanel .chart-row .chart {
+    width: 100%; flex: none; min-width: 0;
+  }
+  .flow-toolbar { gap: 8px; }
+  .panel-action-bar { padding: 8px 12px; }
+  .alert-bar { padding: 9px 12px; }
+
+  /* ---- 交易页：日期目录限高，antd List 行高 ---- */
+  .day-dir { max-height: 34vh; background: #fff; }
+  .day-dir-title { font-size: 13px; }
+  .day-tab { padding: 11px 12px; }
+  .day-detail { padding: 12px 12px; }
+
+  /* ---- 折叠面板头部：标题不缩，摘要收缩 ---- */
+  .panel.foldable > .panel-head h2 { max-width: none; }
+  .panel.foldable .panel-summary { font-size: 11px; max-width: 44%; }
+  .fold-chevron { width: 26px; height: 26px; line-height: 24px; }
+
+  /* ---- 标签/指数侧栏：antd-mobile 白卡片选择区，两列选择卡 ---- */
+  .index-sidebar.tag-sidebar-sticky,
+  .tag-sidebar.tag-sidebar-sticky {
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: none; padding: 12px;
+  }
+  .index-sidebar h3, .tag-sidebar h3 {
+    font-size: 14px; font-weight: 600; color: var(--text);
+    margin: 0 0 10px;
+  }
+  .tag-sidebar-sticky .tag-card, .index-sidebar .tag-card {
+    flex: 1 1 calc(50% - 4px); max-width: none; min-height: 62px;
+  }
+  /* 「全选」卡通栏 */
+  .tag-sidebar-sticky .tag-card.all, .index-sidebar .tag-card.all {
+    flex: 0 0 100%; max-width: none; margin-bottom: 0;
+  }
+  /* 选中卡：antd CheckList 风格——品牌蓝圆勾 */
+  .tag-sidebar-sticky .tag-card.on .tc-check,
+  .index-sidebar .tag-card.on .tc-check,
+  .tag-sidebar-sticky .tag-card.partial .tc-check,
+  .index-sidebar .tag-card.partial .tc-check {
+    width: 18px; height: 18px; line-height: 18px; border-radius: 50%;
+    background: var(--primary); color: #fff; text-align: center;
+    font-size: 11px; font-weight: 700; flex: none;
+  }
+  .tag-sidebar-sticky .tag-card.partial .tc-check,
+  .index-sidebar .tag-card.partial .tc-check { background: var(--muted-2); }
+  /* 指数页「刷新全部指数」：通栏胶囊 + ⚡ 图标 */
+  .index-sidebar #indexRefreshAll { border-radius: 999px; }
+  .index-sidebar #indexRefreshAll::before { content: '⚡ '; }
+
+  /* ---- 帮助页 / 空状态 / 加载框 ---- */
+  .help-page { padding: 0 2px; }
+  .help-hero h1 { font-size: 19px; }
+  .empty { padding: 18px 0; }
+  .empty-guide { margin: 10px auto; }
+  .loading-progress-box { min-width: 0; width: 88vw; max-width: 88vw; padding: 18px 16px; border-radius: 16px; }
+  .loading-mask { align-items: flex-start; padding-top: 18vh; }
+}
+
+/* 更窄的屏幕（≤420px）：再收紧一档 */
+@media (max-width: 420px) {
+  .nav-links a .nav-ic { font-size: 19px; }
+  .nav-actions { padding: 7px 8px; gap: 5px; }
+  .nav-actions button { padding: 0 10px; font-size: 12px; }
+  .card .value { font-size: 16px; }
+  .summary-main .card .value { font-size: 16px; }
+  .chart, .chart.sm, .chart.lg { height: 200px !important; }
+  #klineChart { height: 280px !important; }
+  .modal { padding: 16px 14px; }
+  .modal-actions { gap: 8px; }
 }

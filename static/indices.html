@@ -2,41 +2,42 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
   <title>指数 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
-<body>
+<body class="page-indices">
   <nav></nav>
-  <div class="container layout-with-sidebar" style="display:flex; align-items:flex-start; gap:16px">
+  <div class="container layout-with-sidebar">
     <aside id="indexSidebar" class="index-sidebar tag-sidebar-sticky">
       <h3>指数 <span class="sub" id="indexCount"></span></h3>
       <div id="indexAllCard" class="tag-card all" title="全选（点击切换）"></div>
-      <button id="indexRefreshAll" class="btn" style="width:100%;margin-bottom:8px"
+      <button id="indexRefreshAll" class="btn full-btn"
               title="刷新全部指数：日K增量 + 实时点位 + 分时量价（腾讯）。盘中早段抓取的残缺分时（如只到 09:33）会被补齐。">
         刷新全部指数
       </button>
       <div id="indexList"></div>
     </aside>
-    <div style="flex:1; min-width:0">
+    <div class="layout-main">
       <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个指数。</div>
       <div id="rightContent">
         <div id="summary"></div>
         <div class="panel" id="fundflowPanel">
           <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">读图：浅蓝柱=各期成交额（高低看放缩），深灰折线=累计成交额；悬停看较上期变化。分钟窗=当日分时，天窗=多日聚合</span></h2>
-          <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+          <div class="flow-toolbar">
             <div id="pfFlowTabs"></div>
             <div style="flex:1"></div>
             <div id="pfFlowBatchBtn"></div>
           </div>
           <div id="pfFlowBatchPanel" style="display:none;margin:0 0 10px"></div>
-          <div class="chart sm" id="pfFlowIntraday" style="width:100%;height:340px"></div>
+          <div class="chart sm" id="pfFlowIntraday"></div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无分时量价（请先「刷新全部指数」拉取，或今日非交易日）。</div>
         </div>
         <div class="panel" id="chartRow">
           <h2>权重分布（指数等权）</h2>
-          <div class="chart sm" id="weightChart" style="height:340px"></div>
+          <div class="chart sm" id="weightChart"></div>
         </div>
         <div class="panel" id="tablePanel">
           <h2 style="margin:0">指数列表</h2>

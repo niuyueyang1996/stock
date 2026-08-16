@@ -2,37 +2,41 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
   <title>交易评分 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
-<body>
+<body class="page-trade">
   <nav></nav>
   <div class="container">
     <div class="panel">
       <h2 id="formTitle">录入交易</h2>
-      <div class="form-row-main">
-        <div id="searchBox"></div>
-        <select id="side">
-          <option value="buy">买入</option>
-          <option value="sell">卖出</option>
-        </select>
-        <input type="number" id="price" placeholder="成交价" step="0.001" min="0" style="width:100px">
-        <input type="number" id="quantity" placeholder="数量" step="1" min="0" style="width:90px">
-        <input type="number" id="fee" placeholder="费用" step="0.01" min="0" value="0" style="width:90px">
+      <div class="form-grid">
+        <div class="form-item wide"><label>股票</label><div id="searchBox"></div></div>
+        <div class="form-item">
+          <label>方向</label>
+          <select id="side">
+            <option value="buy">买入</option>
+            <option value="sell">卖出</option>
+          </select>
+        </div>
+        <div class="form-item"><label>成交价</label><input type="number" id="price" placeholder="成交价" step="0.001" min="0"></div>
+        <div class="form-item"><label>数量</label><input type="number" id="quantity" placeholder="数量" step="1" min="0"></div>
+        <div class="form-item"><label>费用</label><input type="number" id="fee" placeholder="费用" step="0.01" min="0" value="0"></div>
+        <div class="form-item"><label>时间</label><input type="datetime-local" id="tradeTime"></div>
+        <div class="form-item"><label>备注</label><input type="text" id="note" placeholder="备注"></div>
+      </div>
+      <div class="form-actions">
         <button class="btn primary" id="submitBtn" onclick="submitTrade()">提交</button>
         <button class="btn" id="cancelBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
-      </div>
-      <div class="form-row-secondary">
         <input type="file" id="importFile" accept=".xlsx" style="display:none" onchange="importExcel()">
         <button class="btn" id="importBtn" onclick="document.getElementById('importFile').click()">📥 导入 Excel</button>
-        <input type="datetime-local" id="tradeTime" style="width:190px">
-        <input type="text" id="note" placeholder="备注" style="width:140px">
         <button class="btn" id="adjustBtn" onclick="openCostAdjust()" title="直接调整持仓成本：补记漏记 / 分红除权摊薄">💰 调整成本</button>
         <button class="btn" id="aiScoreTodayBtn" onclick="aiScoreToday()" title="请求 AI 对今天录制的交易打分">🤖 AI 打分(今日)</button>
       </div>
-      <div class="muted" id="formTip" style="margin-top:8px;line-height:1.55">
+      <div class="muted form-tip" id="formTip">
         买卖会自动更新持仓。空仓时可用「导入 Excel」：从
         <a href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">同花顺账户页</a>
         导出「汇总持仓.xlsx」再上传（后台按股并行导入，进度见顶部）。没有同花顺？直接上方搜索代码，录一笔买入即可。
@@ -40,7 +44,7 @@
     </div>
 
     <div class="panel" style="padding:0;overflow:hidden">
-      <div class="row day-split-row" style="align-items:stretch;gap:0;margin:0;height:70vh;flex-wrap:nowrap">
+      <div class="row day-split-row">
         <!-- 左：日期目录栏（可滚动） -->
         <div id="dayDir" class="day-dir">
           <div class="day-dir-title">综合评分历史</div>
@@ -62,7 +66,7 @@
           <tbody id="tradeBody"></tbody>
         </table>
       </div>
-      <div class="empty" id="tradeEmpty" style="display:none;padding:20px">暂无交易，先在上方录入。</div>
+      <div class="empty pad" id="tradeEmpty" style="display:none">暂无交易，先在上方录入。</div>
     </div>
   </div>
 

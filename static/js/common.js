@@ -237,42 +237,63 @@ function initNav(active) {
     ['/static/help.html', 'help', '帮助'],
   ];
   nav.innerHTML = '';
+  // 页面主链接：桌面直接排进导航条；手机端（≤700px）变成底部 Tab 栏（见 style.css）
+  const linksWrap = document.createElement('div');
+  linksWrap.className = 'nav-links';
+  // antd-mobile TabBar 结构：图标（.nav-ic）+ 文字（.nav-tx）；桌面端隐藏图标
+  const NAV_ICONS = { index: '📊', indices: '📈', portfolio: '💼', stock: '🔍', trade: '📝', help: '❓' };
   links.forEach(([href, page, label]) => {
     const a = document.createElement('a');
     a.href = href;
-    a.textContent = label;
+    a.innerHTML = `<span class="nav-ic">${NAV_ICONS[page] || ''}</span><span class="nav-tx">${label}</span>`;
     if (page === active) a.classList.add('active');
-    nav.appendChild(a);
+    // 帮助链接：手机端从底部 Tab 栏挪到顶部「设置」旁（.nav-help 手机端隐藏，见 style.css）
+    if (page === 'help') a.classList.add('nav-help');
+    linksWrap.appendChild(a);
   });
+  nav.appendChild(linksWrap);
+
   const spacer = document.createElement('span');
   spacer.className = 'spacer';
   nav.appendChild(spacer);
+
+  // 全局操作（AI/设置/刷新/自定义/状态）：桌面跟在导航中间；手机端收进顶部工具栏
+  const actions = document.createElement('div');
+  actions.className = 'nav-actions';
 
   const aiBtn = document.createElement('button');
   aiBtn.textContent = '🤖 AI';
   aiBtn.title = '配置 AI（推荐一键填入 DeepSeek）';
   aiBtn.onclick = openAiSettings;
-  nav.appendChild(aiBtn);
+  actions.appendChild(aiBtn);
 
   const settingsBtn = document.createElement('button');
   settingsBtn.textContent = '⚙ 设置';
   settingsBtn.title = '界面模式 / 刷新设置（简单·高级）';
   settingsBtn.onclick = openSettings;
-  nav.appendChild(settingsBtn);
+  actions.appendChild(settingsBtn);
+
+  // 帮助按钮：手机端显示在「设置」旁（桌面端隐藏，桌面帮助仍在导航链接里）
+  const helpBtn = document.createElement('button');
+  helpBtn.className = 'nav-help-btn';
+  helpBtn.textContent = '❓ 帮助';
+  helpBtn.title = '使用帮助';
+  helpBtn.onclick = () => { location.href = '/static/help.html'; };
+  actions.appendChild(helpBtn);
 
   const dynamic = document.createElement('button');
   dynamic.className = 'nav-refresh-btn';
   dynamic.textContent = '⚡ 更新行情';
   dynamic.title = '快速更新：现价、估值、今日资金流（大约几十秒）';
   dynamic.onclick = () => doRefresh(dynamic, false);
-  nav.appendChild(dynamic);
+  actions.appendChild(dynamic);
 
   const full = document.createElement('button');
   full.className = 'primary nav-refresh-btn';
   full.textContent = '🔄 完整更新';
   full.title = '完整更新：历史行情、财务、估值分位、汇率等（首次或隔很久建议点一次）';
   full.onclick = () => doRefresh(full, true);
-  nav.appendChild(full);
+  actions.appendChild(full);
 
   const custom = document.createElement('span');
   custom.id = 'navCustomRefresh';
@@ -281,11 +302,13 @@ function initNav(active) {
   custom.title = '选择要更新的内容';
   custom.style.cssText = 'font-size:12px;cursor:pointer;margin-left:6px;user-select:none';
   custom.onclick = () => openCustomRefresh('global');
-  nav.appendChild(custom);
+  actions.appendChild(custom);
 
   const status = document.createElement('span');
   status.id = 'statusText';
-  nav.appendChild(status);
+  actions.appendChild(status);
+
+  nav.appendChild(actions);
 
   setupPrewarmBar(nav);
   applyNavMode();
@@ -2096,13 +2119,15 @@ function mountAsOfPicker(container, { value, onChange, label } = {}) {
   const cur = value || '';
   const isLive = !cur;
   container.innerHTML = `
-    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:0">
-      <span class="muted" style="font-size:13px">${esc(label || '按日期查看')}</span>
-      <button type="button" class="btn${isLive ? ' primary' : ''}" data-asof="live" style="padding:2px 10px;font-size:12px">最新</button>
-      <button type="button" class="btn" data-asof="yesterday" style="padding:2px 10px;font-size:12px">昨天</button>
-      <input type="date" data-asof-input value="${esc(cur)}" max="${todayISO()}"
-             style="padding:2px 8px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:6px">
-      <span class="muted" data-asof-hint style="font-size:12px"></span>
+    <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin:0;max-width:100%">
+      <span class="muted asof-label" style="font-size:13px;min-width:0">${esc(label || '按日期查看')}</span>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;flex:1 1 auto;max-width:100%">
+        <button type="button" class="btn${isLive ? ' primary' : ''}" data-asof="live" style="padding:2px 8px;font-size:12px;border-radius:999px;flex:0 0 auto;white-space:nowrap">最新</button>
+        <button type="button" class="btn" data-asof="yesterday" style="padding:2px 8px;font-size:12px;border-radius:999px;flex:0 0 auto;white-space:nowrap">昨天</button>
+        <input type="date" class="asof-input" data-asof-input value="${esc(cur)}" max="${todayISO()}"
+               style="padding:2px 8px;font-size:12px;border:1px solid var(--border,#e5e7eb);border-radius:999px;min-width:0;width:130px;max-width:100%">
+      </div>
+      <span class="muted asof-hint" data-asof-hint style="font-size:12px;min-width:0;word-break:break-word;overflow-wrap:anywhere"></span>
     </div>`;
   const emit = (iso) => {
     if (typeof onChange === 'function') onChange(iso);
