@@ -287,6 +287,17 @@ a:hover { color: var(--primary-deep); }
 .form-list .form-item > label { flex: none; min-width: 70px; }
 .form-list .form-item .form-meta { flex: 1; min-width: 140px; }
 .form-list .form-item .grow { flex: 1; }
+/* ============ 个股页：标的设置（预期增速/标签/跟踪指数）紧凑重设计 ============ */
+/* 紧凑横排：label+input 同行、一组接一组（不独占行） */
+#metaPanel .form-item { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; }
+#metaPanel .form-item > label { font-size: 12px; color: var(--muted); min-width: 0; }
+#metaPanel .form-item input {
+  height: 30px; min-height: 30px; padding: 4px 8px; font-size: 13px;
+  border-radius: 6px; width: 74px; box-sizing: border-box;
+}
+#metaPanel .form-item .btn { height: 30px; min-height: 30px; padding: 4px 14px; font-size: 13px; border-radius: 6px; box-sizing: border-box; }
+#metaPanel .form-meta { font-size: 11px; flex: 1 1 100%; min-width: 0; }
+
 /* 输入框定宽（桌面设置行） */
 .input-sm { width: 80px; }
 .input-mid { width: 120px; }
@@ -299,7 +310,9 @@ a:hover { color: var(--primary-deep); }
   }
   .day-dir { width: 100% !important; max-height: 40vh; border-right: none !important;
              border-bottom: 1px solid var(--border); }
-  .day-detail { max-height: none; }
+  /* 竖排时强制宽度 = 容器宽，防宽表（每笔明细 min-width:820px）把容器撑开导致无横向滚动 */
+  .day-detail { max-height: none; width: 100%; max-width: 100%; }
+  .day-detail > div[style*="overflow-x"] { width: 100%; max-width: 100%; }
 }
 
 /* ============ 启动预热提示条（融进导航中间，不占新行、不挤动左右元素） ============ */
@@ -450,7 +463,9 @@ nav button:disabled { opacity: .5; cursor: wait; }
 /* 页面级布局辅助（原内联样式收敛为类） */
 .layout-with-sidebar { display: flex; align-items: flex-start; gap: 16px; }
 .layout-main { flex: 1; min-width: 0; }
-.day-split-row { display: flex; align-items: stretch; gap: 0; margin: 0; height: 70vh; flex-wrap: nowrap; }
+/* 注意：.row（后定义）会覆盖同特异性单类规则，必须用双类提高特异性，
+   否则 align-items:center/flex-wrap:wrap/gap:12px 生效 → 左栏垂直居中、可换行（PR#2 删内联后暴露） */
+.row.day-split-row { display: flex; align-items: stretch; gap: 0; margin: 0; height: 70vh; flex-wrap: nowrap; }
 .panel-head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .panel-head-row h2 { margin: 0; }
 .panel-head-row .grow, .panel-action-bar .grow { flex: 1; }
@@ -547,6 +562,13 @@ th, td {
   border-bottom: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
 }
+/* 交易流水/每笔明细：10 列宽表任何宽度下至少 820px → 容器 overflow-x 出现横滑（右滑查看） */
+#tradeListPanel table, #dayDetail table { min-width: 820px; }
+#tradeListPanel > div[style*="overflow-x"], #dayDetail > div[style*="overflow-x"] {
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y; /* 明确允许横向平移（WebView 手势） */
+}
+
 td.wrap, td.ai-comment {
   white-space: normal; word-break: break-word; overflow-wrap: anywhere;
   max-width: 320px; min-width: 140px; text-align: left; line-height: 1.45;
@@ -637,6 +659,13 @@ input:focus, select:focus {
 .btn.danger { color: var(--red); border-color: #ffc9c9; background: #fff5f5; }
 .btn.danger:hover { border-color: var(--red); background: #ffecec; }
 .btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* 小按钮：列表行内操作（AI 模型卡片的 启用/编辑/删除 等），紧凑协调 */
+.btn-sm {
+  padding: 3px 9px; font-size: 12px; border-radius: 6px; line-height: 1.6;
+}
+/* AI 模型卡片：操作按钮组不换行、右对齐 */
+#aiModelList .card-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+
 /* 通栏按钮（指数页「刷新全部」） */
 .full-btn { width: 100%; margin-bottom: 8px; }
 
@@ -1260,7 +1289,7 @@ body.page-indices #pfFlowIntraday { height: 340px; }
   th, td { padding: 8px 9px; border-bottom: 1px solid var(--border); }
   th { background: #fafafa; }
   tbody tr:nth-child(even) td { background: #fafafa; }
-  td.wrap, td.ai-comment { min-width: 110px; max-width: 220px; font-size: 12px; }
+td.wrap, td.ai-comment { min-width: 110px; max-width: 220px; font-size: 12px; }
   .holdings-group > h3 { font-size: 13.5px; }
 
   /* ---- 按钮：antd-mobile 中号（44px 胶囊），主按钮品牌蓝 ---- */
@@ -1347,6 +1376,49 @@ body.page-indices #pfFlowIntraday { height: 340px; }
     padding: 20px 16px;
     border-radius: 16px;
   }
+  /* ================= AI 设置弹窗（移动端重新设计）=================
+     全宽卡片式：标题栏固定、分区紧凑、输入 38px 触控圆角、按钮小号 */
+  .modal.ai-settings {
+    width: 94vw !important;
+    max-width: 94vw !important;
+    max-height: 86vh;
+    padding: 14px 14px 16px;
+    border-radius: 16px;
+  }
+  .modal.ai-settings h3 {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 16px; margin-bottom: 10px;
+    position: sticky; top: 0; background: #fff; z-index: 2; padding-bottom: 8px;
+  }
+  /* 分区：模型列表 / DeepSeek 预设 / 高级区 各自成卡 */
+  .modal.ai-settings #aiModelList {
+    max-height: 150px; margin-bottom: 10px;
+    background: #f7f8fa; border-radius: 10px; padding: 8px;
+  }
+  .modal.ai-settings .ai-preset {
+    background: #f7f8fa; border-radius: 10px; padding: 10px;
+  }
+  .modal.ai-settings .ai-preset ol { padding-left: 18px; margin: 6px 0; }
+  .modal.ai-settings .ai-preset li, .modal.ai-settings .ai-preset a { font-size: 12px; line-height: 1.7; }
+  .modal.ai-settings details#aiAdvanced {
+    background: #f7f8fa; border-radius: 10px; padding: 8px 10px;
+    border-top: none; margin-top: 10px;
+  }
+  /* 输入/下拉：38px 触控高度、13px 字号（全局 44px 太大且不协调） */
+  .modal.ai-settings input, .modal.ai-settings select {
+    min-height: 38px; padding: 7px 10px; font-size: 13px; border-radius: 8px;
+  }
+  .modal.ai-settings label { font-size: 11px; }
+  /* 按钮：小号统一；「一键启用」主按钮占一行全宽 */
+  .modal.ai-settings .btn { padding: 7px 13px; font-size: 13px; border-radius: 8px; }
+  .modal.ai-settings .btn.primary#aiDsEnable,
+  .modal.ai-settings #aiDsEnable { flex: 1 1 100%; }
+  .modal.ai-settings .row { gap: 8px; margin-bottom: 10px; }
+  .modal.ai-settings #aiActive { font-size: 12px; line-height: 1.6; }
+  .modal.ai-settings .modal-actions { margin-top: 12px; }
+  /* 模型卡片操作按钮：小号 */
+  .modal.ai-settings #aiModelList .btn-sm { padding: 3px 9px; font-size: 12px; }
+
   .modal h3 { font-size: 17px; margin-bottom: 12px; font-weight: 600; }
   .modal .row input, .modal .row select { flex: 1 1 40%; min-width: 0; width: auto !important; }
   #adjustSearch { flex: 0 0 100%; }
@@ -1361,6 +1433,15 @@ body.page-indices #pfFlowIntraday { height: 340px; }
   .form-actions .btn { flex: 1 1 auto; }
   .form-actions .btn.primary { flex: 1 1 100%; }
   .form-list .form-item { padding: 12px 0; }
+  /* 标的设置：横排 wrap，一行两组（不再每项独占一行） */
+  #metaPanel .form-item { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+  #metaPanel .form-item > label { font-size: 12px; }
+  #metaPanel .form-item input {
+    width: 0 !important; flex: 1 1 80px; height: 34px; min-height: 34px;
+    padding: 4px 9px; border-radius: 8px;
+  }
+  #metaPanel .form-item .btn { height: 34px; min-height: 34px; padding: 4px 16px; font-size: 13px; box-sizing: border-box; }
+  #metaPanel .form-meta { flex: 1 1 100%; min-width: 0; }
   .form-list .form-item > label { min-width: 0; flex: 0 0 68px; }
   .chart-row { gap: 10px; }
   .chart-row .chart { min-width: 0; }

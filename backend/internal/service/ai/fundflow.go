@@ -4,6 +4,7 @@ package ai
 // 对齐 app/services/ai.py 资金流部分。
 
 import (
+	"log"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -484,6 +485,7 @@ func (s *Service) AnalyzeFundflow(code string, window any, systemPrompt, intensi
 	}
 	analysis := NormalizeFundflowAnalysis(raw)
 	modelTag := modelTagOf(modelCfg)
+	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, date, w, aiReportSummary(analysis))
 	_ = s.UpsertFundflowReport(code, date, "single", w, analysis, modelTag)
 	return map[string]any{
 		"mode": ctx["mode"], "code": code, "name": s.StockDisplayName(code),
@@ -598,6 +600,7 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 				continue
 			}
 			analysis := NormalizeFundflowAnalysis(it)
+			log.Printf("[ai] 落库 资金流 code=%s window=%s source=batch %s", code, w, aiReportSummary(analysis))
 			_ = s.UpsertFundflowReport(code, ctx["date"].(string), "batch", w, analysis, modelTag)
 			reports = append(reports, map[string]any{
 				"code": code, "name": nameMap[code],

@@ -747,7 +747,9 @@ function waitForJob(jobId, timeoutMs = 600000) {
       }
     }
     timer = setTimeout(() => finish(false, null, '任务超时'), timeoutMs);
-    // 无条件轮询兜底（ws 可能半死/未连上；本地服务开销极小）——保证任务终态必达
+    // 仅在 ws 断线/未连上/假死（30s 无消息）时轮询兜底；ws 在线靠推送（app-job-done）+ 快照命中，
+    // 避免任务期间每 500ms 刷 /status/jobs（本地接口也会在请求日志里刷屏）
+    if (window.__wsDown !== false || wsStale()) {
     poll = setInterval(async () => {
       try {
         const p = await api('/status/jobs', { silent: true });
@@ -759,6 +761,7 @@ function waitForJob(jobId, timeoutMs = 600000) {
         }
       } catch (e) { /* ignore */ }
     }, 500);
+    }
   });
 }
 
@@ -950,7 +953,7 @@ async function openAiSettings() {
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
   mask.innerHTML = `
-    <div class="modal" style="width:620px;max-width:94vw">
+    <div class="modal ai-settings" style="width:620px;max-width:94vw">
       <h3>🤖 AI 设置</h3>
       <div id="aiActive" class="muted" style="margin-bottom:10px;font-size:12px"></div>
       <div class="row" style="align-items:center;gap:8px;margin-bottom:12px">
@@ -1177,9 +1180,11 @@ async function loadAiModels(mask) {
             <span class="muted" style="font-size:11px;margin-left:6px">${m.model}</span></div>
           <div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.base_url}</div>
         </div>
-        <button class="btn" ${m.is_active ? 'disabled' : ''} data-act="${m.id}">启用</button>
-        <button class="btn" data-edit="${m.id}">编辑</button>
-        <button class="btn danger" data-del="${m.id}">删除</button>`;
+        <div class="card-actions">
+          <button class="btn btn-sm" ${m.is_active ? 'disabled' : ''} data-act="${m.id}">启用</button>
+          <button class="btn btn-sm" data-edit="${m.id}">编辑</button>
+          <button class="btn btn-sm danger" data-del="${m.id}">删除</button>
+        </div>`;
       card.querySelector('[data-act]').onclick = async () => {
         try { await api('/ai/models/' + m.id + '/activate', { method: 'POST' }); toast('已切换到 ' + m.name); await loadAiModels(mask); }
         catch (e) { toast('切换失败：' + e.message, 4000); }

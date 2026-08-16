@@ -149,6 +149,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 			label += "·" + strings.Join(tags, ",")
 		}
 		jobID := s.Jobs.Start("ai.portfolio", label, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.ScorePortfolio(tags, prompt, intensity)
 			return err
 		})
@@ -198,6 +199,7 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 			prompt = *body.SystemPrompt
 		}
 		jobID := s.Jobs.Start("ai.daily", "每日 AI 打分 "+body.ScoreDate, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.ScoreDaily(body.ScoreDate, prompt, intensity)
 			return err
 		})

@@ -51,6 +51,9 @@ type Services struct {
 
 // Setup 注册全部路由
 func Setup(r *gin.Engine, s *Services) {
+	// 统一请求出入日志（入=method/path/query；出=status/耗时/错误，落盘 logs/server.log）
+	r.Use(RequestLog())
+
 	api := r.Group("/api")
 
 	setupAIRoutes(api, s)

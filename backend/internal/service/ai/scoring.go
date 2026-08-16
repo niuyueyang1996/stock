@@ -364,6 +364,7 @@ func (s *Service) ScorePortfolio(tags []string, systemPrompt, intensity string) 
 	report := NormalizePortfolioReport(raw)
 	phash := s.PortfolioProfileHash(tags)
 	tagsJSON, _ := json.Marshal(sortedCopy(tags))
+	log.Printf("[ai] 落库 组合打分 tags=%v 模型=%s %s", tags, modelCfg.Name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if err := s.PortReports.Upsert(phash, string(tagsJSON), string(b), modelCfg.Name); err != nil {
@@ -791,6 +792,7 @@ func (s *Service) ScoreDaily(scoreDate, systemPrompt, intensity string) (map[str
 		return nil, err
 	}
 	report := NormalizeDailyReport(raw, trades)
+	log.Printf("[ai] 落库 每日打分 date=%s 笔数=%d 模型=%s %s", scoreDate, len(trades), modelCfg.Name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if err := s.Daily.Upsert(scoreDate, string(b), modelCfg.Name, len(trades)); err != nil {

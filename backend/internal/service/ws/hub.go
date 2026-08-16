@@ -78,7 +78,9 @@ func (h *Hub) Register(conn *websocket.Conn) *client {
 	cl := &client{conn: conn}
 	h.mu.Lock()
 	h.clients[cl] = struct{}{}
+	n := len(h.clients)
 	h.mu.Unlock()
+	log.Printf("[ws] 连接建立 clients=%d", n)
 	return cl
 }
 
@@ -86,7 +88,9 @@ func (h *Hub) Register(conn *websocket.Conn) *client {
 func (h *Hub) Unregister(cl *client) {
 	h.mu.Lock()
 	delete(h.clients, cl)
+	n := len(h.clients)
 	h.mu.Unlock()
+	log.Printf("[ws] 连接断开 clients=%d", n)
 }
 
 // Broadcast 向所有连接广播消息；发送失败的断连客户端逐出。

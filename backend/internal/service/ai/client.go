@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -124,6 +126,14 @@ func repairJSON(s string) string {
 }
 
 // ChatJSON 主入口：优先 json_object + reasoning_effort；失败降级重试；JSON 解析失败修复/重发
+// chatLogHost baseURL → host（日志用，避免打印完整地址）
+func chatLogHost(baseURL string) string {
+	if u, err := url.Parse(baseURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return baseURL
+}
+
 func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = MaxTokens
@@ -132,6 +142,13 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	if effortP == "" {
 		effortP = "high"
 	}
+	// AI 输入日志：调用方/模型/输入规模一目了然；卡住时「入」已打印、「出」未出现 = 卡在等待模型响应
+	start := time.Now()
+	log.Printf("[ai] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s",
+		chatLogHost(baseURL), model, len(system)+len(user), maxTokens, effortP)
+	defer func() {
+		log.Printf("[ai] 出 host=%s model=%s 耗时=%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond))
+	}()
 	payload := chatPayload{
 		Model: model, Temperature: 0.1, MaxTokens: maxTokens,
 		Messages: []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
@@ -152,6 +169,8 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	}
 	parsed, parseErr := ParseJSONContent(content)
 	if parseErr == nil {
+		log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符",
+			chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content))
 		return parsed, nil
 	}
 	if parsed, err := ParseJSONContent(repairJSON(content)); err == nil {

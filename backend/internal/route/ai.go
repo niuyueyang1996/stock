@@ -177,6 +177,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		}
 		name := aiSvc.StockDisplayName(code)
 		jobID := s.Jobs.Start("ai.stock_report", "AI 诊股 "+name, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeStock(code, prompt, intensity)
 			return err
 		})
@@ -254,6 +255,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		name := aiSvc.StockDisplayName(code)
 		jobID := s.Jobs.Start("ai.news", "消息面 AI "+name, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeNews(code, prompt, intensity)
 			return err
 		})
@@ -285,6 +287,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 			return
 		}
 		jobID := s.Jobs.Start("ai.news_batch", "批量消息面 AI", func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeBatchNews(tags, codes, prompt, intensity)
 			return err
 		})
@@ -305,6 +308,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		name := aiSvc.StockDisplayName(code)
 		jobID := s.Jobs.Start("ai.tech", "技术面 AI "+name, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeTechnical(code, prompt, intensity)
 			return err
 		})
@@ -335,6 +339,7 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 			return
 		}
 		jobID := s.Jobs.Start("ai.tech_batch", "批量技术面 AI", func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeBatchTechnical(tags, codes, prompt, intensity)
 			return err
 		})
@@ -409,6 +414,7 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		name := aiSvc.StockDisplayName(code)
 		jobID := s.Jobs.Start("ai.fundflow", "资金流 AI "+name, func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeFundflow(code, window, prompt, intensity)
 			return err
 		})
@@ -432,6 +438,7 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 			return
 		}
 		jobID := s.Jobs.Start("ai.fundflow_batch", "批量资金流 AI", func(p *jobs.Progress) error {
+			p.Step("AI 分析中（耗时较长请稍候）")
 			_, err := aiSvc.AnalyzeBatchFundflow(tags, codes, weights, window, prompt, intensity)
 			return err
 		})

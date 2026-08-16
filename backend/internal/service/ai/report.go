@@ -4,6 +4,7 @@ package ai
 // 对齐 app/services/ai.py build_stock_context/_normalize_report/analyze_stock/get_report。
 
 import (
+	"log"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -525,6 +526,30 @@ func IntensityInstruction(intensity string) string {
 }
 
 // AnalyzeStock 触发诊股：用激活模型分析并落库，返回规整报告 + 元信息
+// aiReportSummary 报告摘要（入库前日志用）：score/grade/action/items 数
+func aiReportSummary(r map[string]any) string {
+	parts := []string{}
+	switch v := r["score"].(type) {
+	case float64:
+		parts = append(parts, fmt.Sprintf("score=%.1f", v))
+	case int:
+		parts = append(parts, fmt.Sprintf("score=%d", v))
+	}
+	if v, ok := r["grade"].(string); ok && v != "" {
+		parts = append(parts, "grade="+v)
+	}
+	if v, ok := r["action"].(string); ok && v != "" {
+		parts = append(parts, "action="+v)
+	}
+	if v, ok := r["items"].([]any); ok {
+		parts = append(parts, fmt.Sprintf("items=%d", len(v)))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "ok")
+	}
+	return strings.Join(parts, " ")
+}
+
 func (s *Service) AnalyzeStock(code, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.GetActiveModel()
 	if modelCfg == nil {
@@ -552,6 +577,7 @@ func (s *Service) AnalyzeStock(code, systemPrompt, intensity string) (map[string
 	report["snapshot_hash"] = s.StockReportSnapshotHash(code, name)
 
 	name2 := s.StockDisplayName(code)
+	log.Printf("[ai] 落库 诊股 code=%s 模型=%s %s", code, name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	if err := s.Reports.Upsert(code, name2, string(b), name); err != nil {
 		return nil, err
