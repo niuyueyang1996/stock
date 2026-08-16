@@ -1,0 +1,15 @@
+.github/workflows/android-apk.yml
+  h_07352c0544a725 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "107d5c7a612ea3c80918f8b3b3a0ab5f81be7425",
+  "prompts": {},
+  "logical_commit_id": "107d5c7a612ea3c80918f8b3b3a0ab5f81be7425",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
