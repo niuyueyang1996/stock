@@ -10,11 +10,6 @@ on:
 permissions:
   contents: write
 
-# 与 windows-package.yml 共享 release 并发组：串行更新同一 tag release（防 body/资产竞争）
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
