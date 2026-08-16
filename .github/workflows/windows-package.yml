@@ -10,11 +10,6 @@ on:
 permissions:
   contents: write
 
-# 与 android-apk.yml 共享 release 并发组：串行更新同一 tag release（防 body/资产竞争）
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   build:
     runs-on: windows-latest
@@ -89,7 +84,7 @@ jobs:
             dist/windows/StockAnalyzer-Setup-*-x64.exe.sha256
           if-no-files-found: error
 
-      # release 由本 workflow 发 exe；android workflow 发 apk（共享 concurrency 串行，body 由先创建者生成）
+      # release 由本 workflow 发 exe；android workflow 发 apk（update_release_body:false 防 changelog 重复）
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
