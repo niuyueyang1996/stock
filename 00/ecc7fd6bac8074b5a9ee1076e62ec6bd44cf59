@@ -1,0 +1,111 @@
+.gitignore
+  h_07352c0544a725 14
+backend/cmd/server/main.go
+  h_07352c0544a725 8,13,45-55,58-66,170-171,245
+backend/internal/db/dao/cache.go
+  h_07352c0544a725 187-230
+backend/internal/db/dao/valuation_test.go
+  h_07352c0544a725 1-108
+backend/internal/raw/http.go
+  h_07352c0544a725 18-22
+backend/internal/raw/lists_test.go
+  h_07352c0544a725 1-94
+backend/internal/raw/sina.go
+  h_07352c0544a725 11,16,33-40,168-169,173,175-194
+backend/internal/raw/tencent.go
+  h_07352c0544a725 443,446-456,464-477,479-490,492-498
+backend/internal/raw/testhooks.go
+  h_07352c0544a725 1-30
+backend/internal/route/router.go
+  h_07352c0544a725 9,48-49,69-88
+backend/internal/route/router_test.go
+  h_07352c0544a725 1-58
+backend/internal/route/stocks_extra2.go
+  h_07352c0544a725 8,49-54,69-73
+backend/internal/service/ai/ai_extras_test.go
+  h_07352c0544a725 1-573
+backend/internal/service/calendar/calendar_test.go
+  h_07352c0544a725 1-211
+backend/internal/service/detail/detail.go
+  h_07352c0544a725 525-526,534
+backend/internal/service/detail/detail_test.go
+  h_07352c0544a725 1-840
+backend/internal/service/detail/detail_test_helpers.go
+  h_07352c0544a725 1-27
+backend/internal/service/dividend/dividend.go
+  h_07352c0544a725 34-36,46-57,65-67,72-73,75-91,93-95,97
+backend/internal/service/dividend/dividend_extra_test.go
+  h_07352c0544a725 1-253
+backend/internal/service/fx/fx.go
+  h_07352c0544a725 9,131,133
+backend/internal/service/fx/fx_test.go
+  h_07352c0544a725 1-358
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 165-171,279-280,283-289
+backend/internal/service/holdings/holdings_extra_test.go
+  h_07352c0544a725 1-418
+backend/internal/service/indices/indices_test.go
+  h_07352c0544a725 1-469
+backend/internal/service/jobs/jobs.go
+  h_07352c0544a725 657-658,670-672,674-687,689-690
+backend/internal/service/jobs/jobs_test.go
+  h_07352c0544a725 123,126,128,132-142,194-241
+backend/internal/service/marketlists/marketlists.go
+  h_07352c0544a725 13,125-129
+backend/internal/service/marketlists/marketlists_test.go
+  h_07352c0544a725 1-497
+backend/internal/service/portfolio/portfolio.go
+  h_07352c0544a725 1457,1459,1542,1559
+backend/internal/service/portfolio/portfolio_passthrough_test.go
+  h_07352c0544a725 1-596
+backend/internal/service/quote/quote_test.go
+  h_07352c0544a725 1-132
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 52-53
+backend/internal/service/refresh/refresh_batch.go
+  h_07352c0544a725 115-120,124-126,128,139,141,146-156
+backend/internal/service/refresh/refresh_batch_test.go
+  h_07352c0544a725 6,17,19,149,151,154-158,208-264
+backend/internal/service/refresh/refresh_valuation.go
+  h_07352c0544a725 1-66
+backend/internal/service/refresh/refresh_valuation_test.go
+  h_07352c0544a725 1-48
+backend/internal/service/stockmeta/stockmeta.go
+  h_07352c0544a725 6,47-50,68-71,89-92
+backend/internal/service/stockmeta/stockmeta_test.go
+  h_07352c0544a725 1-301
+backend/internal/service/valuation/live.go
+  h_07352c0544a725 14,27-28,83,94
+backend/internal/service/valuation/sync.go
+  h_07352c0544a725 1-97
+backend/internal/service/valuation/sync_test.go
+  h_07352c0544a725 1-100
+backend/internal/service/volatility/volatility.go
+  h_07352c0544a725 2-3,16,20-21,177-178
+backend/internal/service/volatility/volatility_test.go
+  h_07352c0544a725 1-394
+packaging/android/app/src/main/java/com/stockanalyzer/app/GoServer.kt
+  h_07352c0544a725 59-61,63-67
+packaging/android/build.sh
+  h_07352c0544a725 2-10,14-22,24-32,52-53,60-61,64-85
+scripts/verify_android.sh
+  h_07352c0544a725 1-101
+static/js/common.js
+  h_07352c0544a725 604-613,615-619,624-626,630,644,663,727-738,2137-2162
+static/logs.html
+  h_07352c0544a725 1-87
+static/stock.html
+  h_07352c0544a725 434-435,437,442,460-462,465,472-475,478-484
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "00ecc7fd6bac8074b5a9ee1076e62ec6bd44cf59",
+  "prompts": {},
+  "logical_commit_id": "00ecc7fd6bac8074b5a9ee1076e62ec6bd44cf59",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
