@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"stockanalyzer/internal/db"
+	"stockanalyzer/internal/db/dao"
 )
 
 // QUANTILE_MIN_SAMPLES 分位样本下限（对齐 app/config.py）
@@ -23,6 +24,8 @@ type FxGetter func(currency, rateDate string) *float64
 type Service struct {
 	DB *gorm.DB
 	Fx FxGetter
+	// dao 数据访问（SetDao 注入；估值序列/分位/当日估值落库，对齐 Python cache.py 层）
+	dao *dao.CacheDAO
 }
 
 // NewLive 构造实时估值服务（注入 DB 与汇率读取器）
@@ -77,7 +80,7 @@ func (s *Service) getSeries(code, indicator, period string, asOf string) []db.Va
 	return rows
 }
 
-// segmentedKey 分段排序键（对齐 Python _segmented_key）：正 (0,v) → 零 (1,0) → 负 (2,-v)（绝对值大在前）
+// segmentedKey 分段排序键（对齐 Python _segmented_key）：正 (0,v) → 零 (1,0) → 负 (2,v)（负按升序=绝对值大在前）
 func segmentedKey(v *float64) [2]float64 {
 	if v == nil {
 		return [2]float64{3, 0}
@@ -88,7 +91,7 @@ func segmentedKey(v *float64) [2]float64 {
 	if *v == 0 {
 		return [2]float64{1, 0}
 	}
-	return [2]float64{2, -*v}
+	return [2]float64{2, *v}
 }
 
 // keyLess 分段键严格小于

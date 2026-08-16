@@ -15,6 +15,11 @@ import (
 	"stockanalyzer/internal/config"
 )
 
+// roundTripFunc 适配 http.RoundTripper 的函数类型：测试注入 mock 传输用。
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 // Client 公共 HTTP 客户端（UA/超时/重试）
 type Client struct {
 	http *http.Client

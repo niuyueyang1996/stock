@@ -11,3 +11,4 @@ build/
 dist/
 backend/data/*.db
 backend/data/
+logs/

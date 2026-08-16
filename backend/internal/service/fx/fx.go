@@ -6,6 +6,7 @@ package fx
 import (
 	"context"
 	"log"
+	"math"
 
 	"gorm.io/gorm"
 
@@ -127,7 +128,7 @@ func (s *Service) RefreshHKFX(ctx context.Context, now string, force bool) map[s
 	return map[string]any{"currency": "HKD", "fetched": fetched, "range": []string{today, today}}
 }
 
-// round2 四舍五入保留两位小数
+// round2 四舍五入保留两位小数（math.Round 对负值同样远离零舍入，避免截断偏差）
 func round2(v float64) float64 {
-	return float64(int(v*100+0.5)) / 100
+	return math.Round(v*100) / 100
 }

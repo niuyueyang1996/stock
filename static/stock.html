@@ -360,32 +360,6 @@
     // 缺失项中文说明
     const MISSING_LABEL = { bars: '日K行情', financials: '财务数据', valuation: '估值历史/分位' };
 
-    // 下载确认弹窗：download=下载并打开 / open=仅打开已有数据 / cancel=取消（不下载）
-    function showDownloadDialog(status) {
-      return new Promise((resolve) => {
-        const missing = (status.missing_items || []).map((k) => MISSING_LABEL[k] || k).join('、');
-        const mask = document.createElement('div');
-        mask.className = 'modal-mask';
-        mask.innerHTML = `
-          <div class="modal">
-            <h3>第一次看这只股票，要先下载数据</h3>
-            <p>这只股票还没下载过，需要联网拿一次数据（通常一两分钟）。下载完就能看完整页面了。</p>
-            <p class="muted" style="font-size:12px">这次会下载：${missing}</p>
-            <div class="modal-actions">
-              <button class="btn" id="dlCancel">先不看了</button>
-              <button class="btn" id="dlPartial">只看已有部分</button>
-              <button class="btn primary" id="dlOk">下载并打开</button>
-            </div>
-          </div>`;
-        document.body.appendChild(mask);
-        const close = (r) => { mask.remove(); resolve(r); };
-        mask.querySelector('#dlCancel').onclick = () => close('cancel');
-        mask.querySelector('#dlPartial').onclick = () => close('open');
-        mask.querySelector('#dlOk').onclick = () => close('download');
-        mask.addEventListener('click', (e) => { if (e.target === mask) close('cancel'); });
-      });
-    }
-
     // 切换/加载股票前清空旧数据，避免残留误导
     function clearStockView() {
       document.getElementById('title').textContent = currentCode ? `正在加载 ${currentCode}…` : '请输入股票代码或名称';
@@ -457,18 +431,17 @@
       }
     }
 
-    // 页面打开即触发该股全量刷新（静态数据受后端 1h 节流）；同一 code 已在刷新中则跳过
-    const _autoRefreshJobs = new Set();
+    // 页面打开即触发该股全量刷新（静态数据受后端 1h 节流）；同一 code 已在刷新中则复用其 job_id
+    const _autoRefreshJobs = new Map(); // code → job_id
     async function startAutoRefreshOnOpen(code) {
-      if (_autoRefreshJobs.has(code)) return null;
-      _autoRefreshJobs.add(code);
+      if (_autoRefreshJobs.has(code)) return _autoRefreshJobs.get(code);
       try {
         const job = await startBackgroundJob(
           '/stocks/' + code + '/refresh/full', { auto: true }, { silent: true },
         );
+        _autoRefreshJobs.set(code, job.job_id);
         return job.job_id;
       } catch (e) {
-        _autoRefreshJobs.delete(code);
         return null;
       }
     }
@@ -484,50 +457,31 @@
       try {
         d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
       } catch (e) {
-        // 无缓存：先触发自动全量刷新，等下载后再判
-        const autoJob = await startAutoRefreshOnOpen(code);
-        if (e.status === 409 && autoJob) {
+        // 缓存缺失：自动触发该股全量刷新（不弹窗），完成后自动加载；已在下载中则等现有任务
+        const jobId = await startAutoRefreshOnOpen(code);
+        if (jobId) {
           document.getElementById('title').textContent = '正在下载数据…';
           try {
-            await waitForJob(autoJob);
+            await waitForJob(jobId);
             _autoRefreshJobs.delete(code);
             if (currentCode === code) {
               d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
             } else {
               return;
             }
-          } catch (e2) { _autoRefreshJobs.delete(code); /* 自动下载失败 → 走 fallback 弹窗 */ }
-        }
-        if (!d) {
-          // 缓存缺失 → 弹窗询问下载（fallback）
-          let status = (e.body && e.body.code === 'CACHE_MISS') ? e.body : null;
-          try { status = status || await api('/stocks/' + code + '/cache-status'); } catch (e2) { /* 兜底 */ }
-          if (status) {
-            const choice = await showDownloadDialog(status);
-            if (choice === 'download') {
-              document.getElementById('title').textContent = '下载中…';
-              try {
-                const job = await startBackgroundJob(
-                  '/stocks/' + code + '/refresh/full',
-                  { items: ['bars', 'financials', 'valuation', 'flow'] },
-                  { toast: '正在下载数据，进度见顶部' },
-                );
-                await waitForJob(job.job_id);
-                if (currentCode === code) location.reload();
-              } catch (e3) {
-                document.getElementById('title').textContent = `下载失败：${e3.message}`;
-                toast('下载失败：' + e3.message, 4000);
-              }
-            } else if (choice === 'open') {
-              try {
-                const dp = await api('/stocks/' + code + stockDetailQS({ partial: true }), { blocking: true });
-                render(dp);
-              } catch (e3) {
-                document.getElementById('title').textContent = `查询失败：${e3.message}`;
-              }
-            }
+          } catch (e2) {
+            _autoRefreshJobs.delete(code);
+            document.getElementById('title').textContent = `下载失败：${e2.message}`;
+            toast('下载失败：' + (e2.message || e2), 4000);
             return;
           }
+        } else {
+          // 刷新请求本身失败（后端异常）：提示，不弹窗
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
+          clearStockView();
+          return;
+        }
+        if (!d) {
           document.getElementById('title').textContent = `查询失败：${e.message}`;
           clearStockView();
           return;

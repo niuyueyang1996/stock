@@ -6,6 +6,7 @@ package route
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,8 @@ type Services struct {
 	Detail     *detail.Service
 	StockMeta  *stockmeta.Service
 	DataManage *datamanage.Service
+	// LogFile 后端日志文件路径（main 装配；GET /api/logs 读尾部，App 内排查用）
+	LogFile string
 }
 
 // Setup 注册全部路由
@@ -63,6 +66,26 @@ func Setup(r *gin.Engine, s *Services) {
 	api.GET("/health", func(c *gin.Context) {
 		// 对齐 Python：Windows 启动器按 app_id 判断服务身份
 		c.JSON(http.StatusOK, gin.H{"ok": true, "app_id": "stock-analyzer", "version": "0.2.0"})
+	})
+	// GET /api/logs —— 后端运行日志尾部（App 内排查：前端 logs.html 轮询展示；纯文本行）。
+	api.GET("/logs", func(c *gin.Context) {
+		lines := 200
+		if v := c.Query("lines"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
+				lines = n
+			}
+		}
+		var out []string
+		if s.LogFile != "" {
+			if b, err := os.ReadFile(s.LogFile); err == nil {
+				all := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+				if len(all) > lines {
+					all = all[len(all)-lines:]
+				}
+				out = all
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "lines": out})
 	})
 	// GET /api/status —— 服务状态概览（对齐 app/api/system.py /status）：返回时间、
 	// trade_day（是否交易日）、market_closed（收盘与否，15:05 视为收盘）、source_status（探测首个持仓代码的数据源）。

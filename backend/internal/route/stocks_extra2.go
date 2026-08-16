@@ -5,6 +5,7 @@ package route
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -45,7 +46,12 @@ func setupStockExtra2Routes(api *gin.RouterGroup, s *Services) {
 		}
 		_ = c.ShouldBindJSON(&body)
 		jobID := s.Jobs.Start("stock.refresh", "刷新 "+code, func(p *jobs.Progress) error {
-			s.Refresh.RefreshStock(c.Request.Context(), code, false, body.Items)
+			// 注意：异步任务必须用 Background ctx——handler 返回后 c.Request.Context()
+			// 已被取消，若沿用会使任务内所有网络请求全部失败（曾导致下载永远 409）。
+			out := s.Refresh.RefreshStock(context.Background(), code, false, body.Items)
+			if err, _ := out["error"].(string); err != "" {
+				return fmt.Errorf("%s", err)
+			}
 			return nil
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code, "kind": "refresh.stock.dynamic"}})
@@ -60,7 +66,11 @@ func setupStockExtra2Routes(api *gin.RouterGroup, s *Services) {
 		}
 		_ = c.ShouldBindJSON(&body)
 		jobID := s.Jobs.Start("stock.refresh_full", "全量刷新 "+code, func(p *jobs.Progress) error {
-			s.Refresh.RefreshStock(c.Request.Context(), code, true, body.Items)
+			// 异步任务必须用 Background ctx（见上方注释：请求 ctx 会被取消导致静默失败）
+			out := s.Refresh.RefreshStock(context.Background(), code, true, body.Items)
+			if err, _ := out["error"].(string); err != "" {
+				return fmt.Errorf("%s", err)
+			}
 			return nil
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code, "kind": "refresh.stock.full"}})

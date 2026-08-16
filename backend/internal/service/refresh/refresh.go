@@ -49,6 +49,8 @@ type Service struct {
 	Live      *valuation.Service
 	Fx        *fx.Service
 	Jobs      *jobs.Manager
+	// Baidu 百度客户端（估值历史序列 sync_valuation 用；main 装配注入）
+	Baidu *raw.Baidu
 	// IsIndex 指数判定（注入：注册表）
 	IsIndex func(code string) bool
 	// IsTradeDay 交易日判定（注入：calendar）

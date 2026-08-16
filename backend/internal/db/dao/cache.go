@@ -184,3 +184,47 @@ type IndexIntradayRow struct {
 	Volume *float64
 	Amount *float64
 }
+
+// ---------- 估值（照 Python cache.py upsert_valuation_series / upsert_quantile / upsert_valuation） ----------
+
+// UpsertValuationSeries 批量 UPSERT 估值历史序列（照 Python upsert_valuation_series）。
+// points: [(trade_date, value)]；空切片直接返回。
+func (d *CacheDAO) UpsertValuationSeries(code, indicator, period string, points [][2]any) error {
+	if len(points) == 0 {
+		return nil
+	}
+	now := time.Now().Format("2006-01-02T15:04:05")
+	for _, p := range points {
+		date, _ := p[0].(string)
+		val, _ := p[1].(float64)
+		if date == "" {
+			continue
+		}
+		if err := d.DB.Exec(`INSERT INTO valuation_history_cache(code, indicator, period, trade_date, value, updated_at)
+			VALUES(?,?,?,?,?,?)
+			ON CONFLICT(code, indicator, period, trade_date) DO UPDATE SET
+				value=excluded.value, updated_at=excluded.updated_at`,
+			code, indicator, period, date, val, now).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpsertQuantile 分位落库（照 Python upsert_quantile）
+func (d *CacheDAO) UpsertQuantile(code, calcDate, period string, pePct, pbPct *float64, sampleDays int) error {
+	return d.DB.Exec(`INSERT INTO valuation_quantile_cache(code, calc_date, period, pe_ttm_pct, pb_pct, sample_days)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(code, calc_date, period) DO UPDATE SET
+			pe_ttm_pct=excluded.pe_ttm_pct, pb_pct=excluded.pb_pct, sample_days=excluded.sample_days`,
+		code, calcDate, period, pePct, pbPct, sampleDays).Error
+}
+
+// UpsertDailyValuation 当日实时估值落库（照 Python upsert_valuation）
+func (d *CacheDAO) UpsertDailyValuation(code, tradeDate string, peTTM, pb, dvRatio, totalMV *float64) error {
+	return d.DB.Exec(`INSERT INTO daily_valuation_cache(code, trade_date, pe_ttm, pb, dv_ratio, total_mv)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(code, trade_date) DO UPDATE SET
+			pe_ttm=excluded.pe_ttm, pb=excluded.pb, dv_ratio=excluded.dv_ratio, total_mv=excluded.total_mv`,
+		code, tradeDate, peTTM, pb, dvRatio, totalMV).Error
+}

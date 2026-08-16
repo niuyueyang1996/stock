@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Sina 新浪客户端
@@ -25,6 +27,14 @@ func NewSina() *Sina {
 	return &Sina{
 		c:           NewClient(),
 		flowHeaders: map[string]string{"Referer": "https://finance.sina.com.cn"},
+	}
+}
+
+// SetTransport 注入自定义 http.RoundTripper（测试专用：绕过真实网络 mock 新浪接口）。
+// 仅修改底层 http.Client 的 transport，生产路径无任何行为差异。
+func (s *Sina) SetTransport(rt http.RoundTripper) {
+	if s.c != nil && s.c.http != nil {
+		s.c.http.Transport = rt
 	}
 }
 
@@ -155,14 +165,33 @@ func (s *Sina) FXRate(ctx context.Context) *float64 {
 // 页间并发（8 路限流），按页序合并去重。返回代码（5位）+ 新浪中文名
 // （腾讯中文名由 Tencent.HKNames 覆盖，见 marketlists）。
 func (s *Sina) ListHK(ctx context.Context) ([]MarketCode, error) {
+	// pageSize=60 为新浪 getHKStockData 接口硬上限（num>60 一律截断为 60，akshare 同款）。
+	// 港股约 2800 只 → 47 页；maxPages=50 覆盖全量且避免多余空页请求（8 路并发约 2s 完成）。
 	const (
 		pageSize = 60
 		workers  = 8
-		maxPages = 100
+		maxPages = 50
 	)
-	first, err := s.hkPage(ctx, 1, pageSize)
-	if err != nil {
-		return nil, err
+	// 首页失败/空时重试（新浪偶发瞬时失败/限流），间隔 500ms
+	var first []MarketCode
+	var firstErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		first, firstErr = s.hkPage(ctx, 1, pageSize)
+		if firstErr == nil && len(first) > 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if firstErr != nil || len(first) == 0 {
+		return nil, fmt.Errorf("新浪港股列表为空: %v", firstErr)
+	}
+	if len(first) < pageSize {
+		// 首页即最后一页（小列表），无需拉后续页
+		return first, nil
 	}
 	out := first
 	var wg sync.WaitGroup

@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -121,6 +122,11 @@ func (s *Service) loadETF(ctx context.Context) ([]map[string]any, error) {
 	}
 	if len(merged) == 0 {
 		return nil, fmt.Errorf("ETF 两源均失败: %v", errs)
+	}
+	if len(errs) > 0 {
+		// 单源失败另一源兜底：仍返回部分并集，但必须留痕，否则不完整的
+		// ETF 列表（缺债券 ETF 或货币 ETF）会静默落盘并被当作新鲜缓存一整天。
+		log.Printf("marketlists: ETF 两源仅一源成功，列表可能不完整: %v", errs)
 	}
 	return toRows(merged, "etf"), nil
 }

@@ -162,7 +162,13 @@ func (s *Service) RecordTrade(code, side string, price, quantity, fee float64, t
 		return 0, nil, err
 	}
 	h, err := s.Rebuild(code)
-	return id, h, err
+	if err != nil {
+		// 重放失败（如卖出超量触发 ErrInvalid）时回滚本次插入，
+		// 避免脏交易残留，污染后续所有重放。
+		_ = s.DB.DeleteTrade(id)
+		return id, nil, err
+	}
+	return id, h, nil
 }
 
 // GetHoldings 持仓列表（含名称/标签/币种/人民币成本/累计分红；按数量降序，对齐 Python）
@@ -270,10 +276,17 @@ func (s *Service) AdjustCost(code string, amount, deltaQty float64, note string,
 		Code: code, Side: "adjust", Price: 0, Quantity: deltaQty, Amount: amount,
 		TradeTime: tradeTime, Note: strptr(note), IsDividend: dv, FxRate: fxRate, AmountCny: amountCny,
 	}
-	if _, err := s.DB.InsertTrade(t); err != nil {
+	id, err := s.DB.InsertTrade(t)
+	if err != nil {
 		return nil, err
 	}
-	return s.Rebuild(code)
+	h, err := s.Rebuild(code)
+	if err != nil {
+		// 重放失败（如调整后股数 ≤0）时回滚，避免脏 adjust 残留。
+		_ = s.DB.DeleteTrade(id)
+		return nil, err
+	}
+	return h, nil
 }
 
 // CumulativeDividend 累计分红 = adjust 且 is_dividend=1 的 SUM(-amount)

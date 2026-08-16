@@ -56,9 +56,15 @@ object GoServer {
         pb.environment()["STOCK_PORT"] = PORT.toString()
         pb.redirectErrorStream(true)
         process = pb.start()
-        // 守护日志线程，避免 stdout 管道阻塞
+        // 守护日志线程，避免 stdout 管道阻塞。
+        // 必须捕获全部异常：stop() 销毁进程后，read 会抛 InterruptedIOException，
+        // 线程未捕获异常会直接杀掉整个 App（Android 默认行为）。
         Thread {
-            process?.inputStream?.bufferedReader()?.forEachLine { Log.d(TAG, it) }
+            try {
+                process?.inputStream?.bufferedReader()?.forEachLine { Log.d(TAG, it) }
+            } catch (e: Exception) {
+                Log.d(TAG, "日志守护线程退出: ${e.message}")
+            }
         }.start()
         Log.i(TAG, "后端进程已启动")
     }

@@ -440,11 +440,20 @@ func isHKCode(code string) bool {
 }
 
 // HKNames 腾讯批量港股中文名（qt.gtimg.cn v_hk 段，50 个一批，GBK；
-// 对齐 Python _fetch_hk_names）。返回 code→中文名，单批失败跳过。
+// 对齐 Python _fetch_hk_names）。批间并发（8 路），返回 code→中文名，单批失败跳过。
 func (t *Tencent) HKNames(ctx context.Context, codes []string) map[string]string {
 	names := map[string]string{}
-	for i := 0; i < len(codes); i += 50 {
-		end := i + 50
+	const (
+		batch   = 50
+		workers = 8
+	)
+	type chunk struct {
+		idx  int
+		syms []string
+	}
+	var chunks []chunk
+	for i := 0; i < len(codes); i += batch {
+		end := i + batch
 		if end > len(codes) {
 			end = len(codes)
 		}
@@ -452,21 +461,41 @@ func (t *Tencent) HKNames(ctx context.Context, codes []string) map[string]string
 		for _, c := range codes[i:end] {
 			syms = append(syms, "hk"+c)
 		}
-		text, err := t.c.GetGBK(ctx, "https://qt.gtimg.cn/q="+strings.Join(syms, ","), nil)
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(text, ";") {
-			line = strings.TrimSpace(line)
-			if !strings.Contains(line, "=") || !strings.Contains(line, "v_hk") {
-				continue
+		chunks = append(chunks, chunk{idx: i, syms: syms})
+	}
+	results := make([]map[string]string, len(chunks))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, workers)
+	for ci := range chunks {
+		wg.Add(1)
+		go func(ci int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			text, err := t.c.GetGBK(ctx, "https://qt.gtimg.cn/q="+strings.Join(chunks[ci].syms, ","), nil)
+			if err != nil {
+				return
 			}
-			head, payload, _ := strings.Cut(line, "=")
-			code := strings.TrimPrefix(strings.TrimSpace(head), "v_hk")
-			parts := strings.Split(strings.Trim(payload, `"`), "~")
-			if len(parts) >= 3 && strings.TrimSpace(parts[1]) != "" {
-				names[code] = strings.TrimSpace(parts[1])
+			m := map[string]string{}
+			for _, line := range strings.Split(text, ";") {
+				line = strings.TrimSpace(line)
+				if !strings.Contains(line, "=") || !strings.Contains(line, "v_hk") {
+					continue
+				}
+				head, payload, _ := strings.Cut(line, "=")
+				code := strings.TrimPrefix(strings.TrimSpace(head), "v_hk")
+				parts := strings.Split(strings.Trim(payload, `"`), "~")
+				if len(parts) >= 3 && strings.TrimSpace(parts[1]) != "" {
+					m[code] = strings.TrimSpace(parts[1])
+				}
 			}
+			results[ci] = m
+		}(ci)
+	}
+	wg.Wait()
+	for _, m := range results {
+		for k, v := range m {
+			names[k] = v
 		}
 	}
 	return names

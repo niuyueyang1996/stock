@@ -112,13 +112,20 @@ func (s *Service) processStock(ctx context.Context, code string, full bool, item
 		}
 		entry["bars"] = r1
 		entry["financials"] = r3
+		// 失败上报：单股刷新任务据此返回 error（jobs 标失败，前端可见，不再假成功）
+		if v, _ := r1["reason"].(string); v == "source_fail" {
+			entry["error"] = code + " 日K行情下载失败（数据源无返回）"
+		} else if v, _ := r3["reason"].(string); v == "source_fail" {
+			entry["error"] = code + " 财务数据下载失败（数据源无返回）"
+		}
 		if items[ItemFlow] {
 			entry["fundflow"] = s.syncFundflow(ctx, code, now)
 		}
-		// valuation：当前 Go 刷新层尚未接通估值落库，仅消费 items 语义；
-		// 实时估值由读取层用 Live 服务现算。
+		// 估值：依赖价格 → 全量拉百度序列 + 重算分位 + 落库当日估值（照 Python
+		// `if need_val: r2 = sync_valuation(code, now, price, force=True)`；
+		// price 用当日日K收盘（照 _today_price，缺当日回退最近一条））。
 		if items[ItemValuation] {
-			entry["valuation"] = "requested"
+			entry["valuation"] = s.syncValuation(ctx, code, now, true, s.todayPrice(code, now))
 		}
 	} else {
 		// ---- 动态分支 ----
@@ -129,12 +136,24 @@ func (s *Service) processStock(ctx context.Context, code string, full bool, item
 		if items[ItemFlow] {
 			entry["fundflow"] = s.syncFundflow(ctx, code, now)
 		}
+		// 动态估值：仅落库当日实时估值，不拉序列/不分位（照 Python sync_current_valuation）
 		if items[ItemValuation] {
-			entry["valuation"] = "requested"
+			entry["valuation"] = s.syncCurrentValuation(ctx, code, now)
 		}
 	}
 	entry["fetched"] = 0
 	return entry
+}
+
+// todayPrice 当日实时价（日K缓存）；当日无则回退最近一条收盘（照 Python _today_price）
+func (s *Service) todayPrice(code string, now time.Time) *float64 {
+	if dp := s.Cache.GetDailyPrice(code, now.Format("2006-01-02")); dp != nil && dp.Close != nil {
+		return dp.Close
+	}
+	if latest := s.Cache.GetLatestDailyPrice(code); latest != nil {
+		return latest.Close
+	}
+	return nil
 }
 
 // stockName 股票名（对齐 refresh.py _stock_name）；无则回退 code

@@ -654,7 +654,8 @@ func strOrNil(s string) any {
 	return s
 }
 
-// Prewarm 入队一个系统启动预热任务：按 steps 依次执行 fn 并上报进度，返回任务 ID。
+// Prewarm 入队一个系统启动预热任务：steps **并发**执行 fn 并上报进度（各步骤互不依赖，
+// 如市场列表/指数/汇率/除权；并发可显著缩短预热总时长）。返回任务 ID。
 func (m *Manager) Prewarm(steps []string, fn func(step string) error) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -666,14 +667,27 @@ func (m *Manager) Prewarm(steps []string, fn func(step string) error) string {
 	}
 	job.Fn = func(p *Progress) error {
 		p.SetTotal(len(steps))
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		var firstErr error
 		for _, s := range steps {
-			p.Step(s)
-			if err := fn(s); err != nil {
-				return err
-			}
-			p.CompleteStep(s)
+			wg.Add(1)
+			go func(s string) {
+				defer wg.Done()
+				p.Step(s)
+				if err := fn(s); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					return
+				}
+				p.CompleteStep(s)
+			}(s)
 		}
-		return nil
+		wg.Wait()
+		return firstErr
 	}
 	m.jobs[id] = job
 	m.queues[job.Lane] <- job

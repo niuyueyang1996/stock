@@ -5,10 +5,12 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -40,8 +42,28 @@ import (
 	"stockanalyzer/internal/service/ws"
 )
 
+// serverLogFile 日志文件句柄（/api/logs 读尾部用；未落盘时为 nil）
+var serverLogFile *os.File
+
+// logFilePath 当前日志文件路径（serverLogFile 的 Name；未落盘返回空串）
+func logFilePath() string {
+	if serverLogFile == nil {
+		return ""
+	}
+	return serverLogFile.Name()
+}
+
 func main() {
 	cfg := config.Load()
+
+	// 日志落盘（App 内经 GET /api/logs 查看；开发态同时输出 stdout）
+	logDir := filepath.Join(cfg.AppHome, "logs")
+	_ = os.MkdirAll(logDir, 0o755)
+	if lf, err := os.OpenFile(filepath.Join(logDir, "server.log"),
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, lf))
+		serverLogFile = lf
+	}
 
 	// 支持 --listen host:port（Android 壳/打包启动器传入），优先级高于 STOCK_PORT 环境变量
 	listenAddr := flag.String("listen", "", "监听地址 host:port（覆盖 STOCK_PORT）")
@@ -145,6 +167,8 @@ func main() {
 		return t.Weekday() != time.Saturday && t.Weekday() != time.Sunday
 	}
 	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, mm, fm, vm, liveSvc, fxSvc, jm)
+	rfSvc.Baidu = bd // 估值历史序列（sync_valuation）
+	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = func(code string) bool {
 		var n int64
 		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
@@ -218,6 +242,7 @@ func main() {
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
 		Jobs: jm, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
 		Detail: detailSvc, StockMeta: stockMetaSvc, DataManage: dataManageSvc,
+		LogFile: logFilePath(),
 	}
 	_ = settingsSvc
 	_ = nw

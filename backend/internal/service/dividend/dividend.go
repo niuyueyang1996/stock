@@ -31,6 +31,9 @@ type Service struct {
 	cn       *raw.CNInfo
 	holdings *holdings.Service
 	DB       *gorm.DB
+	// fetchDiv 测试注入点：非 nil 时优先走自定义的最近除权查询，绕过真实网络。
+	// 生产构造（New）不设置该字段，行为与之前完全一致。
+	fetchDiv func(ctx context.Context, code string) *LatestDividend
 }
 
 // New 构造除权服务：注入东财/巨潮数据源、持仓服务与 DB
@@ -40,41 +43,58 @@ func New(e *raw.EM, c *raw.CNInfo, h *holdings.Service, g *gorm.DB) *Service {
 
 // FetchLatestDividend 最近一次已除权的每股现金分红（东财优先，巨潮降级）
 func (s *Service) FetchLatestDividend(ctx context.Context, code string) *LatestDividend {
+	if s.fetchDiv != nil {
+		return s.fetchDiv(ctx, code)
+	}
+	if ld := latestEM(s.em.DividendDetail(ctx, code)); ld != nil {
+		return ld
+	}
+	// 降级：巨潮分红（无除权除息日 → 自动除权跳过，手动按钮仍可用）
+	return latestCN(s.cn.Dividend(ctx, code))
+}
+
+// latestEM 从东财分红送配行里挑选除权日最新的现金派息（过滤空除权日/无派息），返回 nil 表示无有效数据。
+func latestEM(rows []raw.DividendRowEM) *LatestDividend {
 	type drow struct {
 		exDate string
 		report string
 		per10  float64
 	}
-	rows := s.em.DividendDetail(ctx, code)
 	var ds []drow
 	for _, r := range rows {
-		if r.ExDividendDate == "" || r.PretaxBonusRMB == nil || *r.PretaxBonusRMB == 0 {
+		// 除权日须为 "YYYY-MM-DD..."（至少 10 位）且派息有效才计入，
+		// 否则跳过：避免对异常短日期直接切片 [:10] 引发的 panic。
+		if len(r.ExDividendDate) < 10 || r.PretaxBonusRMB == nil || *r.PretaxBonusRMB == 0 {
 			continue
 		}
 		ds = append(ds, drow{exDate: r.ExDividendDate[:10], report: r.ReportDate[:10], per10: *r.PretaxBonusRMB})
 	}
-	if len(ds) > 0 {
-		sort.Slice(ds, func(i, j int) bool { return ds[i].exDate < ds[j].exDate })
-		last := ds[len(ds)-1]
-		return &LatestDividend{
-			ExDate: last.exDate, ReportDate: last.report,
-			Per10Share: round4(last.per10), PerShare: round4(last.per10 / 10), Source: "em",
+	if len(ds) == 0 {
+		return nil
+	}
+	sort.Slice(ds, func(i, j int) bool { return ds[i].exDate < ds[j].exDate })
+	last := ds[len(ds)-1]
+	return &LatestDividend{
+		ExDate: last.exDate, ReportDate: last.report,
+		Per10Share: round4(last.per10), PerShare: round4(last.per10/10), Source: "em",
+	}
+}
+
+// latestCN 巨潮分红降级：汇总「年度」派息（无除权除息日，仅手动可用）。无有效数据返回 nil。
+func latestCN(rows []raw.DividendRow) *LatestDividend {
+	if len(rows) == 0 {
+		return nil
+	}
+	var total float64
+	for _, r := range rows {
+		if r.Cash != nil && *r.Cash > 0 && strings.Contains(r.DivType, "年度") {
+			total += *r.Cash
 		}
 	}
-	// 降级：巨潮分红（无除权除息日 → 自动除权跳过，手动按钮仍可用）
-	cnRows := s.cn.Dividend(ctx, code)
-	if len(cnRows) > 0 {
-		var total float64
-		for _, r := range cnRows {
-			if r.Cash != nil && *r.Cash > 0 && strings.Contains(r.DivType, "年度") {
-				total += *r.Cash
-			}
-		}
-		if total > 0 {
-			return &LatestDividend{ExDate: "", ReportDate: "年报", Per10Share: round4(total), PerShare: round4(total / 10), Source: "cninfo"}
-		}
+	if total <= 0 {
+		return nil
 	}
-	return nil
+	return &LatestDividend{ExDate: "", ReportDate: "年报", Per10Share: round4(total), PerShare: round4(total / 10), Source: "cninfo"}
 }
 
 // isApplied 该 code 在 exDate 是否已做过除权（幂等判断）

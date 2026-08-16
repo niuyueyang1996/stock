@@ -18,11 +18,6 @@ import (
 	"time"
 )
 
-// roundTripFunc 测试用 transport：拦截请求返回固定响应
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 func attachTransport(c *Client, fn func(*http.Request) (*http.Response, error)) {
 	c.http.Transport = roundTripFunc(fn)
 }

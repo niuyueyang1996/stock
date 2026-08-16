@@ -120,13 +120,26 @@ func TestCancel(t *testing.T) {
 
 func TestPrewarm(t *testing.T) {
 	m := New()
+	var mu sync.Mutex
 	var order []string
 	id := m.Prewarm([]string{"step1", "step2"}, func(step string) error {
+		mu.Lock()
 		order = append(order, step)
+		mu.Unlock()
 		return nil
 	})
 	waitStatus(t, m, id, StatusDone)
-	if len(order) != 2 || order[0] != "step1" {
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 {
+		t.Fatalf("order = %v", order)
+	}
+	// 并发执行：完成集合一致即可，不要求串行顺序
+	seen := map[string]bool{}
+	for _, s := range order {
+		seen[s] = true
+	}
+	if !seen["step1"] || !seen["step2"] {
 		t.Fatalf("order = %v", order)
 	}
 	snap := m.PrewarmSnapshot()
@@ -178,5 +191,53 @@ func TestOnBroadcastForce(t *testing.T) {
 	}
 	if gotData["label"] != "广播任务" {
 		t.Fatalf("推送快照 label = %v", gotData["label"])
+	}
+}
+
+// TestPrewarmConcurrent 验证预热步骤并发执行（各步互不依赖，并发缩短总时长）
+func TestPrewarmConcurrent(t *testing.T) {
+	m := New()
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	id := m.Prewarm([]string{"s1", "s2", "s3", "s4"}, func(step string) error {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil
+	})
+	waitStatus(t, m, id, StatusDone)
+	if maxActive < 2 {
+		t.Fatalf("步骤未并发执行: maxActive=%d", maxActive)
+	}
+	m.mu.Lock()
+	j := m.jobs[id]
+	m.mu.Unlock()
+	if len(j.Done) != 4 {
+		t.Fatalf("done=%v", j.Done)
+	}
+}
+
+// TestPrewarmCollectsFirstError 并发下仍收集首个步骤错误 → 任务标失败
+func TestPrewarmCollectsFirstError(t *testing.T) {
+	m := New()
+	id := m.Prewarm([]string{"a", "b", "c"}, func(step string) error {
+		if step == "b" {
+			return errors.New("boom")
+		}
+		return nil
+	})
+	waitStatus(t, m, id, StatusError)
+	m.mu.Lock()
+	j := m.jobs[id]
+	m.mu.Unlock()
+	if j.Error != "boom" {
+		t.Fatalf("error=%q", j.Error)
 	}
 }

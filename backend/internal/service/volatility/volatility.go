@@ -1,6 +1,6 @@
 // Package volatility 组合年化波动率（持仓市值加权，人民币口径）+ 个股年化波动率。
-// 对齐 app/analysis/volatility.py：港股价格 × 当日汇率 → 人民币；休市日前向填充 ≤3 自然日；
-// 日覆盖率 <95% 剔除。
+// 港股价格 × 当日汇率 → 人民币；休市日前向填充 ≤3 自然日；
+// 单日市值覆盖率 <90% 剔除；样本不足 60 天返回 nil。
 package volatility
 
 import (
@@ -13,11 +13,12 @@ import (
 	"stockanalyzer/internal/db"
 )
 
-// 常量（对齐 volatility.py）
+// 常量（用户确认口径：单日市值覆盖率≥90%、样本≥60 天）
 const (
 	TradingDays        = 250
 	MaxForwardFillDays = 3
-	CoverageThreshold  = 0.95
+	CoverageThreshold  = 0.90
+	MinSampleDays      = 60
 )
 
 // Service 波动率服务
@@ -173,7 +174,8 @@ func (s *Service) Compute(codes []string, weights map[string]float64, currencies
 			keep = append(keep, d)
 		}
 	}
-	if len(keep) < 2 {
+	// 覆盖率不足 90% 或样本不足 60 天 → 整体返回 nil
+	if len(keep) < MinSampleDays {
 		return map[string]any{"annual": nil, "per_stock": map[string]any{}, "sample_days": len(keep)}
 	}
 

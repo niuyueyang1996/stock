@@ -601,18 +601,33 @@ function setupJobBar(nav) {
     }
   }
 
-  // 进度来源：优先 WebSocket 推送；断线/未连上时回退轮询
+  // 进度来源：ws 在线时零轮询（靠推送，省请求）；**仅两种场景轮询兜底**——
+  //  1) ws 断线/未连上（__wsDown）：任务中 1s / 空闲 2.5s
+  //  2) ws 假死（连接在但 30s 无任何消息，如 Android WebView 半死连接）：
+  //     主动关闭重连并转轮询，避免任务完成事件永久丢失 → 页面一直「正在加载中」
+  // 另：waitForJob 在任务等待期间无条件轮询（见下），保证任务终态必达。
+  let _wsLastMsgAt = 0;
+  function wsStale() {
+    return window._ws && window._ws.readyState === 1 && _wsLastMsgAt > 0 &&
+      Date.now() - _wsLastMsgAt > 30000;
+  }
   function tick() {
-    if (window.__wsDown !== false) {
+    if (wsStale()) {
+      // 假死：强制断开触发 onclose → 重连 + 转轮询
+      try { window._ws.close(); } catch (e) {}
+    }
+    if (window.__wsDown !== false || wsStale()) {
       api('/status/jobs', { silent: true })
         .then(renderJobSnapshot)
         .catch(() => {})
         .finally(() => { setTimeout(tick, _jobBarActive ? 1000 : 2500); });
+    } else {
+      // ws 在线：零轮询；每 10s 检查一次假死
+      setTimeout(tick, 10000);
     }
-    // ws 在线：零轮询，完全靠 ws 推送（含重连后的初始快照）
   }
   // 任务入队后调用：确保进度条立即显示新任务。
-  // 注意：ws 在线时 tick 不轮询，新任务入队的 ws 推送可能被后端 0.3s 节流吞掉
+  // 注意：新任务入队的 ws 推送可能被后端 0.3s 节流吞掉
   // （如紧接上个任务完成推送之后入队），导致进度条停留在旧状态、几秒后消失。
   // 因此这里主动拉一次快照，不依赖推送时序。
   window.kickJobBar = () => {
@@ -626,6 +641,7 @@ function setupJobBar(nav) {
 
   // ---- WebSocket：任务进度推送 + 数据更新推送 ----
   function wsOnMessage(ev) {
+    _wsLastMsgAt = Date.now();
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { return; }
     if (!msg || !msg.type) return;
@@ -644,7 +660,7 @@ function setupJobBar(nav) {
     } catch (e) { window.__wsDown = true; return; }
     window._ws = ws;
     window.__wsDown = true;
-    ws.onopen = () => { window.__wsDown = false; tick(); };
+    ws.onopen = () => { window.__wsDown = false; _wsLastMsgAt = Date.now(); tick(); };
     ws.onmessage = wsOnMessage;
     ws.onclose = () => {
       window.__wsDown = true;
@@ -708,20 +724,18 @@ function waitForJob(jobId, timeoutMs = 600000) {
       }
     }
     timer = setTimeout(() => finish(false, null, '任务超时'), timeoutMs);
-    // ws 在线靠推送（app-job-done）+ 快照命中，不再轮询刷 /status/jobs；断线才轮询兜底
-    if (window.__wsDown !== false) {
-      poll = setInterval(async () => {
-        try {
-          const p = await api('/status/jobs', { silent: true });
-          const hit = (p.recent || []).find(r => match(r));
-          if (hit) {
-            if (hit.status === 'cancelled' || hit.ok === false || hit.error)
-              finish(false, hit, hit.error || '已取消');
-            else finish(true, hit);
-          }
-        } catch (e) { /* ignore */ }
-      }, 500);
-    }
+    // 无条件轮询兜底（ws 可能半死/未连上；本地服务开销极小）——保证任务终态必达
+    poll = setInterval(async () => {
+      try {
+        const p = await api('/status/jobs', { silent: true });
+        const hit = (p.recent || []).find(r => match(r));
+        if (hit) {
+          if (hit.status === 'cancelled' || hit.ok === false || hit.error)
+            finish(false, hit, hit.error || '已取消');
+          else finish(true, hit);
+        }
+      } catch (e) { /* ignore */ }
+    }, 500);
   });
 }
 
@@ -2120,3 +2134,29 @@ function setAsOfHint(container, meta) {
     hint.textContent = '';
   }
 }
+
+// ---- 后端日志入口（App 内排查）：右下角悬浮按钮 → logs.html ----
+(function () {
+  if (window.__logsBtnInjected) return;
+  window.__logsBtnInjected = true;
+  const inject = () => {
+    if (document.getElementById('logsFloatBtn')) return;
+    const b = document.createElement('button');
+    b.id = 'logsFloatBtn';
+    b.textContent = '🛠 日志';
+    b.title = '查看后端运行日志（排查问题用）';
+    b.style.cssText =
+      'position:fixed;right:14px;bottom:70px;z-index:9999;padding:6px 10px;font-size:12px;' +
+      'border-radius:16px;border:1px solid #33415f;background:rgba(22,32,58,.85);color:#c8d3e0;' +
+      'cursor:pointer;opacity:.5;box-shadow:0 2px 6px rgba(0,0,0,.35);';
+    b.onmouseenter = () => { b.style.opacity = '1'; };
+    b.onmouseleave = () => { b.style.opacity = '.5'; };
+    b.onclick = () => window.open('/static/logs.html', '_blank');
+    document.body.appendChild(b);
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', inject);
+  } else {
+    inject();
+  }
+})();

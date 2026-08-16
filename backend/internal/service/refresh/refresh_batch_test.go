@@ -3,6 +3,7 @@ package refresh
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/market"
+	"stockanalyzer/internal/service/model"
 )
 
 // openRefreshBatch 构造含 Finance（空降级链）/Market（空链）的 Service，用于验证 items 过滤分支。
@@ -143,10 +146,15 @@ func TestRefreshStockItemsFilter(t *testing.T) {
 		t.Fatal("动态未选 flow 不应出现 fundflow")
 	}
 
-	// 动态 + valuation → 标记 requested
+	// 动态 + valuation → 走 syncCurrentValuation（Live 未装配 → no_source，证明真实调用而非占位）
 	entry5 := s.RefreshStock(context.Background(), "600519", false, []string{"valuation"})
-	if entry5["valuation"] != "requested" {
+	if v, ok := entry5["valuation"].(map[string]any); !ok || v["reason"] != "no_source" {
 		t.Fatalf("valuation = %v", entry5["valuation"])
+	}
+	// 全量 + valuation → 走 syncValuation（force；Live 未装配 → no_source）
+	entry6 := s.RefreshStock(context.Background(), "600519", true, []string{"valuation"})
+	if v, ok := entry6["valuation"].(map[string]any); !ok || v["reason"] != "no_source" {
+		t.Fatalf("全量 valuation = %v", entry6["valuation"])
 	}
 }
 
@@ -197,4 +205,61 @@ func waitBatchIdle(t *testing.T, m *jobs.Manager) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("刷新车道在限时内未空闲")
+}
+
+// TestProcessStockReportsError：数据源失败时 entry["error"] 上报（任务不再假成功，
+// 前端 waitForJob 能收到失败而非永久等待/死胡同）
+func TestProcessStockReportsError(t *testing.T) {
+	s, _, _ := openRefreshBatch(t) // 空 Market/Finance 链 → bars/financials source_fail
+	set := s.itemSet(true, nil)
+	entry := s.processStock(context.Background(), "601857", true, set)
+	errMsg, ok := entry["error"].(string)
+	if !ok || errMsg == "" {
+		t.Fatalf("期望 error 上报，got %v", entry["error"])
+	}
+}
+
+// TestRefreshStockFullPersists：修复回归——单股全量刷新必须真实落库（用户场景：
+// 搜索新代码 → 自动下载 → 详情可打开；曾因任务 ctx 被取消导致静默失败、永远 409）
+func TestRefreshStockFullPersists(t *testing.T) {
+	s, _, g := openRefreshBatch(t)
+	// 注入可用的日K源（fake），财务链保持空（不影响 bars 断言）
+	bars := []model.Bar{
+		{Date: "2026-08-12", Open: 8, High: 9, Low: 7.5, Close: 8.5, Volume: 100, Amount: 1000},
+		{Date: "2026-08-13", Open: 8.5, High: 9.2, Low: 8.2, Close: 9.0, Volume: 120, Amount: 1200},
+		{Date: "2026-08-14", Open: 9.0, High: 9.5, Low: 8.8, Close: 9.3, Volume: 130, Amount: 1300},
+	}
+	s.Market = market.NewMarketManager(&fakeMarketSource{bars: bars})
+	set := s.itemSet(true, nil)
+	entry := s.processStock(context.Background(), "601857", true, set)
+	// bars 已落库（fake 源成功）；财务链为空 → 财务失败上报 error（部分失败可见）
+	var n int64
+	if err := g.Model(&dao.DailyPrice{}).Where("code = ?", "601857").Count(&n).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("日K落库 %d 行，期望 3", n)
+	}
+	if errMsg, ok := entry["error"].(string); !ok || !strings.Contains(errMsg, "财务") {
+		t.Fatalf("期望财务失败上报 error，got %v", entry["error"])
+	}
+}
+
+// fakeMarketSource 测试用行情源：只提供固定日K
+type fakeMarketSource struct {
+	bars []model.Bar
+}
+
+func (f *fakeMarketSource) Name() string { return "fake" }
+
+func (f *fakeMarketSource) Quote(ctx context.Context, code string) (*model.Quote, error) {
+	return nil, market.ErrNotSupported
+}
+
+func (f *fakeMarketSource) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
+	return f.bars, nil
+}
+
+func (f *fakeMarketSource) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
+	return nil, nil
 }

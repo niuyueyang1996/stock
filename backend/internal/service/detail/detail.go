@@ -522,7 +522,8 @@ func keyLess(a, b [2]float64) bool {
 	return a[0] < b[0] || (a[0] == b[0] && a[1] < b[1])
 }
 
-// segmentedKey 分段键：正 (0,v) / 零 (1,0) / 负 (2,-v)
+// segmentedKey 分段键：正 (0,v) / 零 (1,0) / 负 (2,v)。
+// 负值带原值 v（负号保留），使 keyLess 升序得到 -100 < -20 < -5，满足「负 绝对值大→小」。
 func segmentedKey(v float64) [2]float64 {
 	if v > 0 {
 		return [2]float64{0, v}
@@ -530,7 +531,7 @@ func segmentedKey(v float64) [2]float64 {
 	if v == 0 {
 		return [2]float64{1, 0}
 	}
-	return [2]float64{2, -v}
+	return [2]float64{2, v}
 }
 
 // resolveTradeDay 解析有效交易日（对齐 Python resolve_trade_day）：

@@ -1454,9 +1454,9 @@ const fundflowHistoryDays = 760
 
 // ---------- 组合资金流穿透 ----------
 
-// flowBucket 分时五档净流入累计（super_large/large/medium/small/xs + 买卖盘）
+// flowBucket 分时五档净流入累计（super_large/large/medium/small/xs + 主力 + 买卖盘）
 type flowBucket struct {
-	superLarge, large, medium, small, xs, buy, sell float64
+	superLarge, large, medium, small, xs, mainNet, buy, sell float64
 }
 
 // latestBucket 日级汇总字段（五档 + 净额 + 主力 + 买卖盘），对齐 Python _LATEST_KEYS
@@ -1539,6 +1539,7 @@ func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note st
 			b.medium += derefF(r.MediumNet)
 			b.small += derefF(r.SmallNet)
 			b.xs += derefF(r.XsNet)
+			b.mainNet += derefF(r.MainNet)
 			b.buy += derefF(r.BuyAmount)
 			b.sell += derefF(r.SellAmount)
 		}
@@ -1555,6 +1556,7 @@ func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note st
 			"ts":              ts,
 			"super_large_net": round2(b.superLarge), "large_net": round2(b.large),
 			"medium_net": round2(b.medium), "small_net": round2(b.small), "xs_net": round2(b.xs),
+			"main_net":   round2(b.mainNet),
 			"buy_amount": round2(b.buy), "sell_amount": round2(b.sell),
 		})
 	}
