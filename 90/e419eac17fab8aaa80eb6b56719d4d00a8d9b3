@@ -1,0 +1,20 @@
+.github/workflows/ci-test.yml
+  h_07352c0544a725 1-37
+.github/workflows/windows-package.yml
+  h_07352c0544a725 3,65-66
+.github/workflows/android-apk.yml
+  h_07352c0544a725 3,61-73,81-91,106-107,115-119,121
+  h_07352c0544a725 80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "90e419eac17fab8aaa80eb6b56719d4d00a8d9b3",
+  "prompts": {},
+  "logical_commit_id": "90e419eac17fab8aaa80eb6b56719d4d00a8d9b3",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
