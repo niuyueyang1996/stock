@@ -2,20 +2,21 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
   <title>组合分析 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
-<body>
+<body class="page-portfolio">
   <nav></nav>
-  <div class="container layout-with-sidebar" style="display:flex; align-items:flex-start; gap:16px">
+  <div class="container layout-with-sidebar">
     <aside id="tagSidebar" class="tag-sidebar tag-sidebar-sticky">
       <h3>标签 <span class="sub" id="tagCount"></span></h3>
       <div id="tagAllCard" class="tag-card all" title="全选 / 全持仓（点击切换）"></div>
       <div id="tagList"></div>
     </aside>
-    <div style="flex:1; min-width:0">
+    <div class="layout-main">
       <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个标签。</div>
       <div id="rightContent">
         <div class="panel panel-tight" id="asOfPanel">
@@ -34,7 +35,7 @@
           <div class="period-tabs" id="aiScoreTabs"></div>
           <div id="aiScoreTabScore">
             <div id="aiScoreBody"></div>
-            <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
+            <div id="tagPrefList" class="tag-pref-list"></div>
           </div>
           <div id="aiScoreTabNews" style="display:none;margin-top:10px">
             <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
@@ -48,16 +49,16 @@
         </div>
         <div class="panel" id="gaugePanel">
           <h2>综合估值分位（近1年）</h2>
-          <div style="display:flex;gap:20px;flex-wrap:wrap">
-            <div class="chart sm" id="peGauge" style="flex:1;min-width:280px"></div>
-            <div class="chart sm" id="pbGauge" style="flex:1;min-width:280px"></div>
+          <div class="chart-row">
+            <div class="chart sm" id="peGauge"></div>
+            <div class="chart sm" id="pbGauge"></div>
           </div>
         </div>
         <div class="panel" id="seriesPanel">
           <h2>组合综合 PE/PB 序列 <span class="sub">市值加权 · 可拖动缩放，分位随可见窗口变化</span></h2>
           <div id="seriesTabs"></div>
-          <div class="chart lg" id="peSeriesLine" style="height:340px"></div>
-          <div class="chart lg" id="pbSeriesLine" style="height:340px"></div>
+          <div class="chart lg" id="peSeriesLine"></div>
+          <div class="chart lg" id="pbSeriesLine"></div>
           <div class="empty pad" id="seriesEmpty" style="display:none">
             暂无组合估值序列。录入持仓后，点右上角「完整更新」拉取历史数据。
           </div>
@@ -65,29 +66,28 @@
         <div class="panel" id="fundflowPanel">
           <h2>组合资金流 <span class="sub" id="pfFlowNote">按持仓汇总：A股个股五档/买卖盘求和 · 分钟=当日分时，天窗=多日聚合</span></h2>
           <div id="pfFlowTabs"></div>
-          <div class="row" style="align-items:stretch">
-            <div class="chart lg" id="pfFlowPrice" style="flex:1;min-width:280px;height:340px"></div>
+          <div class="chart-row">
+            <div class="chart lg" id="pfFlowPrice"></div>
           </div>
-          <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="pfFlowBandsCum" style="flex:1;min-width:280px;height:280px;display:none"></div>
-            <div class="chart sm" id="pfFlowIntraday" style="flex:1;min-width:280px;height:280px"></div>
+          <div class="chart-row">
+            <div class="chart sm" id="pfFlowBandsCum" style="display:none"></div>
+            <div class="chart sm" id="pfFlowIntraday"></div>
           </div>
-          <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="pfFlowBuySell" style="flex:1;min-width:280px;height:280px"></div>
-            <div class="chart sm" id="pfFlowBars" style="flex:1;min-width:280px;height:280px"></div>
+          <div class="chart-row">
+            <div class="chart sm" id="pfFlowBuySell"></div>
+            <div class="chart sm" id="pfFlowBars"></div>
           </div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
         </div>
-
         <div class="panel" id="chartRow">
           <h2>权重分布（按标签）</h2>
-          <div class="chart sm" id="weightChart" style="height:340px"></div>
+          <div class="chart sm" id="weightChart"></div>
         </div>
         <div class="panel" id="peBarPanel">
           <h2>各持仓估值分位（1y）<span class="sub">绿=低估(&le;25) 红=高估(&ge;75) · 无基本面(ETF)不显示</span></h2>
-          <div class="row" style="align-items:stretch">
-            <div class="chart sm" id="peBars" style="flex:1;min-width:280px;height:420px"></div>
-            <div class="chart sm" id="pbBars" style="flex:1;min-width:280px;height:420px"></div>
+          <div class="chart-row">
+            <div class="chart sm" id="peBars"></div>
+            <div class="chart sm" id="pbBars"></div>
           </div>
         </div>
         <div class="empty" id="emptyTip" style="display:none">

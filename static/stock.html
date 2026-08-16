@@ -2,17 +2,18 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
   <title>个股分析 · 股票持仓分析</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <script src="/static/vendor/echarts.min.js"></script>
 </head>
-<body>
+<body class="page-stock">
   <nav></nav>
   <div class="container">
     <div class="panel">
-      <div class="row">
-        <h2 id="title" style="margin:0">个股详情</h2>
+      <div class="row panel-head-row">
+        <h2 id="title">个股详情</h2>
         <span class="grow"></span>
         <div id="searchBox"></div>
         <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
@@ -21,8 +22,8 @@
         <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 更新此股行情</button>
         <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 完整更新此股</button>
       </div>
-      <div id="staleTip" class="muted" style="display:none;margin-top:6px"></div>
-      <div id="missingBanner" style="display:none;margin-top:6px;color:#e8590c"></div>
+      <div id="staleTip" class="muted tip-line" style="display:none"></div>
+      <div id="missingBanner" class="tip-line warn-text" style="display:none"></div>
     </div>
 
     <div class="cards" id="quoteCards"></div>
@@ -33,39 +34,45 @@
 
     <div class="panel" id="metaPanel">
       <h2>标的设置 <span class="sub">预期增速 / 标签 / 跟踪指数</span></h2>
-      <div id="growthPanel" style="display:none;margin-bottom:10px">
-        <div class="row">
-          <span class="muted">净利增速</span>
-          <input type="number" id="growthInput" step="0.01" style="width:120px">
-          <span class="muted">营收</span>
-          <input type="number" id="revenueGrowthInput" step="0.01" style="width:120px">
-          <span class="muted">支付率%</span>
-          <input type="number" id="payoutInput" step="0.01" style="width:80px">
-          <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
-          <span class="muted" id="growthMeta"></span>
+      <div id="growthPanel" style="display:none">
+        <div class="form-list">
+          <div class="form-item">
+            <label>净利增速</label>
+            <input type="number" id="growthInput" step="0.01" class="input-mid">
+            <label>营收增速</label>
+            <input type="number" id="revenueGrowthInput" step="0.01" class="input-mid">
+            <label>支付率%</label>
+            <input type="number" id="payoutInput" step="0.01" class="input-sm">
+            <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
+            <span class="muted form-meta" id="growthMeta"></span>
+          </div>
         </div>
       </div>
-      <div id="tagPanel" style="display:none;margin-bottom:10px">
-        <div class="row">
-          <span class="muted">标签</span>
-          <input type="text" id="tagInput" maxlength="20" style="width:140px" placeholder="如：红利/科技/银行">
-          <button class="btn primary" onclick="saveTag()">保存</button>
-          <span class="muted" id="tagMeta"></span>
+      <div id="tagPanel" style="display:none">
+        <div class="form-list">
+          <div class="form-item">
+            <label>标签</label>
+            <input type="text" id="tagInput" maxlength="20" class="input-mid" placeholder="如：红利/科技/银行">
+            <button class="btn primary" onclick="saveTag()">保存</button>
+            <span class="muted form-meta" id="tagMeta"></span>
+          </div>
         </div>
       </div>
       <div id="etfIndexPanel" style="display:none">
-        <div class="row">
-          <span class="muted">跟踪指数</span>
-          <span class="muted" id="etfIndexMeta"></span>
-          <span class="grow"></span>
-          <span id="etfIndexActions"></span>
+        <div class="form-list">
+          <div class="form-item">
+            <label>跟踪指数</label>
+            <span class="muted" id="etfIndexMeta"></span>
+            <span class="grow"></span>
+            <span id="etfIndexActions"></span>
+          </div>
         </div>
       </div>
     </div>
 
     <div class="panel" id="aiReportPanel" style="display:none">
-      <div class="row">
-        <h2 style="margin:0">🤖 AI 诊股报告</h2>
+      <div class="row panel-head-row">
+        <h2>🤖 AI 诊股报告</h2>
         <span class="grow"></span>
         <span class="muted" id="aiReportMeta" style="font-size:12px"></span>
       </div>
@@ -89,17 +96,17 @@
 
     <div class="panel" id="quantilePanel">
       <h2>历史分位（实时值 / 前瞻值 的百分位）</h2>
-      <div class="row" style="align-items:stretch">
-        <div class="chart sm" id="peQ" style="flex:1;min-width:280px"></div>
-        <div class="chart sm" id="pbQ" style="flex:1;min-width:280px"></div>
+      <div class="chart-row">
+        <div class="chart sm" id="peQ"></div>
+        <div class="chart sm" id="pbQ"></div>
       </div>
     </div>
 
     <div class="panel" id="valHistPanel">
       <h2>估值历史 <span class="sub">可拖动缩放切换分位窗口</span></h2>
       <div id="histTabs"></div>
-      <div class="chart lg" id="peLine" style="height:340px"></div>
-      <div class="chart lg" id="pbLine" style="height:340px"></div>
+      <div class="chart lg" id="peLine"></div>
+      <div class="chart lg" id="pbLine"></div>
     </div>
 
     <div class="panel grow" id="flowBarsPanel">
@@ -108,14 +115,14 @@
       <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
-    <div class="panel" style="padding:10px 12px">
+    <div class="panel panel-action-bar">
       <b>🤖 AI 扩展分析</b>
-      <span class="muted" style="font-size:12px">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI」勾选分析</span>
+      <span class="muted panel-action-note">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI」勾选分析</span>
     </div>
 
     <div class="panel" id="newsAiPanel">
-      <div class="row">
-        <h2 style="margin:0">📰 消息面 AI <span class="sub">自动抓取该股近期新闻（akshare）供 AI 分析 · 时效由 AI 判定</span></h2>
+      <div class="row panel-head-row">
+        <h2>📰 消息面 AI <span class="sub">自动抓取该股近期新闻（akshare）供 AI 分析 · 时效由 AI 判定</span></h2>
         <span class="grow"></span>
         <span class="muted" id="newsAiMeta" style="font-size:12px"></span>
       </div>
@@ -123,8 +130,8 @@
     </div>
 
     <div class="panel" id="techAiPanel">
-      <div class="row">
-        <h2 style="margin:0">📈 技术面 <span class="sub">日/周/月K 走势 · 腾讯行情 · 红涨绿跌，AI 解读截至最近交易日</span></h2>
+      <div class="row panel-head-row">
+        <h2>📈 技术面 <span class="sub">日/周/月K 走势 · 腾讯行情 · 红涨绿跌，AI 解读截至最近交易日</span></h2>
         <span class="grow"></span>
         <span class="muted" id="techAiMeta" style="font-size:12px"></span>
       </div>
@@ -133,22 +140,22 @@
         <span class="grow"></span>
         <span class="muted" id="klineMeta" style="font-size:12px"></span>
       </div>
-      <div class="chart lg" id="klineChart" style="height:420px"></div>
+      <div class="chart lg" id="klineChart"></div>
       <div id="techAiBody" style="margin-top:12px"></div>
     </div>
 
     <div class="panel" id="flowTrendPanel">
       <h2 id="flowTitle">资金流趋势 <span class="sub" id="flowTitleSub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
-      <div style="display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div class="flow-toolbar">
         <div id="flowTabs"></div>
         <div style="flex:1"></div>
       </div>
       <div id="flowAiPanel" style="margin:0 0 10px"><div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div></div>
-      <div class="chart lg" id="flowPrice" style="height:200px"></div>
-      <div id="flowBands" class="muted" style="padding:2px 0 6px;font-size:13px"></div>
-      <div class="chart lg" id="flowIntraday" style="height:300px"></div>
-      <div class="chart lg" id="flowBandsCum" style="height:300px;display:none"></div>
-      <div class="chart lg" id="flowBuySell" style="height:300px"></div>
+      <div class="chart lg" id="flowPrice"></div>
+      <div id="flowBands" class="muted flow-band-note"></div>
+      <div class="chart lg" id="flowIntraday"></div>
+      <div class="chart lg" id="flowBandsCum" style="display:none"></div>
+      <div class="chart lg" id="flowBuySell"></div>
       <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
