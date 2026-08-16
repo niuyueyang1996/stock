@@ -1,0 +1,15 @@
+# Gradle 构建产物
+.gradle/
+build/
+app/build/
+
+# Go 交叉编译产物（CI / build.sh 现场编译生成）
+app/src/main/jniLibs/
+
+# 本机 SDK 路径
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store

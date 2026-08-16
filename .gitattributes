@@ -1,0 +1,5 @@
+# Release assets must keep byte-for-byte contents on every checkout platform.
+static/vendor/echarts.min.js -text
+
+# Keep automation sources predictable.
+.github/workflows/*.yml text eol=lf

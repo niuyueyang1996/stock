@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>指数 · 股票持仓分析</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body class="page-indices">
+  <nav></nav>
+  <div class="container layout-with-sidebar">
+    <aside id="indexSidebar" class="index-sidebar tag-sidebar-sticky">
+      <h3>指数 <span class="sub" id="indexCount"></span></h3>
+      <div id="indexAllCard" class="tag-card all" title="全选（点击切换）"></div>
+      <button id="indexRefreshAll" class="btn full-btn"
+              title="刷新全部指数：日K增量 + 实时点位 + 分时量价（腾讯）。盘中早段抓取的残缺分时（如只到 09:33）会被补齐。">
+        刷新全部指数
+      </button>
+      <div id="indexList"></div>
+    </aside>
+    <div class="layout-main">
+      <div id="noSelection" class="empty" style="display:none;padding:60px 0">请至少选择一个指数。</div>
+      <div id="rightContent">
+        <div id="summary"></div>
+        <div class="panel" id="fundflowPanel">
+          <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">读图：浅蓝柱=各期成交额（高低看放缩），深灰折线=累计成交额；悬停看较上期变化。分钟窗=当日分时，天窗=多日聚合</span></h2>
+          <div class="flow-toolbar">
+            <div id="pfFlowTabs"></div>
+            <div style="flex:1"></div>
+            <div id="pfFlowBatchBtn"></div>
+          </div>
+          <div id="pfFlowBatchPanel" style="display:none;margin:0 0 10px"></div>
+          <div class="chart sm" id="pfFlowIntraday"></div>
+          <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无分时量价（请先「刷新全部指数」拉取，或今日非交易日）。</div>
+        </div>
+        <div class="panel" id="chartRow">
+          <h2>权重分布（指数等权）</h2>
+          <div class="chart sm" id="weightChart"></div>
+        </div>
+        <div class="panel" id="tablePanel">
+          <h2 style="margin:0">指数列表</h2>
+          <div style="overflow-x:auto">
+            <table>
+              <thead>
+                <tr><th>代码</th><th>名称</th><th>点位</th><th>涨跌幅</th></tr>
+              </thead>
+              <tbody id="indexBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('indices');
+
+    let allIndices = [];
+    let selected = new Set();
+    let loaded = false;
+    // 资金流统一时间窗（与个股/组合页同口径）：分钟 + 'day'/'week'/'month'（与 K 线周期对齐）
+    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', 'day', 'week', 'month'];
+    const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+                                'day': '日', 'week': '周', 'month': '月' };
+    let pfFlowWindow = '15m';   // 当前选中窗口（绘图与 AI 分析共用）
+    let indexFlowReports = {};  // 指数资金面 map：{code:{correlation,summary,trade_date,window,source}}
+
+    // 叠加折线配色（与 charts.js 令牌对齐）
+    const PALETTE = typeof CHART_PALETTE !== 'undefined' ? CHART_PALETTE : [
+      '#2f6fed', '#e03131', '#2f9e44', '#f76707', '#7048e8', '#0ca678',
+      '#f59f00', '#339af0', '#c2255c', '#495057', '#1c7ed6', '#12b886'];
+
+    function nameMap() {
+      const m = {};
+      allIndices.forEach((d) => { m[d.code] = d.name; });
+      return m;
+    }
+
+    function selList() {
+      return allIndices.filter((d) => selected.has(d.code));
+    }
+
+    function renderSidebar() {
+      const on = allIndices.length > 0 && selected.size === allIndices.length;
+      const partial = selected.size > 0 && !on;
+      const el = document.getElementById('indexAllCard');
+      el.className = 'tag-card all' + (on ? ' on' : '');
+      el.innerHTML = `
+        <div class="tc-head">
+          <span class="tc-check">${on ? '✓' : partial ? '–' : ''}</span>
+          <span class="tc-name">全选</span>
+          <span class="tc-count">${selected.size}/${allIndices.length}</span>
+        </div>`;
+
+      const volLabel = (t) => {
+        if (!t || t.chg_pct == null || !t.state) {
+          return '<span class="tc-vol flat" title="请先「刷新全部指数」拉取分时后再看额较昨">额较昨 —</span>';
+        }
+        const word = t.state === 'expand' ? '放量' : (t.state === 'shrink' ? '缩量' : '持平');
+        const est = t.basis === 'scaled' ? '估' : '';
+        const tip = t.basis === 'intraday' && t.as_of
+          ? `成交额较昨同时段实算（至 ${t.as_of}）`
+          : (t.basis === 'scaled' && t.as_of
+            ? `成交额较昨同时段估算（至 ${t.as_of}；昨分时未缓存，按交易进度折算。刷新后可落昨分时改实算）`
+            : '成交额较昨全日');
+        const prev = t.prev_amount != null ? `，昨约 ${fmtAmt(t.prev_amount)}` : '';
+        const sign = t.chg_pct > 0 ? '+' : '';
+        return `<span class="tc-vol ${t.state}" title="${tip}${prev}">${word}${est} ${sign}${t.chg_pct}%</span>`;
+      };
+
+      const list = document.getElementById('indexList');
+      list.innerHTML = allIndices.map((d, i) => {
+        const s = selected.has(d.code);
+        const q = d.quote || {};
+        const t = d.turnover || {};
+        const amt = t.amount != null ? t.amount : q.amount;
+        return `
+        <div class="tag-card ${s ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
+          <div class="tc-head">
+            <span class="tc-check">${s ? '✓' : ''}</span>
+            <span class="tc-name">${esc(d.name)}</span>
+          </div>
+          <div class="tc-row">
+            <span class="tc-val">${q.price == null ? '—' : fmtNum(q.price)}</span>
+            <span class="tc-day ${cls(q.pct_chg)}">${q.pct_chg == null ? '—' : signed(q.pct_chg) + '%'}</span>
+          </div>
+          <div class="tc-meta">
+            <span class="tc-amt">额 <b>${amt == null ? '—' : fmtAmt(amt)}</b></span>
+            ${volLabel(t)}
+          </div>
+        </div>`;
+      }).join('');
+      list.querySelectorAll('.tag-card[data-i]').forEach((el2) => {
+        el2.addEventListener('click', () => {
+          const code = allIndices[+el2.dataset.i].code;
+          if (selected.has(code)) selected.delete(code); else selected.add(code);
+          renderView();   // 只按选中重渲染 + 拉选中资金流，不重拉全量指数列表
+        });
+      });
+      document.getElementById('indexCount').textContent = `已选 ${selected.size}/${allIndices.length}`;
+    }
+
+    document.getElementById('indexAllCard').addEventListener('click', () => {
+      selected = selected.size === allIndices.length ? new Set() : new Set(allIndices.map((d) => d.code));
+      renderView();
+    });
+
+    // 「刷新全部指数」：并发重拉全部指数（日K/点位/估值/资金流），完成后刷新列表
+    document.getElementById('indexRefreshAll').addEventListener('click', async () => {
+      const btn = document.getElementById('indexRefreshAll');
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '已提交…';
+      try {
+        const job = await startBackgroundJob('/indices/refresh-all', {}, { toast: '全部指数刷新已开始，进度见顶部' });
+        if (job && job.job_id) await waitForJob(job.job_id);
+        loaded = false;
+        await loadPage();
+        toast('指数刷新完成，侧栏已更新成交额较昨');
+      } catch (e) {
+        toast('指数刷新失败：' + e.message, 5000);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    });
+
+    function renderSummary() {
+      const card = ([l, v, note]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`;
+      document.getElementById('summary').innerHTML = `
+        <div class="cards summary-main" style="margin-bottom:20px">
+          ${card(['选中指数', `${selected.size}/${allIndices.length}`, '点击左侧卡片多选 / 全选'])}
+        </div>`;
+      setPanelSummary('tablePanel', sumKV('已选', selected.size + ' 只'));
+      setPanelSummary('chartRow', selected.size ? sumKV('等权', selected.size + ' 只') : '未选择');
+      setPanelSummary('fundflowPanel', selected.size
+        ? sumKV('已选', selected.size + ' 只') + sumSep() + sumChip(FLOW_WINDOW_LABEL[pfFlowWindow] || pfFlowWindow)
+        : '未选择');
+    }
+
+    // 权重分布：指数等权（每只 100/n）
+    function renderWeights() {
+      const rows = selList();
+      if (!rows.length) return;
+      const n = rows.length;
+      weightPie(
+        document.getElementById('weightChart'),
+        rows.map((d) => ({ name: d.name, value: +((100 / n).toFixed(2)) })),
+        '指数权重（等权）',
+      );
+    }
+
+    function renderTable() {
+      const body = document.getElementById('indexBody');
+      const rows = selList().sort((a, b) => a.code.localeCompare(b.code));
+      body.innerHTML = rows.map((d) => {
+        const q = d.quote || {};
+        return `<tr>
+          <td><a href="/static/stock.html?code=${d.code}&index=1">${d.code}</a></td>
+          <td>${esc(d.name)}</td>
+          <td>${q.price == null ? '—' : fmtNum(q.price)}</td>
+          <td class="${cls(q.pct_chg)}">${q.pct_chg == null ? '—' : signed(q.pct_chg) + '%'}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ============ 指数资金流（组合页同构：等权求和 + 批量 AI 分析） ============
+
+    // 批量分析选中指数按钮：1m/5m 窗口过小拒绝；成功后重建相关性块
+    (function () {
+      const wrap = document.getElementById('pfFlowBatchBtn');
+      const panel = document.getElementById('pfFlowBatchPanel');
+      if (!wrap || !panel) return;
+      wrap.innerHTML = '<button class="btn" data-fundflow-batch style="margin-bottom:8px">⚡ 批量分析指数</button>';
+      wrap.querySelector('[data-fundflow-batch]').onclick = () => {
+        if (/^(1|5)m$/.test(pfFlowWindow)) {
+          toast('批量分析窗口过小，请选择 15 分钟及以上');
+          return;
+        }
+        const codes = [...selected];
+        if (!codes.length) return;
+        runFundflowBatch({
+          codes, window: pfFlowWindow, btn: wrap.querySelector('[data-fundflow-batch]'), panel,
+          onDone: async () => { await loadAndRender(); renderPfFlow(); },   // 批量刷新了指数资金流 → 重绘资金流图（当前窗口）
+        });
+      };
+    })();
+
+    // 重拉资金面报告 map + 重建批量面板（分析完成/选择切换后复用）
+    async function loadAndRender() {
+      indexFlowReports = await loadFlowReports([...selected]);
+      await renderPersistedBatchPanel();
+    }
+
+    // 刷新后从落库报告重建「批量分析指数」面板（只取 source=batch），F5 不丢
+    async function renderPersistedBatchPanel() {
+      const panel = document.getElementById('pfFlowBatchPanel');
+      if (!panel) return;
+      const nameMap2 = {};
+      allIndices.forEach((d) => { nameMap2[d.code] = d.name; });
+      const reports = Object.entries(indexFlowReports)
+        .filter(([, r]) => r && r.source === 'batch')
+        .map(([code, r]) => ({
+          code, name: nameMap2[code] || '', correlation: r.correlation, summary: r.summary,
+          trade_date: r.trade_date, window: r.window, source: r.source,
+        }));
+      if (!reports.length) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+        return;
+      }
+      panel.style.display = 'block';
+      // 组合相关性块：只精确匹配当前选中的指数组合（排序归一同 key），
+      // 必须再次选中该组合才能看到其相关性；没匹配到不显示（不取别的组合）
+      const coh = await loadCoherence('indices', [...selected].sort().join(','), reports[0].window);
+      renderFundflowBatchPanel(panel, {
+        mode: 'indices', window: reports[0].window, stocks_count: reports.length,
+        date: reports[0].trade_date, reports, coherence: coh, html: coh ? coh.html : '',
+      });
+    }
+
+    // 指数资金面：腾讯量价等权求和（选中指数），量价图随统一时间窗切换
+    let pfFlowSeq = 0;
+    async function renderPfFlow() {
+      const seq = ++pfFlowSeq;
+      try {
+        const d = await api('/indices/fundflow?codes=' + encodeURIComponent([...selected].join(',')));
+        if (seq !== pfFlowSeq) return;                     // 过期响应丢弃
+        const panel = document.getElementById('fundflowPanel');
+        if (panel) panel.style.display = '';               // 成功渲染恢复面板可见
+        const note = document.getElementById('pfFlowNote');
+        if (note) {
+          note.textContent = '读图：浅蓝柱=各期成交额（柱高看放缩），深灰线=累计额；悬停看较上期%。覆盖 '
+            + d.covered + '/' + d.total + ' 指数 · 分钟窗=当日分时，天窗=多日';
+        }
+        setPanelSummary('fundflowPanel',
+          sumKV('覆盖', d.covered + '/' + d.total) + sumSep() + sumChip(FLOW_WINDOW_LABEL[pfFlowWindow] || pfFlowWindow));
+        const empty = document.getElementById('pfFlowEmpty');
+        const intraday = d.intraday || [];
+        const daily = d.daily || [];
+        if (!intraday.length && !daily.length) {
+          if (empty) empty.style.display = 'block';
+          document.getElementById('pfFlowTabs').innerHTML = '';
+          document.getElementById('pfFlowIntraday').innerHTML = '';
+          return;
+        }
+        if (empty) empty.style.display = 'none';
+        const names = nameMap();
+        const intraEl = document.getElementById('pfFlowIntraday');
+        const draw = (w) => {
+          pfFlowWindow = w;
+          setPanelSummary('fundflowPanel',
+            sumKV('覆盖', d.covered + '/' + d.total) + sumSep() + sumChip(FLOW_WINDOW_LABEL[w] || w));
+          if (/m$/.test(w)) {
+            if (!intraday.length) { intraEl.innerHTML = ''; return; }
+            const pts = resampleIndexVolume(intraday, parseInt(w, 10));
+            indexVolumePrice(intraEl, pts, FLOW_WINDOW_LABEL[w] + '分时', names);
+          } else {
+            if (!daily.length) { intraEl.innerHTML = ''; return; }
+            const days = bucketIndexVolume(daily, flowBucket(w));
+            indexVolumePrice(intraEl, days, FLOW_WINDOW_LABEL[w], names);
+          }
+        };
+        const tabsEl = document.getElementById('pfFlowTabs');
+        tabsEl.innerHTML = '';
+        tabsEl.appendChild(periodTabs({
+          periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+          active: FLOW_WINDOW_LABEL[pfFlowWindow],
+          onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+        }));
+        draw(pfFlowWindow);
+      } catch (e) {
+        if (seq !== pfFlowSeq) return;
+        // 失败时保留面板（可折叠标题仍在），只标摘要，勿 display:none 整块消失
+        setPanelSummary('fundflowPanel', '加载失败');
+        const empty = document.getElementById('pfFlowEmpty');
+        if (empty) {
+          empty.style.display = 'block';
+          empty.textContent = '指数资金面加载失败：' + (e && e.message ? e.message : e);
+        }
+      }
+    }
+
+    const right = document.getElementById('rightContent');
+    const noSel = document.getElementById('noSelection');
+    const showEmpty = () => { right.style.display = 'none'; noSel.style.display = 'block'; };
+    const showContent = () => { right.style.display = ''; noSel.style.display = 'none'; };
+
+    // 拉全量指数列表（含点位/成交额）：只在首次 / 手动刷新后调用；切换选中不重拉
+    async function loadList() {
+      try {
+        const keep = selected;
+        const data = await api('/indices', { blocking: true });
+        allIndices = data || [];
+        selected = new Set([...keep].filter((c) => allIndices.some((d) => d.code === c)));
+        loaded = true;
+      } catch (e) {
+        document.getElementById('indexBody').innerHTML =
+          '<tr><td colspan="4" class="muted">加载失败：' + esc(e.message) + '</td></tr>';
+      }
+    }
+
+    // 按当前选中渲染（侧栏/汇总/权重/表格/资金流）；资金流用 ?codes= 只拉选中的指数
+    async function renderView() {
+      renderSidebar();
+      if (selected.size === 0) { showEmpty(); return; }
+      showContent();
+      renderSummary();
+      renderWeights();
+      renderTable();
+      await loadAndRender();
+      renderPfFlow();
+    }
+
+    async function loadPage() {
+      await loadList();
+      await renderView();
+    }
+
+    makeFoldable(document.getElementById('fundflowPanel'), { id: 'fundflowPanel', defaultOpen: true });
+    makeFoldable(document.getElementById('chartRow'), { id: 'chartRow', defaultOpen: false });
+    makeFoldable(document.getElementById('tablePanel'), { id: 'tablePanel', defaultOpen: true });
+    loadPage();
+  </script>
+</body>
+</html>

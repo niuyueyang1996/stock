@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>持仓总览 · 股票持仓分析</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body class="page-index">
+  <nav></nav>
+  <div class="container">
+    <div class="cards" id="summary"></div>
+    <div class="panel">
+      <div class="row panel-head-row">
+        <h2>持仓明细</h2>
+        <span class="sub">现价在交易时段自动更新（约每 5 分钟），无需手动刷新</span>
+        <span class="grow"></span>
+        <select id="sortSel" title="排序">
+          <option value="weight_desc">权重降序</option>
+          <option value="weight_asc">权重升序</option>
+          <option value="tag">按标签</option>
+          <option value="code">按代码</option>
+        </select>
+        <div class="view-toggle" id="viewToggle">
+          <button type="button" class="active" data-view="list">列表</button>
+          <button type="button" data-view="card">卡片</button>
+        </div>
+      </div>
+      <div id="missingDataBar" style="display:none"></div>
+      <div id="listView" style="overflow-x:auto">
+        <div id="holdingsGroups"></div>
+      </div>
+      <div id="cardView" class="cards" style="display:none;margin-bottom:0"></div>
+      <div class="empty empty-guide" id="emptyTip" style="display:none">
+        <div class="eg-title">还没有持仓</div>
+        <div class="eg-block">
+          <div class="eg-h">有同花顺（推荐）</div>
+          <ol>
+            <li>打开
+              <a href="https://tzzb.10jqka.com.cn/pc/index.html#/myAccount" target="_blank" rel="noopener">同花顺账户页</a>
+              ，导出「汇总持仓.xlsx」
+            </li>
+            <li>到 <a href="/static/trade.html">交易评分</a> 页，点「导入 Excel」上传（仅空仓时可导入）</li>
+          </ol>
+        </div>
+        <div class="eg-block">
+          <div class="eg-h">没有同花顺也没关系</div>
+          <p>直接去 <a href="/static/trade.html">交易评分</a> 页，搜索股票代码，录入一笔买入即可。</p>
+        </div>
+        <p class="muted eg-note">导入或录入后，建议点右上角「完整更新」拉一次历史数据。详见 <a href="/static/help.html">使用帮助</a>。</p>
+      </div>
+      <div class="row end mt-14">
+        <button class="btn danger" id="resetBtn" onclick="resetAll()" title="清空交易、持仓和缓存（不可恢复）">清空全部数据</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('index');
+
+    let viewMode = 'list';
+    let sortMode = 'weight_desc';
+
+    function setupViewToggle() {
+      document.getElementById('viewToggle').querySelectorAll('button').forEach((b) => {
+        b.onclick = () => {
+          document.getElementById('viewToggle').querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          viewMode = b.dataset.view;
+          document.getElementById('listView').style.display = viewMode === 'list' ? '' : 'none';
+          document.getElementById('cardView').style.display = viewMode === 'card' ? 'grid' : 'none';
+        };
+      });
+    }
+
+    // 高级模式：显示全部指标列；简单模式只显示小白能直接看懂的列（模式在 ⚙设置 里配）
+    function uiAdvanced() {
+      return (window.APP_SETTINGS && window.APP_SETTINGS.mode) === 'advanced';
+    }
+
+    // 有持仓还没下载到行情（首页表里会直接消失）→ 提示条 + 一键下载兜底
+    function renderMissingBanner(p) {
+      const bar = document.getElementById('missingDataBar');
+      if (!bar) return;
+      const missing = p.missing || [];
+      if (!missing.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      const names = missing.map((m) => m.name || m.code).slice(0, 4).join('、');
+      const more = missing.length > 4 ? ` 等 ${missing.length} 只` : '';
+      bar.style.display = 'block';
+      bar.innerHTML = `
+        <div class="alert-bar">
+          <span class="alert-msg">⚠ 有 ${missing.length} 只持仓还没下载到行情数据：${esc(names)}${more}。</span>
+          <button class="btn primary" id="dlMissingBtn">一键下载全部数据</button>
+        </div>`;
+      bar.querySelector('#dlMissingBtn').onclick = async () => {
+        const btn = bar.querySelector('#dlMissingBtn');
+        btn.disabled = true;
+        btn.textContent = '下载中…';
+        try {
+          const job = await startBackgroundJob(
+            '/refresh/full', { items: ['bars', 'financials', 'valuation', 'flow'] },
+            { toast: '正在下载全部数据，进度见顶部' },
+          );
+          await waitForJob(job.job_id);
+          await loadPage();
+        } catch (e) {
+          toast('下载失败：' + e.message, 4000);
+          btn.disabled = false;
+          btn.textContent = '一键下载全部数据';
+        }
+      };
+    }
+
+    // 一键清空全部数据（双重确认，防误触；评分权重配置保留）
+    async function resetAll() {
+      if (!confirm('确定清空全部数据？\n\n将删除：\n· 全部买卖记录\n· 持仓与股票信息\n· AI 评分报告\n· 本地缓存的行情/估值等\n\n此操作不可恢复。\n（AI 模型配置会保留）')) return;
+      if (!confirm('再确认一次：真的要全部清空吗？')) return;
+      const btn = document.getElementById('resetBtn');
+      btn.disabled = true;
+      try {
+        const r = await api('/data/reset', { blocking: true, method: 'POST', body: { confirm: true } });
+        toast(`已清空 ${r.deleted_rows} 行数据`);
+        await loadPage();
+      } catch (e) {
+        toast('清空失败：' + e.message, 4000);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function renderCards(p) {
+      const wrap = document.getElementById('cardView');
+      wrap.innerHTML = '';
+      const groups = groupByTag(sortedStocks(p.stocks));
+      Object.keys(groups).forEach((tag) => {
+        const head = document.createElement('h3');
+        head.textContent = tag;
+        wrap.appendChild(head);
+        groups[tag].forEach((s) => {
+          const card = document.createElement('div');
+          const tone = s.pnl_pct > 0 ? 'is-up' : (s.pnl_pct < 0 ? 'is-down' : '');
+          const wPct = Math.max(0, Math.min(100, Number(s.weight) || 0));
+          card.className = 'card stock-card' + (tone ? ' ' + tone : '');
+          const adv = uiAdvanced();
+          const gridCells = (adv ? [
+            ['现价', fmtNum(s.price)], ['市值', fmtNum(s.value)], ['成本', fmtNum(s.avg_cost)], ['数量', fmtNum(s.quantity)],
+            ['PE', fmtNum(s.pe)], ['PB', fmtNum(s.pb)], ['PE分位', fmtNum(s.pe_pct) + '%'], ['PB分位', fmtNum(s.pb_pct) + '%'],
+            ['股息率', fmtNum(s.dv) + '%'], ['ROE', fmtPct(s.roe)], ['累计分红', '¥' + fmtNum(s.total_dividend)],
+          ] : [
+            ['现价', fmtNum(s.price)], ['市值', fmtNum(s.value)], ['成本', fmtNum(s.avg_cost)], ['数量', fmtNum(s.quantity)],
+          ]).map(([k, v]) => `<div><span class="k">${k}</span><span>${v}</span></div>`).join('');
+          card.innerHTML = `
+            <div class="sc-inner">
+              <div class="sc-head">
+                <a class="sc-code" href="/static/stock.html?code=${s.code}">${s.code}</a>
+                <span class="sc-name" title="${esc(s.name || '')}">${esc(s.name || '')}</span>
+                <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${esc(s.tag || '')}</span>
+              </div>
+              <div class="sc-hero">
+                <div>
+                  <div class="sc-pnl ${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</div>
+                  <div class="sc-pnl-sub">盈亏 <span class="${cls(s.pnl)}">${signed(s.pnl)}</span>
+                    · 今日 <span class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</span></div>
+                </div>
+                <div class="sc-weight">
+                  <div class="sc-w-label">权重</div>
+                  <div class="sc-w-val">${fmtNum(s.weight)}%</div>
+                  <div class="bar"><i style="width:${wPct}%"></i></div>
+                </div>
+              </div>
+              <div class="sc-grid">${gridCells}</div>
+            </div>`;
+          wrap.appendChild(card);
+        });
+      });
+    }
+
+    async function loadPage() {
+      const st = document.getElementById('statusText');
+      if (st) st.textContent = '加载组合中…';
+      try {
+        const p = await api('/portfolio?lite=1');
+        renderSummary(p);
+        renderTable(p);
+        renderCards(p);
+        renderMissingBanner(p);
+        if (st) st.textContent = '';
+      } catch (e) {
+        if (st) st.textContent = '加载失败';
+        document.getElementById('emptyTip').style.display = 'block';
+        document.getElementById('holdingsGroups').innerHTML = '';
+        document.getElementById('cardView').innerHTML = '';
+        document.getElementById('summary').innerHTML = '';
+      }
+    }
+
+    function renderSummary(p) {
+      const pf = p.portfolio;
+      const main = [
+        ['总市值', '¥' + fmtNum(pf.total_value), null,
+          pf.day_pnl != null ? '今日 ' + signed(pf.day_pnl) + ' 元 · ' + signed(pf.day_pnl_pct) + '%' : '', cls(pf.day_pnl)],
+        ['总成本', '¥' + fmtNum(pf.total_cost)],
+        ['总盈亏', fmtNum(pf.pnl) + ' 元', cls(pf.pnl)],
+        ['盈亏%', fmtPct(pf.pnl_pct), cls(pf.pnl_pct)],
+      ];
+      const sub = [
+        ['PE分位', fmtPct(pf.pe_pct)],
+        ['PB分位', fmtPct(pf.pb_pct)],
+        ['年化波动率', fmtPct(pf.volatility)],
+        ['累计已收分红', '¥' + fmtNum(pf.total_dividend)],
+      ];
+      const card = ([l, v, c, note, noteCls]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value ${c || ''}">${v}</div>${note ? `<div class="label ${noteCls || ''}">${note}</div>` : ''}</div>`;
+      // 简单模式隐藏副行（分位/波动率/分红等进阶指标）
+      const subHtml = uiAdvanced()
+        ? `<div class="cards summary-sub" style="grid-column:1/-1">${sub.map(card).join('')}</div>`
+        : '';
+      document.getElementById('summary').innerHTML = `
+        <div class="cards summary-main" style="margin-bottom:8px;grid-column:1/-1">${main.map(card).join('')}</div>
+        ${subHtml}`;
+    }
+
+    function sortedStocks(stocks) {
+      const arr = stocks.slice();
+      if (sortMode === 'weight_asc') arr.sort((a, b) => a.weight - b.weight);
+      else if (sortMode === 'tag') arr.sort((a, b) => (a.tag || '').localeCompare(b.tag || '') || b.weight - a.weight);
+      else if (sortMode === 'code') arr.sort((a, b) => a.code.localeCompare(b.code));
+      else arr.sort((a, b) => b.weight - a.weight);
+      return arr;
+    }
+
+    function groupByTag(stocks) {
+      const groups = {};
+      stocks.forEach((s) => {
+        const t = s.tag || '其他';
+        (groups[t] = groups[t] || []).push(s);
+      });
+      return groups;
+    }
+
+    // 单元格渲染（按列 key）
+    function cellHtml(k, s) {
+      switch (k) {
+        case 'code': return `<td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${s.tag || ''}</span></td>`;
+        case 'price': return `<td>${fmtNum(s.price)}</td>`;
+        case 'quantity': return `<td>${fmtNum(s.quantity)}</td>`;
+        case 'avg_cost': return `<td>${fmtNum(s.avg_cost)}</td>`;
+        case 'value': return `<td>${fmtNum(s.value)}</td>`;
+        case 'pnl': return `<td class="${cls(s.pnl)}">${signed(s.pnl)}</td>`;
+        case 'pnl_pct': return `<td class="${cls(s.pnl_pct)}">${signed(s.pnl_pct)}%</td>`;
+        case 'day_pnl': return `<td class="${cls(s.day_pnl)}">${signed(s.day_pnl)}</td>`;
+        case 'pe': return `<td>${fmtNum(s.pe)}</td>`;
+        case 'pb': return `<td>${fmtNum(s.pb)}</td>`;
+        case 'pe_pct': return `<td>${fmtNum(s.pe_pct)}%</td>`;
+        case 'pb_pct': return `<td>${fmtNum(s.pb_pct)}%</td>`;
+        case 'dv': return `<td>${fmtNum(s.dv)}%</td>`;
+        case 'total_dividend': return `<td>¥${fmtNum(s.total_dividend)}</td>`;
+        case 'weight': return `<td>${fmtNum(s.weight)}%</td>`;
+      }
+      return '<td></td>';
+    }
+
+    const COLS_ADV = [['code', '代码/名称'], ['price', '现价'], ['quantity', '数量'], ['avg_cost', '成本'], ['value', '市值'],
+      ['pnl', '盈亏'], ['pnl_pct', '盈亏%'], ['day_pnl', '今日盈亏'], ['pe', 'PE'], ['pb', 'PB'],
+      ['pe_pct', 'PE分位'], ['pb_pct', 'PB分位'], ['dv', '股息率'], ['total_dividend', '累计分红'], ['weight', '权重']];
+    const COLS_SIMPLE = [['code', '代码/名称'], ['price', '现价'], ['quantity', '数量'], ['avg_cost', '成本'], ['value', '市值'],
+      ['pnl', '盈亏'], ['pnl_pct', '盈亏%'], ['day_pnl', '今日盈亏']];
+
+    function renderTable(p) {
+      const wrap = document.getElementById('holdingsGroups');
+      wrap.innerHTML = '';
+      const cols = uiAdvanced() ? COLS_ADV : COLS_SIMPLE;
+      const groups = groupByTag(sortedStocks(p.stocks));
+      Object.keys(groups).forEach((tag) => {
+        const rows = groups[tag];
+        const value = rows.reduce((s, x) => s + x.value, 0);
+        const weight = rows.reduce((s, x) => s + x.weight, 0);
+        const sec = document.createElement('div');
+        sec.className = 'holdings-group';
+        sec.innerHTML = `
+          <h3>${tag} <span class="muted">${rows.length} 只 · 市值 ¥${fmtNum(value)} · 权重 ${fmtNum(weight)}%</span></h3>
+          <div style="overflow-x:auto">
+            <table>
+              <thead><tr>${cols.map(([k, label]) => `<th>${label}</th>`).join('')}</tr></thead>
+              <tbody>${rows.map((s) => `<tr>${cols.map(([k]) => cellHtml(k, s)).join('')}</tr>`).join('')}</tbody>
+            </table>
+          </div>`;
+        wrap.appendChild(sec);
+      });
+      document.getElementById('emptyTip').style.display = p.stocks.length ? 'none' : 'block';
+    }
+
+    document.getElementById('sortSel').addEventListener('change', (e) => {
+      sortMode = e.target.value;
+      loadPage();
+    });
+    setupViewToggle();
+    // 手机端默认卡片视图（窄屏下列表表格需横向滚动，卡片更顺手）
+    if (window.matchMedia('(max-width: 640px)').matches) {
+      document.querySelectorAll('#viewToggle button').forEach((b) => b.classList.remove('active'));
+      const cardBtn = document.querySelector('#viewToggle [data-view="card"]');
+      if (cardBtn) cardBtn.classList.add('active');
+      viewMode = 'card';
+      document.getElementById('listView').style.display = 'none';
+      document.getElementById('cardView').style.display = 'grid';
+    }
+    // 简单/高级模式变化 → 重渲染列；页面加载时同模式的首次事件不重复重载
+    let _uiMode = (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
+    window.addEventListener('app-settings', (e) => {
+      if (document.readyState === 'loading') return;
+      const mode = (e.detail && e.detail.mode) || (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
+      if (mode !== _uiMode) { _uiMode = mode; schedulePageReload(); }
+    });
+    // WebSocket 数据更新（盘中每 5 分钟自动刷新）→ 防抖重载，价格自动跟上
+    window.addEventListener('app-data-updated', () => { if (!document.hidden) schedulePageReload(600); });
+    loadPage();
+  </script>
+</body>
+</html>

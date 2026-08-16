@@ -1,0 +1,1442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>个股分析 · 股票持仓分析</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/vendor/echarts.min.js"></script>
+</head>
+<body class="page-stock">
+  <nav></nav>
+  <div class="container">
+    <div class="panel">
+      <div class="row panel-head-row">
+        <h2 id="title">个股详情</h2>
+        <span class="grow"></span>
+        <div id="searchBox"></div>
+        <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
+        <button class="btn danger" id="sellBtn" onclick="quickTrade('sell')">卖出</button>
+        <button class="btn" id="aiBtn" onclick="aiAnalyzeMenu()" title="勾选要分析的 AI 内容（诊股/消息面/技术面/资金流，默认不勾）">🤖 AI诊股</button>
+        <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 更新此股行情</button>
+        <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 完整更新此股</button>
+      </div>
+      <div id="staleTip" class="muted tip-line" style="display:none"></div>
+      <div id="missingBanner" class="tip-line warn-text" style="display:none"></div>
+    </div>
+
+    <div class="cards" id="quoteCards"></div>
+
+    <div class="panel panel-tight" id="asOfPanel">
+      <div id="asOfPicker"></div>
+    </div>
+
+    <div class="panel" id="metaPanel">
+      <h2>标的设置 <span class="sub">预期增速 / 标签 / 跟踪指数</span></h2>
+      <div id="growthPanel" style="display:none">
+        <div class="form-list">
+          <div class="form-item">
+            <label>净利增速</label>
+            <input type="number" id="growthInput" step="0.01" class="input-mid">
+            <label>营收增速</label>
+            <input type="number" id="revenueGrowthInput" step="0.01" class="input-mid">
+            <label>支付率%</label>
+            <input type="number" id="payoutInput" step="0.01" class="input-sm">
+            <button class="btn primary" onclick="saveExpectedGrowth()">保存</button>
+            <span class="muted form-meta" id="growthMeta"></span>
+          </div>
+        </div>
+      </div>
+      <div id="tagPanel" style="display:none">
+        <div class="form-list">
+          <div class="form-item">
+            <label>标签</label>
+            <input type="text" id="tagInput" maxlength="20" class="input-mid" placeholder="如：红利/科技/银行">
+            <button class="btn primary" onclick="saveTag()">保存</button>
+            <span class="muted form-meta" id="tagMeta"></span>
+          </div>
+        </div>
+      </div>
+      <div id="etfIndexPanel" style="display:none">
+        <div class="form-list">
+          <div class="form-item">
+            <label>跟踪指数</label>
+            <span class="muted" id="etfIndexMeta"></span>
+            <span class="grow"></span>
+            <span id="etfIndexActions"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="aiReportPanel" style="display:none">
+      <div class="row panel-head-row">
+        <h2>🤖 AI 诊股报告</h2>
+        <span class="grow"></span>
+        <span class="muted" id="aiReportMeta" style="font-size:12px"></span>
+      </div>
+      <div id="aiReportBody" style="margin-top:12px">
+        <div class="empty" style="padding:20px">尚未生成报告，点右上角「🤖 AI诊股」。</div>
+      </div>
+    </div>
+
+    <div class="panel" id="growthTablePanel">
+      <h2>盈利与成长 <span class="sub">静态 / TTM / 前瞻 对比</span></h2>
+      <table>
+        <thead><tr><th>指标</th><th>静态</th><th>TTM</th><th>前瞻</th></tr></thead>
+        <tbody id="growthBody"><tr><td colspan="4" class="muted">暂无数据（请先「完整更新此股」）</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel" id="finPanel">
+      <h2>财务指标（最新报告期）</h2>
+      <div class="cards" id="finCards"></div>
+    </div>
+
+    <div class="panel" id="quantilePanel">
+      <h2>历史分位（实时值 / 前瞻值 的百分位）</h2>
+      <div class="chart-row">
+        <div class="chart sm" id="peQ"></div>
+        <div class="chart sm" id="pbQ"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="valHistPanel">
+      <h2>估值历史 <span class="sub">可拖动缩放切换分位窗口</span></h2>
+      <div id="histTabs"></div>
+      <div class="chart lg" id="peLine"></div>
+      <div class="chart lg" id="pbLine"></div>
+    </div>
+
+    <div class="panel grow" id="flowBarsPanel">
+      <h2>全天五档资金流（最新交易日）</h2>
+      <div class="chart sm" id="flowBars"></div>
+      <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
+    </div>
+
+    <div class="panel panel-action-bar">
+      <b>🤖 AI 扩展分析</b>
+      <span class="muted panel-action-note">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI」勾选分析</span>
+    </div>
+
+    <div class="panel" id="newsAiPanel">
+      <div class="row panel-head-row">
+        <h2>📰 消息面 AI <span class="sub">自动抓取该股近期新闻（akshare）供 AI 分析 · 时效由 AI 判定</span></h2>
+        <span class="grow"></span>
+        <span class="muted" id="newsAiMeta" style="font-size:12px"></span>
+      </div>
+      <div id="newsAiBody" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel" id="techAiPanel">
+      <div class="row panel-head-row">
+        <h2>📈 技术面 <span class="sub">日/周/月K 走势 · 腾讯行情 · 红涨绿跌，AI 解读截至最近交易日</span></h2>
+        <span class="grow"></span>
+        <span class="muted" id="techAiMeta" style="font-size:12px"></span>
+      </div>
+      <div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
+        <div id="klineTabs" class="period-tabs"></div>
+        <span class="grow"></span>
+        <span class="muted" id="klineMeta" style="font-size:12px"></span>
+      </div>
+      <div class="chart lg" id="klineChart"></div>
+      <div id="techAiBody" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel" id="flowTrendPanel">
+      <h2 id="flowTitle">资金流趋势 <span class="sub" id="flowTitleSub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span></h2>
+      <div class="flow-toolbar">
+        <div id="flowTabs"></div>
+        <div style="flex:1"></div>
+      </div>
+      <div id="flowAiPanel" style="margin:0 0 10px"><div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div></div>
+      <div class="chart lg" id="flowPrice"></div>
+      <div id="flowBands" class="muted flow-band-note"></div>
+      <div class="chart lg" id="flowIntraday"></div>
+      <div class="chart lg" id="flowBandsCum" style="display:none"></div>
+      <div class="chart lg" id="flowBuySell"></div>
+      <div class="empty" id="flowIntradayEmpty" style="display:none;padding:20px">当日资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
+    </div>
+
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/common.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script>
+    initNav('stock');
+    // 简单模式隐藏个股页刷新按钮（自动刷新已覆盖）；高级模式显示
+    function applyStockMode() {
+      const mode = (window.APP_SETTINGS && window.APP_SETTINGS.mode) || 'simple';
+      const show = mode === 'advanced';
+      ['refreshDyn', 'refreshFull'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      });
+    }
+    window.addEventListener('app-settings', applyStockMode);
+    applyStockMode();
+    let currentCode = new URLSearchParams(location.search).get('code') || '';
+    const isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）
+    let lastIsIndex = false;    // 当前标的是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定）
+    let lastQuote = null;
+    let lastName = '';
+    let lastLive = {};
+    let lastFx = null;          // 港股当前汇率（人民币折算显示用）
+    // 资金流统一时间窗：'1m'/'5m'/'15m'/'30m'（当日分时）+ 'day'/'week'/'month'（多日聚合桶，与 K 线周期对齐）
+    const FLOW_WINDOWS = ['1m', '5m', '15m', '30m', 'day', 'week', 'month'];
+    const FLOW_WINDOW_LABEL = { '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟',
+                                'day': '日', 'week': '周', 'month': '月' };
+    let flowWindow = '15m';     // 当前选中窗口（绘图与 AI 分析共用）
+    let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（估值+分时）
+
+    function stockDetailQS(extra) {
+      const parts = ['window=1'];
+      if (extra && extra.partial) parts.push('partial=1');
+      if (asOfDate) parts.push('as_of=' + encodeURIComponent(asOfDate));
+      return '?' + parts.join('&');
+    }
+
+    function refreshAsOfPicker() {
+      mountAsOfPicker(document.getElementById('asOfPicker'), {
+        value: asOfDate,
+        label: '按日期查看（估值 · 资金流分时）',
+        onChange: (iso) => {
+          asOfDate = iso;
+          refreshAsOfPicker();
+          reloadAsOf();
+        },
+      });
+    }
+    refreshAsOfPicker();
+
+    // 资金流 AI 分析完成（已刷新资金流缓存）→ 静默重拉详情重绘资金流图，无需手动刷新
+    window.addEventListener('app-flow-analyzed', () => { if (currentCode) loadPage(true); });
+
+
+
+    // 触发个股消息面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染（复用 openPromptEditor 流程；skipEditor=true 一键跳过编辑）
+    async function runNewsAi({ code, btn, panel, metaEl, skipEditor, intensity, systemPrompt }) {
+      const doRun = async (systemPrompt, intensity) => {
+        btn.disabled = true;
+        panel.style.display = 'block';
+        panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
+        try {
+          const body = { code, intensity };
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const job = await startBackgroundJob('/ai/news-analysis', body, { toast: '消息面 AI 已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/ai/news-report/' + encodeURIComponent(code), { silent: true });
+          renderNewsPanel(panel, d);
+          if (metaEl) metaEl.textContent = d && d.as_of
+            ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+            : '';
+        } catch (e) {
+          panel.innerHTML = /AI 模型/.test(e.message)
+            ? aiNotConfiguredHtml()
+            : `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+        }
+      };
+      if (skipEditor) { await doRun(systemPrompt || null, intensity || 'normal'); return; }
+      openPromptEditor('news', doRun);
+    }
+
+    // 触发个股技术面 AI 分析：弹窗编辑指令 → POST → wait → GET 渲染（skipEditor=true 一键跳过编辑）
+    async function runTechAi({ code, btn, panel, metaEl, skipEditor, intensity, systemPrompt }) {
+      const doRun = async (systemPrompt, intensity) => {
+        btn.disabled = true;
+        panel.style.display = 'block';
+        panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
+        try {
+          const body = { code, intensity };
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const job = await startBackgroundJob('/ai/tech-analysis', body, { toast: '技术面 AI 已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/ai/tech-report/' + encodeURIComponent(code), { silent: true });
+          renderTechPanel(panel, d);
+          if (metaEl) metaEl.textContent = d && d.as_of
+            ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+            : '';
+        } catch (e) {
+          panel.innerHTML = /AI 模型/.test(e.message)
+            ? aiNotConfiguredHtml()
+            : `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+        }
+      };
+      if (skipEditor) { await doRun(systemPrompt || null, intensity || 'normal'); return; }
+      openPromptEditor('technical', doRun);
+    }
+
+    // 加载该股最近落库消息面/技术面结果（F5 恢复；指数模式隐藏消息面）
+    async function loadNewsPersisted() {
+      const body = document.getElementById('newsAiBody');
+      const metaEl = document.getElementById('newsAiMeta');
+      if (!currentCode || !body) return;
+      try {
+        const d = await api('/ai/news-report/' + encodeURIComponent(currentCode), { silent: true });
+        renderNewsPanel(body, d);
+        if (metaEl) metaEl.textContent = d && d.as_of
+          ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+          : '';
+      } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
+    }
+
+    async function loadTechPersisted() {
+      const body = document.getElementById('techAiBody');
+      const metaEl = document.getElementById('techAiMeta');
+      if (!currentCode || !body) return;
+      try {
+        const d = await api('/ai/tech-report/' + encodeURIComponent(currentCode), { silent: true });
+        renderTechPanel(body, d);
+        if (metaEl) metaEl.textContent = d && d.as_of
+          ? (d.model_name ? d.model_name + ' · ' : '') + d.as_of.replace('T', ' ')
+          : '';
+      } catch (e) { /* 读取失败忽略 */ }
+    }
+
+    // ============ K线图（日/周/月，腾讯源缓存） ============
+    let klinePeriod = 'day';
+
+    async function loadKline() {
+      const el = document.getElementById('klineChart');
+      const meta = document.getElementById('klineMeta');
+      if (!currentCode || !el) return;
+      try {
+        const d = await api('/stocks/' + encodeURIComponent(currentCode) + '/kline?period=' + klinePeriod, { silent: true });
+        const bars = (d && d.bars) || [];
+        const ms = (d && d.market_status) || '';
+        const asOf = (d && d.as_of) || '';
+        klineChart(el, bars, { defaultShow: 60 });   // 日/周/月K统一默认展示 60 根，可缩放看全部
+        if (meta) {
+          let mt = bars.length ? bars.length + ' 根' : '';
+          if (asOf) mt += (mt ? ' · ' : '') + (ms === 'pre_open' ? '今日未开盘 截至 ' : '截至 ') + asOf.slice(5);
+          meta.textContent = mt;
+        }
+        if (bars.length) {
+          const b = bars[bars.length - 1];
+          const chg = b.pct_change != null && b.pct_change !== ''
+            ? (Number(b.pct_change) >= 0 ? '+' : '') + Number(b.pct_change).toFixed(2) + '%'
+            : '';
+          const tone = chg && Number(b.pct_change) >= 0 ? 'up' : chg ? 'down' : 'hi';
+          setPanelSummary('techAiPanel', (ms === 'pre_open' ? '截至 ' : '最新 ') + (b.date || '').slice(5) + ' 收 ' + fmtNum(b.close)
+            + (chg ? sumSep() + sumV(chg, tone) : ''));
+        } else {
+          setPanelSummary('techAiPanel', '暂无K线数据');
+        }
+      } catch (e) {
+        el.innerHTML = '<div class="empty" style="padding:24px">K线加载失败：' + e.message + '</div>';
+        if (meta) meta.textContent = '';
+        setPanelSummary('techAiPanel', 'K线加载失败');
+      }
+    }
+
+    function initKlineTabs() {
+      const tabs = document.getElementById('klineTabs');
+      if (!tabs) return;
+      tabs.innerHTML = '';
+      [['day', '日K'], ['week', '周K'], ['month', '月K']].forEach(([p, label]) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ptab' + (p === klinePeriod ? ' active' : '');
+        b.textContent = label;
+        b.onclick = () => {
+          klinePeriod = p;
+          tabs.querySelectorAll('.ptab').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+          loadKline();
+        };
+        tabs.appendChild(b);
+      });
+    }
+
+    // 搜索框：选择股票 → 先试打开；缓存缺失则弹窗询问下载
+    const sb = stockSearchInput();
+    const input = sb.querySelector('input');
+    if (currentCode) input.value = currentCode;
+    sb.querySelector('input').addEventListener('change', () => {
+      const p = parseStockChoice(sb.querySelector('input').value);
+      if (p) { currentCode = p.code; history.replaceState(null, '', '?code=' + p.code); openStock(); }
+    });
+    document.getElementById('searchBox').appendChild(sb);
+
+    // 缺失项中文说明
+    const MISSING_LABEL = { bars: '日K行情', financials: '财务数据', valuation: '估值历史/分位' };
+
+    // 切换/加载股票前清空旧数据，避免残留误导
+    function clearStockView() {
+      document.getElementById('title').textContent = currentCode ? `正在加载 ${currentCode}…` : '请输入股票代码或名称';
+      lastIsIndex = false;   // 重新加载前复位，由 render 按 payload 重新判定
+      document.getElementById('staleTip').style.display = 'none';
+      document.getElementById('missingBanner').style.display = 'none';
+      document.getElementById('quoteCards').innerHTML = '';
+      document.getElementById('growthBody').innerHTML = '<tr><td colspan="4" class="muted">—</td></tr>';
+      document.getElementById('growthPanel').style.display = 'none';
+      document.getElementById('tagPanel').style.display = 'none';
+      document.getElementById('finCards').innerHTML = '';
+      ['peQ', 'pbQ', 'peLine', 'pbLine', 'flowBars'].forEach((id) => clearChart(document.getElementById(id)));
+      // 估值图上方插入的图例/分位控件一并清掉，避免切股后残留
+      document.querySelectorAll('.valuation-legend, .valuation-quantiles').forEach((n) => n.remove());
+      document.getElementById('histTabs').innerHTML = '';
+      document.getElementById('flowEmpty').style.display = 'block';
+      document.getElementById('flowTabs').innerHTML = '';
+      clearChart(document.getElementById('flowPrice'));
+      clearChart(document.getElementById('flowIntraday'));
+      clearChart(document.getElementById('flowBuySell'));
+      clearChart(document.getElementById('klineChart'));
+      document.getElementById('klineTabs').innerHTML = '';
+      const kmEl = document.getElementById('klineMeta');
+      if (kmEl) kmEl.textContent = '';
+      setPanelSummary('techAiPanel', '');
+      document.getElementById('flowIntradayEmpty').style.display = 'block';
+      document.getElementById('aiReportPanel').style.display = 'none';
+      const flowAi = document.getElementById('flowAiPanel');
+      if (flowAi) { flowAi.innerHTML = '<div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div>'; }
+      // 消息面/技术面 AI：切股先清空（避免残留上一只的旧报告；index 模式消息面隐藏）
+      const newsBody = document.getElementById('newsAiBody');
+      const techBody = document.getElementById('techAiBody');
+      const newsMeta = document.getElementById('newsAiMeta');
+      const techMeta = document.getElementById('techAiMeta');
+      if (newsBody) { newsBody.innerHTML = ''; }
+      if (techBody) { techBody.innerHTML = ''; }
+      if (newsMeta) { newsMeta.textContent = ''; }
+      if (techMeta) { techMeta.textContent = ''; }
+    }
+
+    // 仅切「按日期查看」：不清空整页（避免估值 ECharts 被 innerHTML 拆掉后挂死），只重拉并 render
+    async function reloadAsOf() {
+      if (!currentCode) return;
+      try {
+        if (isIndexMode || lastIsIndex) {
+          const d = await api('/indices/' + currentCode + '?window=1' + asOfQuery(asOfDate), { blocking: true });
+          render(d);
+          return;
+        }
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), { blocking: true });
+        render(d);
+      } catch (e) {
+        if (e.status === 409) {
+          // 历史日也可能缺缓存：仍走原下载弹窗路径
+          return openStock();
+        }
+        toast('按日期加载失败：' + (e.message || e), 4000);
+      }
+    }
+
+    // 指数详情：无 409 缓存缺失弹窗，数据不全对应区域显示「暂无」
+    async function openIndex() {
+      try {
+        const d = await api('/indices/' + currentCode + '?window=1' + asOfQuery(asOfDate), { blocking: true });
+        render(d);
+      } catch (e) {
+        document.getElementById('title').textContent = `查询失败：${e.message}`;
+        clearStockView();
+      }
+    }
+
+    // 页面打开即触发该股全量刷新（静态数据受后端 1h 节流）；同一 code 已在刷新中则复用其 job_id
+    const _autoRefreshJobs = new Map(); // code → job_id
+    async function startAutoRefreshOnOpen(code) {
+      if (_autoRefreshJobs.has(code)) return _autoRefreshJobs.get(code);
+      try {
+        const job = await startBackgroundJob(
+          '/stocks/' + code + '/refresh/full', { auto: true }, { silent: true },
+        );
+        _autoRefreshJobs.set(code, job.job_id);
+        return job.job_id;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function openStock() {
+      const code = currentCode;
+      if (!code) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
+      clearStockView();
+      if (isIndexMode) return openIndex();
+      // 先读缓存判定是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定），指数不走个股自动刷新
+      let isIndexDetected = false;
+      let d;
+      try {
+        d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
+      } catch (e) {
+        // 缓存缺失：自动触发该股全量刷新（不弹窗），完成后自动加载；已在下载中则等现有任务
+        const jobId = await startAutoRefreshOnOpen(code);
+        if (jobId) {
+          document.getElementById('title').textContent = '正在下载数据…';
+          try {
+            await waitForJob(jobId);
+            _autoRefreshJobs.delete(code);
+            if (currentCode === code) {
+              d = await api('/stocks/' + code + stockDetailQS(), { blocking: true });
+            } else {
+              return;
+            }
+          } catch (e2) {
+            _autoRefreshJobs.delete(code);
+            document.getElementById('title').textContent = `下载失败：${e2.message}`;
+            toast('下载失败：' + (e2.message || e2), 4000);
+            return;
+          }
+        } else {
+          // 刷新请求本身失败（后端异常）：提示，不弹窗
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
+          clearStockView();
+          return;
+        }
+        if (!d) {
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
+          clearStockView();
+          return;
+        }
+      }
+      // 有数据：先渲染；非指数才触发该股自动全量刷新（指数走 index 刷新），刷新完自动重绘
+      isIndexDetected = !!d.is_index;
+      if (isIndexDetected) {
+        // 与 openIndex 同口径：指数渲染（隐藏个股专属面板），并触发指数刷新
+        lastIsIndex = true;
+        render(d);
+        try {
+          await startBackgroundJob('/indices/' + code + '/refresh', {}, { silent: true });
+        } catch (e2) { /* 指数刷新失败不阻断查看 */ }
+        return;
+      }
+      render(d);
+      const autoJob = await startAutoRefreshOnOpen(code);
+      if (autoJob) {
+        waitForJob(autoJob).then(() => {
+          _autoRefreshJobs.delete(code);
+          if (currentCode === code) loadPage(true);
+        }).catch(() => { _autoRefreshJobs.delete(code); });
+      }
+    }
+
+    // 单股刷新：弹窗多选内容 → 调 /stocks/{code}/refresh[/full] → 重载
+    async function refreshStock(full) {
+      if (!currentCode) return toast('请先选择股票');
+      if (isIndexMode || lastIsIndex) {
+        const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
+        btn.disabled = true;
+        try {
+          await startBackgroundJob('/indices/' + currentCode + '/refresh', {}, { toast: '指数刷新已开始，进度见顶部' });
+        } catch (e) {
+          toast('指数刷新失败：' + e.message, 4000);
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+      const btn = document.getElementById(full ? 'refreshFull' : 'refreshDyn');
+      await doRefresh(btn, full, 'stock', currentCode);
+    }
+
+    async function saveExpectedGrowth() {
+      if (isIndexMode || lastIsIndex) return toast('指数不可交易');
+      const v = parseFloat(document.getElementById('growthInput').value);
+      const rv = parseFloat(document.getElementById('revenueGrowthInput').value);
+      const pv = document.getElementById('payoutInput').value;
+      if (Number.isNaN(v) || Number.isNaN(rv)) return toast('请输入有效的净利/营收预期增速（%）');
+      try {
+        const calls = [
+          api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: v } }),
+          api('/stocks/' + currentCode + '/expected-revenue-growth', { method: 'PUT', body: { growth: rv } }),
+        ];
+        if (pv !== '') calls.push(api('/stocks/' + currentCode + '/expected-payout', { method: 'PUT', body: { growth: parseFloat(pv) } }));
+        await Promise.all(calls);
+        toast('已保存预期增速/支付率');
+        await loadPage();
+      } catch (e) {
+        toast('保存失败：' + e.message, 4000);
+      }
+    }
+
+    // 把 AI 给出的预期年同比增速一键应用到可配置项（净利/营收，均为 %）
+    async function applyAiGrowth(np, rev) {
+      if (!currentCode || np == null) return toast('AI 未给出净利预期增速');
+      try {
+        const calls = [
+          api('/stocks/' + currentCode + '/expected-growth', { method: 'PUT', body: { growth: np } }),
+        ];
+        if (rev != null) calls.push(api('/stocks/' + currentCode + '/expected-revenue-growth', { method: 'PUT', body: { growth: rev } }));
+        await Promise.all(calls);
+        toast('已应用 AI 预期增速');
+        await loadPage();
+      } catch (e) {
+        toast('应用失败：' + e.message, 4000);
+      }
+    }
+
+    async function saveTag() {
+      const tag = document.getElementById('tagInput').value.trim();
+      if (!tag) return toast('请输入标签');
+      try {
+        await api('/stocks/' + currentCode + '/tag', { method: 'PUT', body: { tag } });
+        toast('已保存标签');
+        await loadPage();
+      } catch (e) {
+        toast('保存失败：' + e.message, 4000);
+      }
+    }
+
+    // ---------- AI 诊股（质量 grade：优秀/良好/一般/较差；动作走 action 字段）----------
+
+    async function loadAiReport() {
+      if (!currentCode) return;
+      const panel = document.getElementById('aiReportPanel');
+      try {
+        const d = await api('/stocks/' + currentCode + '/ai-report', { silent: true });
+        panel.style.display = 'block';
+        renderAiReport(d);
+      } catch (e) {
+        panel.style.display = 'none';
+      }
+    }
+
+    // 诊股执行体（aiAnalyzeMenu 勾选「AI 诊股」时直接调用，跳过指令编辑）
+    async function aiAnalyzeDo(systemPrompt, intensity) {
+      if (!currentCode) return toast('请先选择股票');
+      {
+        const btn = document.getElementById('aiBtn');
+        btn.disabled = true;
+        try {
+          document.getElementById('aiReportBody').innerHTML = '<div class="empty" style="padding:30px">AI 已提交，进度见顶部…</div>';
+          document.getElementById('aiReportPanel').style.display = 'block';
+          const body = { intensity };
+          if (systemPrompt) body.system_prompt = systemPrompt;
+          const job = await startBackgroundJob('/stocks/' + currentCode + '/ai-report', body, { toast: '诊股已开始' });
+          await waitForJob(job.job_id);
+          const d = await api('/stocks/' + currentCode + '/ai-report', { silent: true });
+          renderAiReport(d);
+          toast('AI 诊股完成');
+        } catch (e) {
+          document.getElementById('aiReportBody').innerHTML =
+            `<div class="empty" style="padding:30px">诊股失败：${e.message}</div>`;
+          toast('诊股失败：' + e.message, 4000);
+        } finally {
+          btn.disabled = false;
+        }
+      }
+    }
+
+    // AI 诊股（保留：弹窗编辑指令后执行）
+    async function aiAnalyze() {
+      if (!currentCode) return toast('请先选择股票');
+      openPromptEditor('stock', aiAnalyzeDo);
+    }
+
+    // AI 分析统一入口：勾选（默认一个都不勾）+ 强度 + 每项「改提示词」→ 逐个执行
+    async function aiAnalyzeMenu() {
+      if (!currentCode) return toast('请先选择股票');
+      openAiExtPicker({
+        title: '🤖 AI诊股',
+        note: '勾选要分析的内容（默认不勾），将逐个进行分析，进度见顶部；每项可单独「改提示词」。',
+        withIntensity: true,
+        items: [
+          { key: 'diagnose', label: 'AI 诊股', desc: '（周期性/护城河/基本面/增长/股息/估值/同业/资金面/消息面/技术面 10 维）', checked: false, promptKind: 'stock' },
+          { key: 'news', label: '消息面', desc: '（自动抓取该股近期新闻）', checked: false, promptKind: 'news' },
+          { key: 'tech', label: '技术面', desc: '（日/周/月K 结构，截至最近交易日）', checked: false, promptKind: 'technical' },
+          { key: 'flow', label: '资金流', desc: '（分时五档 × 股价，当前窗口）', checked: false, promptKind: 'fundflow' },
+        ],
+        onRun: async (keys, intensity, overrides) => {
+          const code = currentCode;
+          const dummy = document.createElement('span'); // 收敛后无独立按钮，占位防 btn.disabled 报错
+          for (const k of keys) {
+            const sp = overrides[k] || null;
+            if (k === 'diagnose') {
+              await aiAnalyzeDo(sp, intensity);
+            } else if (k === 'news') {
+              await runNewsAi({ code, btn: dummy, panel: document.getElementById('newsAiBody'), metaEl: document.getElementById('newsAiMeta'), skipEditor: true, intensity, systemPrompt: sp });
+            } else if (k === 'tech') {
+              await runTechAi({ code, btn: dummy, panel: document.getElementById('techAiBody'), metaEl: document.getElementById('techAiMeta'), skipEditor: true, intensity, systemPrompt: sp });
+            } else if (k === 'flow') {
+              await runFundflowAi({ code, window: flowWindow, btn: dummy, panel: document.getElementById('flowAiPanel'), skipEditor: true, intensity, systemPrompt: sp });
+            }
+          }
+          toast('AI 分析完成');
+        },
+      });
+    }
+
+    const AI_TRAP_CN = { cycle_trap: '周期陷阱', value_trap: '价值陷阱', dividend_trap: '股息陷阱' };
+
+    // 交叉陷阱预警（维度间相关性，警惕陷阱）
+    function renderAiTraps(r) {
+      const traps = r.cross_analysis || {};
+      return Object.keys(AI_TRAP_CN).map((k) => {
+        const t = traps[k];
+        if (!t || !t.detected) return '';
+        const impact = (t.impact_score || 0) < 0
+          ? `<span style="color:#e03131;margin-left:6px">得分下调 ${Math.abs(t.impact_score)}</span>` : '';
+        return `<div style="border:1px solid #e03131;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff5f5">
+          <div style="font-size:13px;font-weight:700;color:#e03131">⚠ ${AI_TRAP_CN[k]}${impact}</div>
+          <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.7">${t.explanation || '—'}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // AI 给出的预期年同比增速卡片 + 一键应用按钮
+    function renderAiGrowthCard(eg) {
+      const np = eg.net_profit;
+      const rev = eg.revenue;
+      const npTxt = np != null ? signed(np) + '%' : '—';
+      const revTxt = rev != null ? signed(rev) + '%' : '—';
+      const npRsn = eg.net_profit_reason
+        ? `<div style="font-size:12px;color:#555;margin-top:6px"><span style="color:#666">净利依据：</span>${eg.net_profit_reason}</div>` : '';
+      const revRsn = eg.revenue_reason
+        ? `<div style="font-size:12px;color:#555;margin-top:4px"><span style="color:#666">营收依据：</span>${eg.revenue_reason}</div>` : '';
+      const applyBtn = np != null
+        ? `<button class="btn primary" style="padding:4px 14px;font-size:12px" onclick="applyAiGrowth(${np}, ${rev})">应用为预期增速</button>` : '';
+      return `<div style="border:1px solid var(--primary,#2f6fed);border-radius:8px;padding:10px 12px;margin-bottom:12px;background:var(--primary-weak,#eef3ff)">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <strong style="font-size:13px;color:var(--primary,#2f6fed)">AI 预期增速</strong>
+          <span style="font-size:12px;color:#333">净利同比 <b>${npTxt}</b> · 营收同比 <b>${revTxt}</b></span>
+          ${applyBtn}
+        </div>
+        ${npRsn}${revRsn}
+      </div>`;
+    }
+
+    function renderAiReport(d) {
+      const body = document.getElementById('aiReportBody');
+      if (!d || !d.report) {
+        body.innerHTML = '<div class="empty" style="padding:20px">尚未生成报告，点右上角「🤖 AI诊股」。</div>';
+        document.getElementById('aiReportMeta').textContent = '';
+        setPanelSummary('aiReportPanel', '未诊股');
+        return;
+      }
+      const r = d.report;
+      const g = cardGrade(r);
+      const gName = cardGradeName(r) || GRADE_NAMES[g] || '';
+      const risk = cardRisk(r);
+      setPanelSummary('aiReportPanel',
+        sumGrade(g) + (gName ? ' ' + sumL(gName) : '')
+        + (r.score != null ? sumSep() + sumV(fmtNum(r.score)) : '')
+        + (risk != null && !Number.isNaN(risk)
+          ? sumSep() + sumL('风险') + ' ' + sumV(String(risk), risk < 35 ? 'down' : (risk < 65 ? 'hi' : 'up'))
+          : '')
+        + (d.stale ? ' ' + sumChip('已变化') : ''));
+      document.getElementById('aiReportMeta').textContent =
+        `${d.model_name || 'AI'} · ${(d.created_at || '').slice(0, 16).replace('T', ' ')}`
+        + (d.stale ? ' · 数据已更新，建议重诊' : '');
+
+      const extra = renderAiTraps(r) + (r.expected_growth ? renderAiGrowthCard(r.expected_growth) : '');
+      body.innerHTML = renderScoreCard(r, { stale: !!d.stale, extraHtml: extra });
+      wireAiHtmlButton(body, r);
+    }
+
+    // ---------- ETF 跟踪指数面板 ----------
+
+    // 渲染 #etfIndexPanel：已映射 → 链接到指数页 + 来源徽章；未映射 → 自动匹配 / 手动设置
+    async function renderEtfIndexPanel(d) {
+      const meta = document.getElementById('etfIndexMeta');
+      const actions = document.getElementById('etfIndexActions');
+      const ti = d.tracked_index;
+      if (ti) {
+        meta.innerHTML = `<a href="/static/stock.html?code=${ti.code}&index=1">${esc(ti.name)}（${ti.code}）</a>`;
+        actions.innerHTML = ti.source === 'auto'
+          ? '<span class="badge B">自动匹配</span>'
+          : '<span class="badge C">手动设置</span>';
+        return;
+      }
+      meta.textContent = '未设置（估值将从对应指数获取）';
+      actions.innerHTML = `
+        <button class="btn" onclick="autoMatchEtfIndex()" style="font-size:12px">自动匹配</button>
+        <button class="btn" onclick="manualEtfIndex()" style="font-size:12px">手动设置</button>`;
+    }
+
+    // 按 ETF 名称自动匹配指数并落库（source=auto）
+    async function autoMatchEtfIndex() {
+      try {
+        const d = await api('/indices/etf-map/auto?etf_code=' + encodeURIComponent(currentCode)
+          + '&etf_name=' + encodeURIComponent(lastName || ''));
+        if (!d.suggest_index_code) { toast('未能自动匹配，请手动设置'); return; }
+        await api('/indices/etf-map/' + encodeURIComponent(currentCode), {
+          method: 'PUT', body: { index_code: d.suggest_index_code, source: 'auto' },
+        });
+        toast('已自动匹配：' + d.suggest_index_name);
+        await loadPage();
+      } catch (e) {
+        toast('自动匹配失败：' + e.message, 4000);
+      }
+    }
+
+    // 手动设置弹窗：指数下拉（GET /indices），选「— 清除映射 —」表示清空
+    async function manualEtfIndex() {
+      let indices = [];
+      try { indices = await api('/indices'); } catch (e) { return toast('加载指数列表失败'); }
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.innerHTML = `
+        <div class="modal">
+          <h3>设置跟踪指数 · ${esc(lastName || currentCode)}</h3>
+          <div class="row" style="align-items:center;gap:8px">
+            <span class="muted">指数</span>
+            <select id="idxSel" style="flex:1">
+              <option value="">— 清除映射 —</option>
+              ${indices.map((d) => `<option value="${d.code}">${esc(d.name)}（${d.code}）</option>`).join('')}
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="idxCancel">取消</button>
+            <button class="btn primary" id="idxOk">保存</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#idxCancel').onclick = close;
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      mask.querySelector('#idxOk').onclick = async () => {
+        const code = mask.querySelector('#idxSel').value;
+        try {
+          await api('/indices/etf-map/' + encodeURIComponent(currentCode), {
+            method: 'PUT', body: { index_code: code || null, source: 'manual' },
+          });
+          toast(code ? '已设置跟踪指数' : '已清除映射');
+          close();
+          await loadPage();
+        } catch (e) {
+          toast('保存失败：' + e.message, 4000);
+        }
+      };
+    }
+
+    function quickTrade(side) {
+      if (isIndexMode || lastIsIndex) return toast('指数不可交易');
+      if (!currentCode) return toast('请先选择股票');
+      const sideText = side === 'buy' ? '买入' : '卖出';
+      const mask = document.createElement('div');
+      mask.className = 'modal-mask';
+      mask.innerHTML = `
+        <div class="modal">
+          <h3>${sideText} ${lastName || currentCode}</h3>
+          <div class="row" style="align-items:center;gap:6px">
+            <span class="muted">价格</span>
+            <input type="number" id="qtPrice" step="0.001" min="0" value="${lastQuote ? lastQuote.price : ''}" placeholder="成交价" style="width:96px">
+            <span class="muted">× 数量(股)</span>
+            <input type="number" id="qtQty" step="1" min="0" placeholder="股数" style="width:96px">
+            <span class="muted">费用</span>
+            <input type="number" id="qtFee" step="0.01" min="0" value="0" placeholder="手续费" style="width:86px">
+          </div>
+          <div class="muted" id="qtAmount" style="margin-top:8px;font-size:12px"></div>
+          <div class="modal-actions">
+            <button class="btn" id="qtCancel">取消</button>
+            <button class="btn primary" id="qtOk">确认${sideText}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(mask);
+      const close = () => mask.remove();
+      mask.querySelector('#qtCancel').onclick = close;
+      mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
+      // 实时计算成交金额：价格 × 数量（+ 费用）；港股同时显示人民币
+      const calcAmt = () => {
+        const p = parseFloat(mask.querySelector('#qtPrice').value) || 0;
+        const q = parseFloat(mask.querySelector('#qtQty').value) || 0;
+        const f = parseFloat(mask.querySelector('#qtFee').value) || 0;
+        const base = p * q;
+        let txt = '输入数量和价格，自动计算金额';
+        if (q > 0 && lastFx) {
+          // 港股：原币 + 人民币
+          txt = `成交金额 = ${p} × ${q} = ${base.toFixed(2)} 港币 ≈ ¥${(base * lastFx).toFixed(2)}`;
+          if (f > 0) txt += ` + 费用 ${f} = ${(base + f).toFixed(2)} 港币 ≈ ¥${((base + f) * lastFx).toFixed(2)}`;
+        } else if (q > 0) {
+          txt = `成交金额 = ${p} × ${q} = ${base.toFixed(2)} 元`;
+          if (f > 0) txt += ` + 费用 ${f} = ${(base + f).toFixed(2)} 元`;
+        }
+        mask.querySelector('#qtAmount').textContent = txt;
+      };
+      ['qtPrice', 'qtQty', 'qtFee'].forEach((id) =>
+        mask.querySelector('#' + id).addEventListener('input', calcAmt));
+      calcAmt();
+      mask.querySelector('#qtOk').onclick = async () => {
+        const price = parseFloat(mask.querySelector('#qtPrice').value);
+        const quantity = parseFloat(mask.querySelector('#qtQty').value);
+        const fee = parseFloat(mask.querySelector('#qtFee').value) || 0;
+        if (!price || !quantity) return toast('请填写价格与数量');
+        const okBtn = mask.querySelector('#qtOk');
+        okBtn.disabled = true;
+        const orig = okBtn.textContent;
+        okBtn.textContent = '提交中…';   // 首笔新股录入会同步数据，给个反馈防双击
+        try {
+          await api('/trades', {
+            method: 'POST',
+            body: { code: currentCode, name: lastName || null, side, price, quantity, fee },
+          });
+          toast('已录入' + sideText);
+          close();
+          await loadPage();
+        } catch (e) {
+          toast('录入失败：' + e.message, 4000);
+          okBtn.disabled = false;
+          okBtn.textContent = orig;
+        }
+      };
+    }
+
+    async function loadPage(noBlocking = false) {
+      if (!currentCode) {
+        document.getElementById('title').textContent = '请输入股票代码或名称';
+        return;
+      }
+      try {
+        if (isIndexMode) return openIndex();
+        // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
+        const d = await api('/stocks/' + currentCode + stockDetailQS(), noBlocking ? { silent: true } : { blocking: true });
+        render(d);
+      } catch (e) {
+        document.getElementById('title').textContent = `查询失败：${e.message}`;
+      }
+    }
+
+    function syncMetaPanel() {
+      const meta = document.getElementById('metaPanel');
+      if (!meta) return;
+      const g = document.getElementById('growthPanel');
+      const t = document.getElementById('tagPanel');
+      const e = document.getElementById('etfIndexPanel');
+      const any = [g, t, e].some((el) => el && el.style.display !== 'none');
+      meta.style.display = any ? '' : 'none';
+      const parts = [];
+      if (t && t.style.display !== 'none') {
+        const tag = (document.getElementById('tagInput').value || '').trim();
+        if (tag) parts.push(sumKV('标签', esc(tag)));
+      }
+      if (g && g.style.display !== 'none') {
+        const gv = document.getElementById('growthInput').value;
+        if (gv !== '' && gv != null) parts.push(sumKV('净利增速', gv + '%'));
+      }
+      if (e && e.style.display !== 'none') {
+        const em = document.getElementById('etfIndexMeta');
+        if (em && em.textContent) parts.push(sumV(esc(em.textContent.slice(0, 24)), 'muted'));
+      }
+      setPanelSummary(meta, parts.length ? parts.join(sumSep()) : '增速 / 标签 / 跟踪指数');
+    }
+
+    // 指数模式：隐藏个股专属面板（无五档/估值/财务/诊股），保留 点位卡 + 资金流趋势 + 刷新
+    function toggleStockPanels(idxMode) {
+      // 个股专属面板：指数模式隐藏；估值/分位面板由 render 按「是否有估值数据」单独控制（指数可拿到乐咕估值）
+      // 消息面 AI 指数模式隐藏（不该编造公司新闻），技术面 AI 保留（指数有日K）
+      ['growthPanel', 'growthTablePanel', 'finPanel', 'flowBarsPanel', 'metaPanel', 'newsAiPanel']
+        .forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = idxMode ? 'none' : ''; });
+      // 非指数（个股/ETF）：估值/分位面板始终显示；指数由 render 分支按数据决定
+      if (!idxMode) {
+        ['quantilePanel', 'valHistPanel'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = '';
+        });
+      }
+      const aiReport = document.getElementById('aiReportPanel');
+      // 非指数：显示由 loadAiReport/clearStockView 管理，这里只强制隐藏指数模式
+      if (aiReport) aiReport.style.display = idxMode ? 'none' : aiReport.style.display;
+      const aiBtn = document.getElementById('aiBtn');
+      if (aiBtn) aiBtn.style.display = idxMode ? 'none' : '';
+    }
+
+    // 资金流趋势面板标题：指数模式换「指数资金面（全量价）」口径
+    function setFlowTitle(idxMode) {
+      const t = document.getElementById('flowTitle');
+      if (!t) return;
+      t.innerHTML = idxMode
+        ? '指数资金面（全量价） <span class="sub">腾讯量价：Σ累计成交额折线 + 各期成交额柱 + 指数价格 · 分钟窗口=当日分时，天窗口=多日聚合</span>'
+        : '资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span>';
+    }
+
+    // 行情卡片（现价/市值/涨跌…）；render 与 data_updated 订阅共用，只刷数字不重建图表
+    function renderQuoteCards(d) {
+      const q = d.quote;
+      if (!q) return;
+      const live = d.live || {};
+      const mvYi = live.total_mv != null ? fmtNum(live.total_mv / 1e8) + ' 亿' : '—';
+      const dayPnlPrice = (q.price != null && q.prev_close != null) ? q.price - q.prev_close : null;
+      const isHk = d.currency === 'HKD' && d.fx_rate;
+      // 港股：价格旁显示人民币换算
+      const priceCard = isHk
+        ? ['现价', fmtNum(q.price) + ' 港币', (q.pct_chg ?? 0) >= 0 ? 'up' : 'down',
+           '≈ ¥' + fmtNum(q.price * d.fx_rate)]
+        : ['现价', fmtNum(q.price), (q.pct_chg ?? 0) >= 0 ? 'up' : 'down'];
+      const mvCard = isHk && live.total_mv != null
+        ? ['实时市值', mvYi + ' 港币', '', '≈ ¥' + fmtNum(live.total_mv * d.fx_rate / 1e8) + ' 亿']
+        : ['实时市值', mvYi];
+      const cards = [priceCard, ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
+        ['今开', fmtNum(q.open)],
+        ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
+        ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
+        mvCard];
+      document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small ${c || ''}">${v}</div>${note ? `<div class="label muted">${note}</div>` : ''}</div>`).join('');
+      // 同步「数据截至」提示
+      const staleTip = document.getElementById('staleTip');
+      if (staleTip) {
+        staleTip.style.display = q.stale ? 'block' : 'none';
+        staleTip.textContent = q.stale ? '⚠ 数据为最近交易日缓存（今日未开盘/非交易日，打开页面时已自动更新）' : `数据截至 ${q.ts}`;
+      }
+    }
+
+    // WebSocket data_updated：当前股在更新列表内 → 静默拉最新并只刷行情卡（图表不重建）
+    async function updateQuoteOnData(code) {
+      if (!code) return;
+      try {
+        const d = await api('/stocks/' + code + stockDetailQS(), { silent: true });
+        if (currentCode !== code) return;   // 已切股，丢弃过期响应
+        lastQuote = d.quote || lastQuote;
+        lastName = d.name || lastName;
+        lastFx = d.fx_rate != null ? d.fx_rate : lastFx;
+        lastLive = d.live || lastLive;
+        renderQuoteCards(d);
+      } catch (e) { /* 静默：读不到就算了 */ }
+    }
+
+    window.addEventListener('app-data-updated', (e) => {
+      const detail = (e && e.detail) || {};
+      const codes = detail.codes || [];
+      if (currentCode && (!codes.length || codes.indexOf(currentCode) >= 0)) {
+        updateQuoteOnData(currentCode);
+      }
+    });
+
+    function render(d) {
+      document.getElementById('title').textContent = `${d.code} ${d.name}`;
+      setAsOfHint(document.getElementById('asOfPicker'), d);
+      // 指数模式：隐藏买卖/个股面板（无五档/估值/财务），资金流趋势改量价渲染；AI 资金流照常可用
+      const idxMode = !!d.is_index;
+      lastIsIndex = idxMode;
+      toggleStockPanels(idxMode);
+      setFlowTitle(idxMode);
+      document.getElementById('buyBtn').style.display = idxMode ? 'none' : '';
+      document.getElementById('sellBtn').style.display = idxMode ? 'none' : '';
+      const q = d.quote;
+      lastQuote = q;
+      lastName = d.name;
+      lastFx = d.fx_rate || null;   // 港股汇率（人民币折算显示）
+      // ETF：显示跟踪指数面板（已映射链接 / 未映射可自动匹配或手动设置）；指数无此面板
+      const etfPanel = document.getElementById('etfIndexPanel');
+      if (d.is_etf) {
+        etfPanel.style.display = '';
+        renderEtfIndexPanel(d);
+      } else {
+        etfPanel.style.display = 'none';
+      }
+      const missingBanner = document.getElementById('missingBanner');
+      const partialMissing = d.partial_missing || [];
+      if (partialMissing.length) {
+        missingBanner.style.display = 'block';
+        missingBanner.textContent = '⚠ 部分数据缺失（' + partialMissing.map((k) => MISSING_LABEL[k] || k).join('、')
+          + '），点「🔄 完整更新此股」补全';
+      } else {
+        missingBanner.style.display = 'none';
+      }
+      const staleTip = document.getElementById('staleTip');
+      if (!q) {
+        // 部分打开：无行情数据
+        staleTip.style.display = 'none';
+        document.getElementById('quoteCards').innerHTML =
+          '<div class="empty" style="padding:20px">还没有行情数据，请先「完整更新此股」。</div>';
+        if (idxMode) { renderFlow(d); return; }
+        renderQuantiles(d.quantiles);
+        renderValuationHistory(d);
+        renderFlow(d);
+        renderFinancials(d.financials);
+        renderGrowth(d.live || {}, d);
+        document.getElementById('growthPanel').style.display = 'none';
+        document.getElementById('tagPanel').style.display = idxMode ? 'none' : '';
+        document.getElementById('tagInput').value = d.tag || '';
+        syncMetaPanel();
+        return;
+      }
+      staleTip.style.display = q.stale ? 'block' : 'none';
+      staleTip.textContent = q.stale ? '⚠ 数据为最近交易日缓存（今日未开盘/非交易日，打开页面时已自动更新）' : `数据截至 ${q.ts}${q.stale ? '' : ''}`;
+
+      const live = d.live || {};
+      lastLive = live;
+      renderGrowth(live, d);
+      const growthPanel = document.getElementById('growthPanel');
+      if (!idxMode && live.expected_growth != null) {
+        growthPanel.style.display = '';
+        document.getElementById('growthInput').value = live.expected_growth;
+        document.getElementById('revenueGrowthInput').value = live.expected_revenue_growth;
+        document.getElementById('payoutInput').value = live.expected_payout != null ? live.expected_payout : '';
+        const pSrc = live.expected_growth_source === 'user' ? '净利自定义' : '净利默认最新财报';
+        const rSrc = live.expected_revenue_growth_source === 'user' ? '营收自定义' : '营收默认TTM同比';
+        const paySrc = live.expected_payout_source === 'user' ? '支付率自定义' : '支付率默认上年';
+        document.getElementById('growthMeta').textContent = `${pSrc} · ${rSrc} · ${paySrc}`;
+      } else {
+        growthPanel.style.display = 'none';
+      }
+      const tagPanel = document.getElementById('tagPanel');
+      if (idxMode) {
+        tagPanel.style.display = 'none';   // 指数无标签（组合页/持仓页按标签筛选的是持仓）
+      } else {
+        tagPanel.style.display = '';
+        document.getElementById('tagInput').value = d.tag || '';
+        document.getElementById('tagMeta').textContent = d.is_etf
+          ? 'ETF：只计入持仓，不参与个股统计'
+          : '';
+      }
+      syncMetaPanel();
+      renderQuoteCards(d);
+
+      if (idxMode) {
+        renderFlow(d);   // 指数资金面：量价图（五档/财务面板已隐藏）
+        loadTechPersisted();   // 指数有日K：技术面 AI 保留并加载；消息面面板已隐藏
+        initKlineTabs();
+        loadKline();           // 指数同样展示日/周/月K（腾讯源，口径一致）
+        // 指数估值：乐咕源有序列才展示估值历史；有分位数据才展示历史分位（拿不到就隐藏）
+        const vh = d.valuation_history || {};
+        const hasSeries = Object.values(vh.periods || {})
+          .some((p) => ((p.pe && p.pe.length) || (p.pb && p.pb.length)));
+        const hasQuantile = Object.values(d.quantiles || {})
+          .some((row) => row && (row.pe_pct != null || row.pb_pct != null));
+        const vPanel = document.getElementById('valHistPanel');
+        const qPanel = document.getElementById('quantilePanel');
+        if (hasSeries) { renderValuationHistory(d); if (vPanel) vPanel.style.display = ''; }
+        else if (vPanel) vPanel.style.display = 'none';
+        if (hasQuantile) { renderQuantiles(d.quantiles); if (qPanel) qPanel.style.display = ''; }
+        else if (qPanel) qPanel.style.display = 'none';
+        return;
+      }
+      renderQuantiles(d.quantiles);
+      renderValuationHistory(d);
+      renderFlow(d);
+      renderFinancials(d.financials);
+      loadAiReport();
+      loadNewsPersisted();
+      loadTechPersisted();
+      initKlineTabs();
+      loadKline();
+    }
+
+    function renderGrowth(live, meta) {
+      const body = document.getElementById('growthBody');
+      const rows = [
+        ['ROE', live.roe_static, live.roe_ttm, live.fwd_roe, 'pct'],
+        ['营收增长', live.revenue_yoy_static, live.revenue_yoy_ttm, live.fwd_revenue_yoy, 'pct'],
+        ['净利增长', live.profit_yoy_static, live.profit_yoy_ttm, live.fwd_profit_yoy, 'pct'],
+        ['PE', live.pe_static, live.pe, live.fwd_pe, 'num'],
+        ['PB', live.pb_static, live.pb, live.fwd_pb, 'num'],
+        ['股息率', live.dv_static, live.dv_ratio, live.fwd_dv_ratio, 'pct'],
+        ['市销率', live.ps_static, live.ps_ttm, live.ps_fwd, 'num'],
+      ];
+      body.innerHTML = rows.map(([name, a, b, c, kind]) => {
+        const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
+        return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
+      }).join('');
+      setPanelSummary('growthTablePanel',
+        (meta && meta.hist_view && meta.as_of ? sumChip('截至 ' + meta.as_of) + sumSep() : '')
+        + sumKV('PE', fmtNum(live.pe)) + sumSep() + sumKV('PB', fmtNum(live.pb)) + sumSep() + sumKV('前瞻PE', fmtNum(live.fwd_pe)));
+    }
+
+    // 估值历史折线图：周期切换 + 标注实时/前瞻值（拖动缩放分位联动在 charts.js 内）
+    let histPeriod = '3y';
+    function renderValuationHistory(d) {
+      const hist = d.valuation_history;
+      const tabsWrap = document.getElementById('histTabs');
+      const peEl = document.getElementById('peLine');
+      const pbEl = document.getElementById('pbLine');
+      const showEmpty = (msg) => {
+        document.querySelectorAll('#valHistPanel .valuation-legend, #valHistPanel .valuation-quantiles')
+          .forEach((n) => n.remove());
+        clearChart(peEl); clearChart(pbEl);
+        if (peEl) peEl.innerHTML = '<div class="empty" style="padding:20px">' + msg + '</div>';
+        tabsWrap.innerHTML = '';
+        setPanelSummary('valHistPanel',
+          (d && d.hist_view) ? asOfEmptyHint(d, 'valuation') || '暂无序列' : '暂无序列');
+      };
+      if (!hist || !hist.periods || !Object.keys(hist.periods).length) {
+        showEmpty('暂无历史估值，请先「完整更新此股」。');
+        return;
+      }
+      if (!(histPeriod in hist.periods)) histPeriod = hist.default || '3y';
+      tabsWrap.innerHTML = '';
+      tabsWrap.appendChild(periodTabs({
+        periods: Object.keys(hist.periods),
+        active: histPeriod,
+        onChange: (p) => { histPeriod = p; renderValuationHistory(d); },
+      }));
+      const series = hist.periods[histPeriod];
+      if (!series || !series.pe.length) {
+        showEmpty('该周期暂无序列。');
+        return;
+      }
+      const live = d.live || {};
+      // 个股图：实时(蓝pin+蓝虚线) + 前瞻(橙triangle+橙虚线)，与组合图同款样式，数值显示在图上方 subtext
+      const mk = (v) => (v == null ? [] : [{ name: '前瞻', value: v, color: CHART_COLORS.warn, symbol: 'triangle', line: true }]);
+      const markName = d.hist_view ? '回看' : '实时';
+      valuationChart(peEl, series.pe, {
+        title: 'PE · ' + histPeriod, label: 'PE', color: CHART_COLORS.primary,
+        marks: [
+          { name: markName, value: live.pe, color: CHART_COLORS.primary, line: true },
+          ...mk(live.fwd_pe),
+        ],
+      });
+      valuationChart(pbEl, series.pb, {
+        title: 'PB · ' + histPeriod, label: 'PB', color: CHART_COLORS.primary,
+        marks: [
+          { name: markName, value: live.pb, color: CHART_COLORS.primary, line: true },
+          ...mk(live.fwd_pb),
+        ],
+      });
+      // 折叠面板展开后 / 切日期后：再补两帧 resize，避免宽高仍为 0 的白板
+      requestAnimationFrame(() => {
+        [peEl, pbEl].forEach((el) => {
+          try { const c = echarts.getInstanceByDom(el); if (c) c.resize(); } catch (e) { /* ignore */ }
+        });
+      });
+      const peNow = live.pe != null ? fmtNum(live.pe) : '—';
+      const pbNow = live.pb != null ? fmtNum(live.pb) : '—';
+      setPanelSummary('valHistPanel',
+        (d.hist_view && d.as_of ? sumChip('截至 ' + d.as_of) + ' ' : '')
+        + sumChip(histPeriod) + ' ' + sumKV('PE', peNow) + sumSep() + sumKV('PB', pbNow));
+    }
+
+    function renderQuantiles(ql) {
+      ql = ql || {};
+      const mk = (el, key) => {
+        if (!el) return;
+        clearChart(el);   // 切 as_of 后强制重建，避免复用 0 宽高实例
+        const chart = initChart(el);
+        if (!chart) return;
+        const periods = ['1y', '3y', '5y'];
+        chart.setOption({
+          title: { text: `${key === 'pe_pct' ? 'PE' : 'PB'} 分位`, left: 'center', textStyle: { fontSize: 14 } },
+          tooltip: { formatter: (p) => `${p.name}：${p.value == null ? '—' : p.value + '%'}` },
+          grid: { left: 40, right: 40, top: 40, bottom: 30 },
+          xAxis: { type: 'category', data: periods.map((x) => x + '分位') },
+          yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+          series: [{
+            type: 'bar', barWidth: 34,
+            data: periods.map((p) => {
+              const row = ql[p];
+              const v = row ? row[key] : null;
+              return { value: v, itemStyle: { color: v == null ? '#ccc' : v <= 25 ? CHART_COLORS.down : v >= 75 ? CHART_COLORS.up : CHART_COLORS.primary } };
+            }),
+            label: { show: true, position: 'top', formatter: (p) => (p.value == null ? '—' : p.value + '%') },
+          }],
+        }, { notMerge: true });
+        requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });
+      };
+      mk(document.getElementById('peQ'), 'pe_pct');
+      mk(document.getElementById('pbQ'), 'pb_pct');
+      const y1 = ql && ql['1y'];
+      setPanelSummary('quantilePanel',
+        y1 && (y1.pe_pct != null || y1.pb_pct != null)
+          ? sumL('1y PE') + ' ' + sumQ(y1.pe_pct) + sumSep() + sumL('PB') + ' ' + sumQ(y1.pb_pct)
+          : '暂无分位');
+    }
+
+    // 按当前选中窗口加载该股最近落库资金流 AI 结果（batch/single，标注来源+日期）；无该窗结果隐藏。
+    // seq 守卫：快速切窗/切股只认最新响应（参照 renderPfFlow 的 pfFlowSeq 模式）。
+    let flowPersistSeq = 0;
+    async function loadFlowPersisted() {
+      const seq = ++flowPersistSeq;
+      const panel = document.getElementById('flowAiPanel');
+      if (!currentCode || !panel) return;
+      try {
+        const rpt = await api('/ai/fundflow-report/' + currentCode + '?window=' + encodeURIComponent(flowWindow), { silent: true });
+        if (seq !== flowPersistSeq) return;   // 过期响应丢弃
+        // 面板始终可见（预留窗口，与消息面/技术面一致）：无结果显示空态，不隐藏，避免 AI 分析期间的竞态把面板藏掉
+        if (rpt) {
+          renderFundflowPersistedPanel(panel, rpt);
+        } else {
+          panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">尚未分析资金面。点上方「🤖 AI 分析资金流」。</div>';
+        }
+      } catch (e) { /* 读取失败忽略，按钮分析仍可用 */ }
+    }
+
+    // 指数资金面：腾讯量价（单指数）→ 量价图随统一时间窗切换（镜像 indices.html renderPfFlow）
+    let indexFlowSeq = 0;
+    async function renderIndexFlow(d) {
+      const seq = ++indexFlowSeq;
+      const intraEl = document.getElementById('flowIntraday');
+      const bsEl = document.getElementById('flowBuySell');
+      const tabsEl = document.getElementById('flowTabs');
+      const bandsEl = document.getElementById('flowBands');
+      const intraEmpty = document.getElementById('flowIntradayEmpty');
+      if (bsEl) bsEl.style.display = 'none';          // 指数无量价买卖盘二图
+      if (bandsEl) bandsEl.style.display = 'none';   // 五档边界不适用
+      const fpEl2 = document.getElementById('flowPrice');
+      if (fpEl2) fpEl2.style.display = 'none';        // 指数用 indexVolumePrice 已带价，隐藏独立股价图
+      try {
+        const fd = await api('/indices/fundflow?codes=' + encodeURIComponent(currentCode), { silent: true });
+        if (seq !== indexFlowSeq) return;
+        const intraday = fd.intraday || [];
+        const daily = fd.daily || [];
+        if (!intraday.length && !daily.length) {
+          intraEmpty.style.display = 'block';
+          intraEmpty.textContent = '暂无分时量价（今日可能未开盘/非交易日，打开页面时已自动更新）。';
+          tabsEl.innerHTML = '';
+          clearChart(intraEl);
+          return;
+        }
+        intraEmpty.style.display = 'none';
+        const names = { [d.code]: d.name };
+        const draw = (w) => {
+          flowWindow = w;
+          loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
+          if (/m$/.test(w)) {
+            if (!intraday.length) { clearChart(intraEl); return; }
+            const pts = resampleIndexVolume(intraday, parseInt(w, 10));
+            indexVolumePrice(intraEl, pts, FLOW_WINDOW_LABEL[w] + '分时', names);
+          } else {
+            if (!daily.length) { clearChart(intraEl); return; }
+            const days = bucketIndexVolume(daily, flowBucket(w));
+            indexVolumePrice(intraEl, days, FLOW_WINDOW_LABEL[w], names);
+          }
+        };
+        tabsEl.innerHTML = '';
+        tabsEl.appendChild(periodTabs({
+          periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+          active: FLOW_WINDOW_LABEL[flowWindow],
+          onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+        }));
+        draw(flowWindow);
+      } catch (e) {
+        if (seq !== indexFlowSeq) return;
+        intraEmpty.style.display = 'block';
+        intraEmpty.textContent = '指数资金面加载失败：' + e.message;
+      }
+    }
+
+    function renderFlow(d) {
+      if (d.is_index) { renderIndexFlow(d); return; }
+      // 从指数模式切回个股：恢复五档/买卖盘面板可见 + 空态文案复位
+      ['flowBands', 'flowBuySell'].forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = ''; });
+      const fe = document.getElementById('flowIntradayEmpty');
+      if (fe) {
+        fe.textContent = (d.fundflow_15m && d.fundflow_15m.length)
+          ? ''
+          : (asOfDate || d.as_of_adjusted
+            ? asOfEmptyHint(d, 'flow')
+            : '当日资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。');
+      }
+      // 今日自适应分档条件（P15/P40/P75/P95）：让用户知道每档的组成边界
+      const bandsEl = document.getElementById('flowBands');
+      const bands = d.fundflow_bands;
+      const dayLabel = d.as_of || '今日';
+      bandsEl.textContent = bands
+        ? dayLabel + '分档（自适应）：特小单 <' + fmtFlow(bands.p15)
+          + ' · 小单 ' + fmtFlow(bands.p15) + '~' + fmtFlow(bands.p40)
+          + ' · 中单 ' + fmtFlow(bands.p40) + '~' + fmtFlow(bands.p75)
+          + ' · 大单 ' + fmtFlow(bands.p75) + '~' + fmtFlow(bands.p95)
+          + ' · 特大单 >' + fmtFlow(bands.p95)
+        : '';
+      const latest = d.fundflow_latest;
+      const barsTitle = document.querySelector('#flowBarsPanel h2');
+      if (barsTitle) {
+        barsTitle.textContent = d.as_of
+          ? `全天五档资金流（${d.as_of}）`
+          : '全天五档资金流（最新交易日）';
+      }
+      if (latest) {
+        document.getElementById('flowEmpty').style.display = 'none';
+        fundflowBars(document.getElementById('flowBars'), latest);
+        const net = latest.netamount != null ? latest.netamount
+          : (latest.net != null ? latest.net : null);
+        setPanelSummary('flowBarsPanel',
+          net != null ? sumL('净流入') + ' ' + sumSigned(net, fmtFlow(net)) : sumL('五档资金'));
+      } else {
+        document.getElementById('flowEmpty').style.display = 'block';
+        clearChart(document.getElementById('flowBars'));
+        setPanelSummary('flowBarsPanel', '暂无五档');
+      }
+      // 统一时间窗：分钟窗口读当日分时，天窗口读多日逐日五档（本地聚合桶）
+      const base = d.fundflow_15m || [];
+      const hist = d.fundflow_history || [];
+      const intraEl = document.getElementById('flowIntraday');
+      const bsEl = document.getElementById('flowBuySell');
+      const cumEl = document.getElementById('flowBandsCum');
+      const priceEl = document.getElementById('flowPrice');
+      const intraEmpty = document.getElementById('flowIntradayEmpty');
+      const tabsEl = document.getElementById('flowTabs');
+      const isMin = (w) => /m$/.test(w);
+      const draw = (w) => {
+        flowWindow = w;
+        setPanelSummary('flowTrendPanel', sumChip(FLOW_WINDOW_LABEL[w] || w));
+        loadFlowPersisted();   // 切窗/打开时按当前 window 恢复落库资金流 AI 结果
+        if (isMin(w)) {
+          cumEl.style.display = 'none';
+          if (!base.length) {
+            intraEmpty.style.display = 'block';
+            clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
+            return;
+          }
+          intraEmpty.style.display = 'none';
+          const pts = resampleFlow(base, parseInt(w, 10));
+          fundflowPrice(priceEl, pts, FLOW_WINDOW_LABEL[w] + '分时');   // 股价/净值独立图（最上边）
+          fundflowIntraday(intraEl, pts, parseInt(w, 10));
+          fundflowBuySell(bsEl, pts, parseInt(w, 10));
+        } else {
+          const days = bucketFlowDays(hist, flowBucket(w));
+          if (!days.length) {
+            cumEl.style.display = 'none';
+            intraEmpty.style.display = 'block';
+            clearChart(intraEl); clearChart(bsEl); clearChart(priceEl);
+            return;
+          }
+          intraEmpty.style.display = 'none';
+          fundflowPrice(priceEl, days, FLOW_WINDOW_LABEL[w]);   // 股价/净值独立图
+          cumEl.style.display = 'block';
+          fundflowBandsCum(cumEl, days, FLOW_WINDOW_LABEL[w]);  // 五档累积净流入折线
+          fundflowStacked(intraEl, days, FLOW_WINDOW_LABEL[w]);
+          fundflowDayBuySell(bsEl, days, FLOW_WINDOW_LABEL[w]);
+        }
+      };
+      tabsEl.innerHTML = '';
+      tabsEl.appendChild(periodTabs({
+        periods: FLOW_WINDOWS.map((w) => FLOW_WINDOW_LABEL[w]),
+        active: FLOW_WINDOW_LABEL[flowWindow],
+        onChange: (label) => { draw(Object.keys(FLOW_WINDOW_LABEL).find((k) => FLOW_WINDOW_LABEL[k] === label)); },
+      }));
+      setPanelSummary('flowTrendPanel', sumChip(FLOW_WINDOW_LABEL[flowWindow] || flowWindow));
+      draw(flowWindow);
+    }
+
+    function renderFinancials(fin) {
+      if (!fin) {
+        document.getElementById('finCards').innerHTML =
+          '<div class="empty" style="padding:20px">暂无财务数据，请先「完整更新此股」。</div>';
+        return;
+      }
+      const cards = [
+        ['报告期', fin.report_date],
+        ['去年归母净利', fmtNum(fin.net_profit / 1e8) + ' 亿'],
+        ['最新归母净资产', fin.net_assets != null ? fmtNum(fin.net_assets / 1e8) + ' 亿' : '—'],
+        ['总股本', fin.total_shares != null ? fmtNum(fin.total_shares / 1e8) + ' 亿股' : '—'],
+        ['每股收益(去年)', fin.eps != null ? fmtNum(fin.eps) + ' 元' : '—'],
+        ['每股股息(去年)', fin.dv_per_share != null ? fmtNum(fin.dv_per_share) + ' 元' : '—'],
+        ['支付率(去年)', fin.payout_ratio != null ? fmtPct(fin.payout_ratio) : '—'],
+      ];
+      document.getElementById('finCards').innerHTML = cards.map(([l, v]) =>
+        `<div class="card"><div class="label">${l}</div><div class="value small">${v}</div></div>`).join('');
+      setPanelSummary('finPanel',
+        fin.report_date
+          ? sumV(esc(fin.report_date)) + sumSep() + sumKV('净利', fmtNum(fin.net_profit / 1e8) + '亿')
+          : '财务指标');
+    }
+
+    // 长区块默认折叠（功能全保留）
+    [
+      ['metaPanel', false],
+      ['aiReportPanel', false],
+      ['growthTablePanel', false],
+      ['finPanel', false],
+      ['quantilePanel', false],
+      ['valHistPanel', false],
+      ['flowBarsPanel', false],
+      ['newsAiPanel', false],
+      ['techAiPanel', true],
+      ['flowTrendPanel', false],
+    ].forEach(([id, open]) => {
+      const el = document.getElementById(id);
+      if (el) makeFoldable(el, { id, defaultOpen: open });
+    });
+    // 组合批量列表跳转 #newsAiPanel / #techAiPanel：展开折叠并滚入视野
+    openFoldableFromHash();
+    window.addEventListener('hashchange', openFoldableFromHash);
+
+    openStock();
+  </script>
+</body>
+</html>
