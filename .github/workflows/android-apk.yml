@@ -48,7 +48,7 @@ jobs:
             "$HOME/android-sdk/cmdline-tools/latest"
           yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" >/dev/null
+            "platform-tools" "platforms;android-35" "build-tools;34.0.0" "build-tools;35.0.0" "ndk;27.2.12479018" >/dev/null
           echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
 
       # cgo 必须开启：CGO_ENABLED=0 的纯 Go resolver 在 Android 上读不到 /etc/resolv.conf
