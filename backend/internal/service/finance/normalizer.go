@@ -92,7 +92,7 @@ func ttmFromRows(rows []map[string]any) *float64 {
 		return nil
 	}
 	cur := val(latest)
-	prev := val(year + "" + month) // 去年同期同月累计
+	prev := val(prevYear(year) + month) // 去年同期同月累计
 	annual := val(prevYear(year) + "1231")
 	if cur == nil || prev == nil || annual == nil {
 		return nil

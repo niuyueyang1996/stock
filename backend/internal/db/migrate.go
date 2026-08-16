@@ -74,7 +74,7 @@ func ensureColumn(tx *gorm.DB, table, ddl string) {
 func recreateDailyScoresNullable(tx *gorm.DB) {
 	type pkInfo struct {
 		Name    string
-		NotNull int
+		Notnull int // PRAGMA table_info 返回列名是 notnull（需与列名一致，否则 gorm 扫不到）
 	}
 	var info []pkInfo
 	if err := tx.Raw("PRAGMA table_info(daily_scores)").Scan(&info).Error; err != nil {
@@ -85,7 +85,7 @@ func recreateDailyScoresNullable(tx *gorm.DB) {
 	}
 	notNull := false
 	for _, c := range info {
-		if c.Name == "total_score" && c.NotNull == 1 {
+		if c.Name == "total_score" && c.Notnull == 1 {
 			notNull = true
 			break
 		}

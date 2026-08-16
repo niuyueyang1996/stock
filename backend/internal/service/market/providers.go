@@ -154,10 +154,13 @@ func (e *EMMarket) DailyBars(ctx context.Context, code, start, end string) ([]mo
 			continue
 		}
 		d := r[0]
-		if start != "" && d < strings.ReplaceAll(start, "-", "") {
+		// ETFHist 返回的日期带横线（如 "2026-08-04"），而 start/end 已去横线
+		// （"20260804"）。若直接比较，"-"(0x2D) < "0"(0x30) 会把区间内全部行误过滤。
+		ds := strings.ReplaceAll(d, "-", "")
+		if start != "" && ds < strings.ReplaceAll(start, "-", "") {
 			continue
 		}
-		if end != "" && d > strings.ReplaceAll(end, "-", "") {
+		if end != "" && ds > strings.ReplaceAll(end, "-", "") {
 			continue
 		}
 		bars = append(bars, model.Bar{
@@ -193,6 +196,9 @@ func (m *MockMarket) Quote(ctx context.Context, code string) (*model.Quote, erro
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
 	}
+	if m.Err != nil {
+		return nil, m.Err
+	}
 	return m.Q, nil
 }
 
@@ -201,6 +207,9 @@ func (m *MockMarket) DailyBars(ctx context.Context, code, start, end string) ([]
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, ErrNotSupported
 	}
+	if m.Err != nil {
+		return nil, m.Err
+	}
 	return m.Bars, nil
 }
 
@@ -208,6 +217,9 @@ func (m *MockMarket) DailyBars(ctx context.Context, code, start, end string) ([]
 func (m *MockMarket) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	if m.Handle != nil && !m.Handle(code) {
 		return nil, nil
+	}
+	if m.Err != nil {
+		return nil, m.Err
 	}
 	return m.Tks, nil
 }

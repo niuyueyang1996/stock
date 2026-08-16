@@ -28,3 +28,9 @@ func (s *Sina) AttachTestTransport(fn func(*http.Request) (*http.Response, error
 func (l *Legu) AttachTestTransport(fn func(*http.Request) (*http.Response, error)) {
 	l.c.http.Transport = roundTripFunc(fn)
 }
+
+// AttachTestTransport 替换 CNInfo（巨潮）底层 http.RoundTripper（仅测试）。
+// finance.AshareFinance 内部用 CNInfo 拉分红，测试注入 mock 驱动完整 A 股链。
+func (c *CNInfo) AttachTestTransport(fn func(*http.Request) (*http.Response, error)) {
+	c.c.http.Transport = roundTripFunc(fn)
+}

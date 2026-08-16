@@ -34,11 +34,14 @@ type Service struct {
 // New 构造配置服务（注入 ConfigDAO 读写字端）
 func New(c *dao.ConfigDAO) *Service { return &Service{Cfg: c} }
 
-// GetDynamicIntervalSeconds 动态刷新间隔（秒），缺省 300，钳制 ≥30
+// GetDynamicIntervalSeconds 动态刷新间隔（秒），缺省 300，钳制 30~3600
 func (s *Service) GetDynamicIntervalSeconds() int {
 	v := s.Cfg.GetInt("dynamic_interval_seconds", DefaultDynamicInterval)
 	if v < 30 {
 		return 30
+	}
+	if v > intervalMax {
+		return intervalMax
 	}
 	return v
 }
