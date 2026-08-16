@@ -30,9 +30,21 @@
           </table>
         </div>
         <div class="panel" id="aiScorePanel">
-          <h2>🤖 AI 组合打分 <span class="sub" id="aiScoreSub">AI 直接给出得分与评级，依据全部持仓汇总 + 各标签偏好</span></h2>
-          <div id="aiScoreBody"></div>
-          <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
+          <h2>🤖 AI 组合分析 <span class="sub" id="aiScoreSub">打分 / 消息面 / 技术面 / 资金流 · 点「🤖 AI诊组合」勾选分析</span></h2>
+          <div class="period-tabs" id="aiScoreTabs"></div>
+          <div id="aiScoreTabScore">
+            <div id="aiScoreBody"></div>
+            <div id="tagPrefList" style="margin-top:10px;border-top:1px solid var(--border,#e5e7eb);padding-top:10px"></div>
+          </div>
+          <div id="aiScoreTabNews" style="display:none;margin-top:10px">
+            <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="aiScoreTabTech" style="display:none;margin-top:10px">
+            <div id="techBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
+          <div id="aiScoreTabFlow" style="display:none;margin-top:10px">
+            <div id="flowBatchPanel" style="display:none;margin-top:8px"></div>
+          </div>
         </div>
         <div class="panel" id="gaugePanel">
           <h2>综合估值分位（近1年）</h2>
@@ -66,26 +78,7 @@
           </div>
           <div class="empty" id="pfFlowEmpty" style="display:none;padding:20px">暂无资金流。可点「更新行情」拉取今日资金；若非交易日可能没有数据。</div>
         </div>
-        <div class="panel" id="aiExtPanel">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <h2 style="margin:0">AI 扩展分析 <span class="sub">消息面（自动抓取个股新闻） / 技术面（日/周/月K结构） / 资金流 · 批量分析跟随当前标签筛选</span></h2>
-            <span class="grow"></span>
-            <button class="btn primary" id="extAllBtn">🤖 一键分析</button>
-          </div>
-          <div class="period-tabs" id="aiExtTabs"></div>
-          <div id="newsBatchWrap" style="display:none;margin-top:10px">
-            <button class="btn primary" id="newsBatchBtn">🤖 批量分析消息面</button>
-            <div id="newsBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-          <div id="techBatchWrap" style="display:none;margin-top:10px">
-            <button class="btn primary" id="techBatchBtn">🤖 批量分析技术面</button>
-            <div id="techBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-          <div id="flowBatchWrap" style="display:none;margin-top:10px">
-            <button class="btn primary" id="flowBatchBtn">⚡ 批量分析资金流</button>
-            <div id="flowBatchPanel" style="display:none;margin-top:8px"></div>
-          </div>
-        </div>
+
         <div class="panel" id="chartRow">
           <h2>权重分布（按标签）</h2>
           <div class="chart sm" id="weightChart" style="height:340px"></div>
@@ -117,28 +110,23 @@
                                 'day': '日', 'week': '周', 'month': '月' };
     let pfFlowWindow = '15m';   // 当前选中窗口（绘图与 AI 分析共用）
 
-    // AI 扩展分析：消息面 / 技术面 / 资金流 三个 tab（沿用 .ptab），
-    // 按钮跟随当前标签筛选批量分析；资金流批量沿用组合资金流面板当前窗口
+    // AI 组合分析 4 tab（打分 / 消息面 / 技术面 / 资金流）：扩展分析并入打分面板（用户要求 tab 合并）
     (function () {
-      const tabsWrap = document.getElementById('aiExtTabs');
+      const tabsWrap = document.getElementById('aiScoreTabs');
       const wraps = {
-        news: document.getElementById('newsBatchWrap'),
-        tech: document.getElementById('techBatchWrap'),
-        flow: document.getElementById('flowBatchWrap'),
-      };
-      const btns = {
-        news: document.getElementById('newsBatchBtn'),
-        tech: document.getElementById('techBatchBtn'),
-        flow: document.getElementById('flowBatchBtn'),
+        score: document.getElementById('aiScoreTabScore'),
+        news: document.getElementById('aiScoreTabNews'),
+        tech: document.getElementById('aiScoreTabTech'),
+        flow: document.getElementById('aiScoreTabFlow'),
       };
       const panels = {
         news: document.getElementById('newsBatchPanel'),
         tech: document.getElementById('techBatchPanel'),
         flow: document.getElementById('flowBatchPanel'),
       };
-      if (!tabsWrap || Object.values(wraps).some((x) => !x) || Object.values(btns).some((x) => !x)) return;
+      if (!tabsWrap || Object.values(wraps).some((x) => !x) || Object.values(panels).some((x) => !x)) return;
       const TABS = [
-        ['news', '消息面'], ['tech', '技术面'], ['flow', '资金流'],
+        ['score', '打分'], ['news', '消息面'], ['tech', '技术面'], ['flow', '资金流'],
       ];
       function show(tab) {
         Object.keys(wraps).forEach((k) => { wraps[k].style.display = k === tab ? '' : 'none'; });
@@ -153,57 +141,30 @@
         b.onclick = () => show(t);
         tabsWrap.appendChild(b);
       });
-      show('news');
+      show('score');
       const currentTags = () => {
         const t = tagsQS();
         return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
       };
-      btns.news.onclick = () => {
-        runNewsBatch({ tags: currentTags(), btn: btns.news, panel: panels.news, onDone: loadAndRenderExt });
-      };
-      btns.tech.onclick = () => {
-        runTechBatch({ tags: currentTags(), btn: btns.tech, panel: panels.tech, onDone: loadAndRenderExt });
-      };
-      btns.flow.onclick = () => {
-        // 1m/5m 窗口过小拒绝（前端守卫 + 后端 400）；成功后刷新批量资金面面板
-        if (/^(1|5)m$/.test(pfFlowWindow)) {
-          toast('批量分析窗口过小，请选择 15 分钟及以上');
-          return;
+      // 统一入口按钮（评分区「🤖 AI诊组合」）执行勾选项；tab 切换只负责展示
+      window._pfRunAiExt = async (keys, intensity, overrides) => {
+        const tags = currentTags();
+        const dummy = document.createElement('span');
+        const ov = overrides || {};
+        for (const k of keys) {
+          if (k === 'news') {
+            await runNewsBatch({ tags, btn: dummy, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.news || null });
+          } else if (k === 'tech') {
+            await runTechBatch({ tags, btn: dummy, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.tech || null });
+          } else if (k === 'flow') {
+            if (/^(1|5)m$/.test(pfFlowWindow)) { toast('批量分析窗口过小，请选择 15 分钟及以上'); continue; }
+            await runFundflowBatch({
+              tags, window: pfFlowWindow, btn: dummy, panel: panels.flow,
+              onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true, intensity, systemPrompt: ov.flow || null,
+            });
+          }
         }
-        runFundflowBatch({
-          tags: currentTags(), window: pfFlowWindow, btn: btns.flow, panel: panels.flow,
-          onDone: async () => { await loadAndRender(); renderPfFlow(); },   // 批量刷新了持仓资金流 → 重绘资金流图（当前窗口）
-        });
       };
-      // AI 扩展分析一键按钮：勾选默认全选，逐个分析消息面/技术面/资金流（跟随当前标签筛选）
-      const extAllBtn = document.getElementById('extAllBtn');
-      if (extAllBtn) {
-        extAllBtn.onclick = () => {
-          openAiExtPicker({
-            items: [
-              { key: 'news', label: '批量消息面' },
-              { key: 'tech', label: '批量技术面' },
-              { key: 'flow', label: '批量资金流' },
-            ],
-            onRun: async (keys) => {
-              const tags = currentTags();
-              for (const k of keys) {
-                if (k === 'news') {
-                  await runNewsBatch({ tags, btn: extAllBtn, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true });
-                } else if (k === 'tech') {
-                  await runTechBatch({ tags, btn: extAllBtn, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true });
-                } else if (k === 'flow') {
-                  if (/^(1|5)m$/.test(pfFlowWindow)) { toast('批量分析窗口过小，请选择 15 分钟及以上'); continue; }
-                  await runFundflowBatch({
-                    tags, window: pfFlowWindow, btn: extAllBtn, panel: panels.flow,
-                    onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true,
-                  });
-                }
-              }
-            },
-          });
-        };
-      }
     })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
     let allTags = [];
@@ -419,9 +380,9 @@
       if (!aiPortfolioReport) {
         sub.textContent = '尚未评分';
         const tagNote = allTags.length && selectedTags.size < allTags.length ? '当前标签筛选' : '当前组合';
-        body.innerHTML = `<div class="muted" style="font-size:13px;padding:6px 0">尚未对${tagNote}打分。</div>` +
-          aiScoreButtonHtml('🤖 AI 打分');
-        body.querySelector('[data-aiscore-btn]').onclick = runPortfolioAi;
+        body.innerHTML = `<div class="muted" style="font-size:13px;padding:6px 0">尚未对${tagNote}打分。点「🤖 AI诊组合」选择分析内容（组合打分 / 消息面 / 技术面 / 资金流）。</div>` +
+          aiScoreButtonHtml('🤖 AI诊组合');
+        body.querySelector('[data-aiscore-btn]').onclick = portfolioAiMenu;
         setPanelSummary('aiScorePanel', '未评分');
         return;
       }
@@ -437,31 +398,62 @@
         + (aiPortfolioReport.stale ? ' ' + sumChip('已变化') : ''));
       body.innerHTML = renderScoreCard(r, {
         stale: aiPortfolioReport.stale,
-        rescoreLabel: '重新打分',
+        rescoreLabel: '🤖 AI诊组合',
       });
-      body.querySelector('[data-aiscore-btn]').onclick = runPortfolioAi;
+      body.querySelector('[data-aiscore-btn]').onclick = portfolioAiMenu;
       wireAiHtmlButton(body, r);
     }
 
-    // 手动触发组合 AI 打分（跟随当前标签筛选；先弹窗确认/编辑指令）
+    // 组合打分执行体（收敛弹窗勾选「组合打分」时直接调用，跳过指令编辑）
+    async function portfolioScoreDo(systemPrompt, intensity) {
+      try {
+        const body = { intensity: intensity || 'normal' };
+        if (systemPrompt) body.system_prompt = systemPrompt;
+        const job = await startBackgroundJob('/ai-scoring/portfolio' + tagsQS(), body, { toast: '组合打分已开始' });
+        await waitForJob(job.job_id);
+        const aiData = await api('/ai-scoring/portfolio' + tagsQS(), { silent: true });
+        aiPortfolioReport = aiData.report || null;
+        aiConfigured = aiData.configured;
+        renderSummary(lastPortfolio);
+        renderAiScore();
+        renderTagPrefList();
+        const score = aiPortfolioReport && aiPortfolioReport.report;
+        toast(score ? `AI 组合打分完成：${score.score} 分（${cardGrade(score) || '—'}）` : 'AI 组合打分完成');
+      } catch (e) {
+        toast('AI 打分失败：' + e.message, 5000);
+      }
+    }
+
+    // 手动触发组合 AI 打分（保留：弹窗编辑指令后执行）
     function runPortfolioAi() {
-      openPromptEditor('portfolio', async (systemPrompt, intensity) => {
-        try {
-          const body = { intensity };
-          if (systemPrompt) body.system_prompt = systemPrompt;
-          const job = await startBackgroundJob('/ai-scoring/portfolio' + tagsQS(), body, { toast: '组合打分已开始' });
-          await waitForJob(job.job_id);
-          const aiData = await api('/ai-scoring/portfolio' + tagsQS(), { silent: true });
-          aiPortfolioReport = aiData.report || null;
-          aiConfigured = aiData.configured;
-          renderSummary(lastPortfolio);
-          renderAiScore();
-          renderTagPrefList();
-          const score = aiPortfolioReport && aiPortfolioReport.report;
-          toast(score ? `AI 组合打分完成：${score.score} 分（${cardGrade(score) || '—'}）` : 'AI 组合打分完成');
-        } catch (e) {
-          toast('AI 打分失败：' + e.message, 5000);
-        }
+      openPromptEditor('portfolio', portfolioScoreDo);
+    }
+
+    // 组合 AI 统一入口（评分区唯一按钮）：勾选 组合打分/消息面/技术面/资金流（默认不勾）+ 强度
+    function portfolioAiMenu() {
+      openAiExtPicker({
+        title: '🤖 AI诊组合',
+        note: '勾选要分析的内容（默认不勾），将逐个进行分析（批量分析跟随当前标签筛选），进度见顶部；每项可单独「改提示词」。',
+        withIntensity: true,
+        items: [
+          { key: 'score', label: '组合打分', desc: '（AI 质量评级 + 操作建议）', checked: false, promptKind: 'portfolio' },
+          { key: 'news', label: '批量消息面', desc: '（自动抓取个股新闻）', checked: false, promptKind: 'news_batch' },
+          { key: 'tech', label: '批量技术面', desc: '（日/周/月K 结构）', checked: false, promptKind: 'tech_batch' },
+          { key: 'flow', label: '批量资金流', desc: '（分时五档 × 组合净值）', checked: false, promptKind: 'batch' },
+        ],
+        onRun: async (keys, intensity, overrides) => {
+          const ov = overrides || {};
+          for (const k of keys) {
+            if (k === 'score') {
+              await portfolioScoreDo(ov.score || null, intensity);
+            }
+          }
+          // 扩展分析项（消息面/技术面/资金流批量）
+          const extKeys = keys.filter((k) => k !== 'score');
+          if (extKeys.length && typeof window._pfRunAiExt === 'function') {
+            await window._pfRunAiExt(extKeys, intensity, ov);
+          }
+        },
       });
     }
 
@@ -809,7 +801,7 @@
       ['gaugePanel', false],
       ['seriesPanel', false],
       ['fundflowPanel', false],
-      ['aiExtPanel', false],
+
       ['chartRow', false],
       ['peBarPanel', false],
     ].forEach(([id, open]) => {

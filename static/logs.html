@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>后端日志</title>
+<style>
+  body { margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #0e1526; color: #c8d3e0; }
+  header { position: sticky; top: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+          background: #16203a; border-bottom: 1px solid #26324d; z-index: 10; }
+  header h1 { font-size: 15px; margin: 0; flex: 1; }
+  header .btn { background: #1f2c4a; color: #c8d3e0; border: 1px solid #33415f; border-radius: 6px;
+                padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  header .btn:hover { background: #2a3a5f; }
+  #meta { font-size: 11px; color: #7d8ba3; }
+  pre { margin: 0; padding: 10px 14px; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+  .err { color: #ff7b72; }
+  .warn { color: #e3b341; }
+  #empty { padding: 30px; text-align: center; color: #7d8ba3; }
+  footer { position: sticky; bottom: 0; padding: 6px; text-align: center; font-size: 11px; color: #5a6a85; background: #101a2e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>后端运行日志</h1>
+  <span id="meta"></span>
+  <button class="btn" id="btnAuto">自动刷新：开</button>
+  <button class="btn" id="btnTop">回顶部</button>
+  <button class="btn" id="btnCopy">复制</button>
+</header>
+<div id="empty">加载中…</div>
+<pre id="log" style="display:none"></pre>
+<footer>日志文件：服务器端 logs/server.log（最近 500 行）</footer>
+<script>
+  const logEl = document.getElementById('log');
+  const emptyEl = document.getElementById('empty');
+  const metaEl = document.getElementById('meta');
+  let auto = true;
+  let linesCache = '';
+
+  async function load() {
+    try {
+      const r = await fetch('/api/logs?lines=500');
+      const d = await r.json();
+      if (!d || !Array.isArray(d.lines)) throw new Error('响应异常');
+      const text = d.lines.join('\n');
+      linesCache = text;
+      metaEl.textContent = `${d.lines.length} 行 · ${new Date().toLocaleTimeString()}`;
+      if (text) {
+        emptyEl.style.display = 'none';
+        logEl.style.display = '';
+        // 行内着色：错误红 / 警告黄
+        logEl.innerHTML = text.split('\n').map((l) => {
+          let cls = '';
+          if (/error|失败|panic|fatal/i.test(l)) cls = ' class="err"';
+          else if (/warn|警告/i.test(l)) cls = ' class="warn"';
+          return `<div${cls}>${l.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</div>`;
+        }).join('');
+        if (auto) window.scrollTo(0, document.body.scrollHeight);
+      } else {
+        emptyEl.style.display = '';
+        emptyEl.textContent = '暂无日志';
+        logEl.style.display = 'none';
+      }
+    } catch (e) {
+      emptyEl.style.display = '';
+      emptyEl.textContent = '读取失败：' + e.message;
+    }
+  }
+
+  document.getElementById('btnAuto').onclick = () => {
+    auto = !auto;
+    document.getElementById('btnAuto').textContent = '自动刷新：' + (auto ? '开' : '关');
+  };
+  document.getElementById('btnTop').onclick = () => window.scrollTo(0, 0);
+  document.getElementById('btnCopy').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(linesCache);
+      alert('已复制');
+    } catch (e) { alert('复制失败'); }
+  };
+
+  load();
+  setInterval(() => { if (auto) load(); }, 2000);
+</script>
+</body>
+</html>

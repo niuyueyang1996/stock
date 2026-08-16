@@ -1,0 +1,79 @@
+name: Build Windows package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+      - "refactor/golang-backend"
+    tags:
+      - "v*"
+    paths:
+      - ".github/workflows/windows-package.yml"
+      - "backend/**"
+      - "static/**"
+      - "packaging/windows/**"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build Go backend (windows/amd64, zero CGO)
+        shell: pwsh
+        run: |
+          cd backend
+          mkdir -p ../build/windows/StockAnalyzer
+          $env:CGO_ENABLED = "0"
+          $env:GOOS = "windows"
+          $env:GOARCH = "amd64"
+          go build -o ../build/windows/StockAnalyzer/stockanalyzer-server.exe ./cmd/server
+          Get-Item ../build/windows/StockAnalyzer/stockanalyzer-server.exe | Select-Object Name, Length
+
+      - name: Assemble package (exe + static + launcher)
+        shell: pwsh
+        run: |
+          Copy-Item packaging/windows/start.bat build/windows/StockAnalyzer/
+          Copy-Item -Recurse static build/windows/StockAnalyzer/static
+
+      - name: Zip package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path packaging/android/app/build.gradle.kts -Pattern 'versionName = "([^"]+)"').Matches.Groups[1].Value
+          New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
+          Compress-Archive -Path build/windows/StockAnalyzer -DestinationPath "dist/windows/StockAnalyzer-$version-windows-x64.zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash "dist/windows/StockAnalyzer-$version-windows-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "dist/windows/StockAnalyzer-$version-windows-x64.zip.sha256" -Value $hash
+          Write-Output "zip: dist/windows/StockAnalyzer-$version-windows-x64.zip ($((Get-Item dist/windows/StockAnalyzer-$version-windows-x64.zip).Length / 1MB) MB)"
+          Write-Output "sha256: $hash"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StockAnalyzer-Windows-x64
+          path: |
+            dist/windows/StockAnalyzer-*-windows-x64.zip
+            dist/windows/StockAnalyzer-*-windows-x64.zip.sha256
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/windows/StockAnalyzer-*-windows-x64.zip
+            dist/windows/StockAnalyzer-*-windows-x64.zip.sha256
+          generate_release_notes: true

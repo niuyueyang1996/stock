@@ -1,0 +1,5 @@
+/bin/
+*.exe
+rawprobe
+rawprobe2
+apidiff
