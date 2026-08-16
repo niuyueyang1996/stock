@@ -55,8 +55,8 @@ jobs:
       - name: Assemble package dir (exe + frontend)
         shell: pwsh
         run: |
-          Copy-Item -Recurse static build/windows/StockAnalyzer/static
-          Copy-Item packaging/windows/stock-analyzer.ico packaging/windows/StockAnalyzer.iss packaging/windows/languages -Destination build/windows/StockAnalyzer/ -Recurse
+          # 只复制前端；图标/语言文件由 .iss 内相对路径（相对 .iss 所在目录）直接引用
+          Copy-Item -Path static -Destination build/windows/StockAnalyzer/static -Recurse
 
       - name: Install Inno Setup
         shell: pwsh
@@ -65,15 +65,13 @@ jobs:
       - name: Build installer (Setup exe)
         shell: pwsh
         run: |
+          # ISCC 路径默认值相对 .iss 所在目录解析（SourceDir=../../build/windows/StockAnalyzer、
+          # OutputDir=../../dist/windows、IconFile=stock-analyzer.ico、LanguageFile=languages/...），
+          # 因此只需传入版本号
           $version = (Select-String -Path packaging/android/app/build.gradle.kts -Pattern 'versionName = "([^"]+)"').Matches.Groups[1].Value
           New-Item -ItemType Directory -Force -Path dist/windows | Out-Null
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-          & $iscc packaging/windows/StockAnalyzer.iss `
-            /DMyAppVersion=$version `
-            /DSourceDir="..\build\windows\StockAnalyzer" `
-            /DOutputDir="..\dist\windows" `
-            /DIconFile="..\build\windows\StockAnalyzer\stock-analyzer.ico" `
-            /DLanguageFile="..\build\windows\StockAnalyzer\languages\ChineseSimplified.isl"
+          & $iscc packaging/windows/StockAnalyzer.iss /DMyAppVersion=$version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem dist/windows/*.exe | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
