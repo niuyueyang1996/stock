@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -67,6 +69,8 @@ func main() {
 
 	// 支持 --listen host:port（Android 壳/打包启动器传入），优先级高于 STOCK_PORT 环境变量
 	listenAddr := flag.String("listen", "", "监听地址 host:port（覆盖 STOCK_PORT）")
+	// --open-browser：Windows 打包态由快捷方式/安装器传入，服务就绪后自动打开浏览器
+	openBrowser := flag.Bool("open-browser", false, "启动后自动打开浏览器（Windows 打包态）")
 	flag.Parse()
 	if *listenAddr != "" {
 		if h, p, err := net.SplitHostPort(*listenAddr); err == nil {
@@ -263,6 +267,14 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.Port)
 	log.Printf("[启动] stockanalyzer-go 监听 http://%s", addr)
+	if *openBrowser && runtime.GOOS == "windows" {
+		// 服务就绪后自动打开浏览器（等 1.5s 保证监听已起）
+		go func() {
+			time.Sleep(1500 * time.Millisecond)
+			_ = exec.Command("rundll32", "url.dll,FileProtocolHandler",
+				fmt.Sprintf("http://%s:%d/", cfg.ListenHost, cfg.Port)).Start()
+		}()
+	}
 	srv := &http.Server{
 		Addr: addr, Handler: router, ReadHeaderTimeout: 10 * time.Second,
 	}

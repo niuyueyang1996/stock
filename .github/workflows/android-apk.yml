@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# 与 windows-package.yml 共享 release 并发组：串行更新同一 tag release（防 body/资产竞争）
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -58,19 +63,6 @@ jobs:
             go build -o ../packaging/android/app/src/main/jniLibs/arm64-v8a/libstockanalyzer.so ./cmd/server
           ls -lh ../packaging/android/app/src/main/jniLibs/arm64-v8a/libstockanalyzer.so
 
-      # Windows 分发包（release 由本 workflow 统一发布，避免多 workflow 并发写同一 release）
-      - name: Build Windows package (cross-compile, zero CGO)
-        run: |
-          mkdir -p build/windows/StockAnalyzer dist/windows
-          cd backend
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64             go build -o ../build/windows/StockAnalyzer/stockanalyzer-server.exe ./cmd/server
-          cd ..
-          cp packaging/windows/start.bat build/windows/StockAnalyzer/
-          cp -r static build/windows/StockAnalyzer/static
-          cd build/windows
-          zip -qr ../../dist/windows/StockAnalyzer-windows-x64.zip StockAnalyzer
-          shasum -a 256 ../../dist/windows/StockAnalyzer-windows-x64.zip | awk '{print $1}' > ../../dist/windows/StockAnalyzer-windows-x64.zip.sha256
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -112,10 +104,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # windows 安装器 exe 由 windows-package.yml 发布（共享 concurrency 串行）
           files: |
             dist/android/StockAnalyzer-*-android-arm64.apk
             dist/android/StockAnalyzer-*-android-arm64.apk.sha256
-            dist/windows/StockAnalyzer-windows-x64.zip
-            dist/windows/StockAnalyzer-windows-x64.zip.sha256
           generate_release_notes: true
           update_release_body: false
