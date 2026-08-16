@@ -1,0 +1,61 @@
+.github/workflows/windows-package.yml
+  h_07352c0544a725 1-79
+backend/internal/db/dao/ai_test.go
+  h_07352c0544a725 1-438
+backend/internal/db/dao/dao_read_test.go
+  h_07352c0544a725 1-158
+backend/internal/db/dao/fundflow_test.go
+  h_07352c0544a725 1-201
+backend/internal/db/dao/fx_test.go
+  h_07352c0544a725 1-84
+backend/internal/db/dao/holdings_test.go
+  h_07352c0544a725 1-115
+backend/internal/db/dao/period_test.go
+  h_07352c0544a725 1-67
+backend/internal/db/dao/valuation_read_test.go
+  h_07352c0544a725 1-72
+backend/internal/db/db_migrate_test.go
+  h_07352c0544a725 1-486
+backend/internal/db/migrate.go
+  h_07352c0544a725 77,88
+backend/internal/raw/testhooks.go
+  h_07352c0544a725 31-36
+backend/internal/route/route_api_test.go
+  h_07352c0544a725 1-970
+backend/internal/service/finance/finance_extra_test.go
+  h_07352c0544a725 1-697
+backend/internal/service/finance/normalizer.go
+  h_07352c0544a725 95
+backend/internal/service/market/market_extra_test.go
+  h_07352c0544a725 1-581
+backend/internal/service/market/providers.go
+  h_07352c0544a725 157-160,163,199-201,210-212,220-222
+backend/internal/service/quote/quote_extra_test.go
+  h_07352c0544a725 1-449
+backend/internal/service/refresh/refresh_extra_test.go
+  h_07352c0544a725 1-394
+backend/internal/service/refresh/refresh_helpers_test.go
+  h_07352c0544a725 1-275
+backend/internal/service/settings/settings.go
+  h_07352c0544a725 37,42-44
+backend/internal/service/settings/settings_extra_test.go
+  h_07352c0544a725 1-269
+backend/internal/service/ws/ws_extra_test.go
+  h_07352c0544a725 1-376
+packaging/windows/build.sh
+  h_07352c0544a725 1-30
+packaging/windows/start.bat
+  h_07352c0544a725 1-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b0dcc67ba8710e65a476d36c0348e994633e34b3",
+  "prompts": {},
+  "logical_commit_id": "b0dcc67ba8710e65a476d36c0348e994633e34b3",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
