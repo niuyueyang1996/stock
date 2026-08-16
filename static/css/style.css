@@ -814,10 +814,14 @@ body.page-indices #pfFlowIntraday { height: 340px; }
   position: fixed; inset: 0; background: rgba(18, 24, 40, .45);
   display: flex; align-items: center; justify-content: center; z-index: 200;
   backdrop-filter: blur(3px);
+  overflow-y: auto; /* 弹窗超高时（移动端/展开折叠区）允许整层滚动 */
+  padding: 20px 0;   /* 上下留白，滚动时不贴边 */
 }
 .modal {
   background: #fff; border-radius: var(--radius); padding: 22px 26px;
   min-width: 380px; max-width: 92vw;
+  max-height: calc(100vh - 40px); /* 超高时弹窗内部滚动（修复 AI 设置展开「其他模型」后按钮不可见） */
+  overflow-y: auto;
   box-shadow: var(--shadow-lg);
   animation: modalIn .18s ease-out;
 }
