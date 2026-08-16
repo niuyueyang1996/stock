@@ -1,0 +1,17 @@
+.github/workflows/android-apk.yml
+  h_07352c0544a725 68-80,110-113,115
+.github/workflows/windows-package.yml
+  h_07352c0544a725 72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a55b3068980be9cc41de46090202255781ea29fd",
+  "prompts": {},
+  "logical_commit_id": "a55b3068980be9cc41de46090202255781ea29fd",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
