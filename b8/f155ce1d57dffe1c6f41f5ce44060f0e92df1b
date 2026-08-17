@@ -1,0 +1,19 @@
+backend/internal/route/ai.go
+  h_07352c0544a725 342,349-351,419,422,427-432,435-437,439-449,451-453,459-461
+static/js/common.js
+  h_07352c0544a725 1585-1587,1589-1590
+static/portfolio.html
+  h_07352c0544a725 745-751
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b8f155ce1d57dffe1c6f41f5ce44060f0e92df1b",
+  "prompts": {},
+  "logical_commit_id": "b8f155ce1d57dffe1c6f41f5ce44060f0e92df1b",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
