@@ -1,0 +1,24 @@
+backend/internal/route/ai.go
+  s_7ada5a810dfaa8::t_3f31c9c828f182 7-9,13,21-38,179-183,189-193,195-201,203-212,214,216-285,288-411,479
+backend/internal/route/route_api_test.go
+  s_7ada5a810dfaa8::t_3a6bfb53f3b027 654-655,658-661,666-667,685-699,786,788-789,791
+backend/internal/service/holdings/holdings.go
+  s_7ada5a810dfaa8::t_ac55278227d117 8,243,249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e4a810b1b1c552636e8a1ee3d53840ff87fef82b",
+  "prompts": {},
+  "logical_commit_id": "e4a810b1b1c552636e8a1ee3d53840ff87fef82b",
+  "sessions": {
+    "s_7ada5a810dfaa8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00e68-1975-7680-8d15-164112050f9f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
