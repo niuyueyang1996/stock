@@ -1,0 +1,15 @@
+backend/internal/service/quote/quote.go
+  h_07352c0544a725 92-93,98-99
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1e18c37f5614d847d12ae8b306c0546cde408c8d",
+  "prompts": {},
+  "logical_commit_id": "1e18c37f5614d847d12ae8b306c0546cde408c8d",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
