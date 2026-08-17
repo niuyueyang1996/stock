@@ -1,0 +1,15 @@
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 703-707
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8ea1b792d36a575df98ba0ef03631f14f9f4e5fc",
+  "prompts": {},
+  "logical_commit_id": "8ea1b792d36a575df98ba0ef03631f14f9f4e5fc",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
