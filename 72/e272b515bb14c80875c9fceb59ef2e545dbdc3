@@ -1,0 +1,15 @@
+static/portfolio.html
+  h_07352c0544a725 703,706
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "72e272b515bb14c80875c9fceb59ef2e545dbdc3",
+  "prompts": {},
+  "logical_commit_id": "72e272b515bb14c80875c9fceb59ef2e545dbdc3",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
