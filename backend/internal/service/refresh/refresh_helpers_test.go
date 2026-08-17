@@ -177,21 +177,23 @@ func TestAddDays(t *testing.T) {
 }
 
 // TestToSymbol2Round4LastTradeDateStr 纯辅助函数
-func TestToSymbol2Round4LastTradeDateStr(t *testing.T) {
+func TestToSymbol2Round4LastTradeDate(t *testing.T) {
 	if toSymbol2("00700") != "hk00700" || toSymbol2("600519") != "sh600519" || toSymbol2("000001") != "sz000001" {
 		t.Fatal("toSymbol2 错误")
 	}
 	if round4(1.23456) != 1.2346 {
 		t.Fatalf("round4 = %v", round4(1.23456))
 	}
+	// 通过 Cal.LastTradeDate 测试（openRefreshBatch 已注入 Cal 并种子交易日历）
+	s, _, _ := openRefreshBatch(t)
 	// 周五 → 同一（工作日）
 	fri := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local)
-	if got := lastTradeDateStr(fri); got != "2026-08-14" {
+	if got := s.Cal.LastTradeDate(fri).Format("2006-01-02"); got != "2026-08-14" {
 		t.Fatalf("周五应返回自己, got %s", got)
 	}
 	// 周六 → 回退周五
 	sat := time.Date(2026, 8, 15, 10, 0, 0, 0, time.Local)
-	if got := lastTradeDateStr(sat); got != "2026-08-14" {
+	if got := s.Cal.LastTradeDate(sat).Format("2006-01-02"); got != "2026-08-14" {
 		t.Fatalf("周六应回退周五, got %s", got)
 	}
 }

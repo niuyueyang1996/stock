@@ -25,6 +25,7 @@ import (
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/route"
 	"stockanalyzer/internal/service/ai"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/datamanage"
 	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
@@ -150,40 +151,23 @@ func main() {
 	// 任务系统
 	jm := jobs.New()
 
+	// 交易日历（全局统一入口）
+	calSvc := calendar.New(gdb)
+
 	// 刷新服务
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
-	quoteSvc.BeforeOpen = func(now time.Time) bool {
-		return now.Hour()*60+now.Minute() < 9*60+15
-	}
+	quoteSvc.Cal = calSvc
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 
-	calIsOpen := func(dateStr string) bool {
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM trade_calendar WHERE trade_date=? AND is_open=1", dateStr).Scan(&n)
-		if n > 0 {
-			return true
-		}
-		t, err := time.Parse("2006-01-02", dateStr)
-		if err != nil {
-			return false
-		}
-		return t.Weekday() != time.Saturday && t.Weekday() != time.Sunday
-	}
 	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, mm, fm, vm, liveSvc, fxSvc, jm)
 	rfSvc.Baidu = bd // 估值历史序列（sync_valuation）
+	rfSvc.Cal = calSvc
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = func(code string) bool {
 		var n int64
 		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
 		return n > 0
-	}
-	rfSvc.IsTradeDay = calIsOpen
-	rfSvc.BeforeOpen = func(now time.Time) bool {
-		return now.Hour()*60+now.Minute() < 9*60+15
-	}
-	rfSvc.MarketClosed = func(now time.Time) bool {
-		return now.Hour()*60+now.Minute() >= 15*60+5
 	}
 	holdings.SetIndexChecker(rfSvc.IsIndex)
 
@@ -193,6 +177,7 @@ func main() {
 
 	// 组合服务
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY, cacheDAO, idxSvc)
+	portSvc.Cal = calSvc
 
 	// AI 服务
 	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
@@ -209,7 +194,7 @@ func main() {
 	aiSvc.PortReports = dao.NewAIPortfolioReportDAO(gdb)
 	aiSvc.Daily = dao.NewAIDailyReportDAO(gdb)
 	aiSvc.Jobs = jm
-	aiSvc.MarketClosed = rfSvc.MarketClosed
+	aiSvc.MarketClosed = func(now time.Time) bool { return calSvc.IsClosed(now) }
 
 	// 交易/标签变更 → AI 每日重打分（对齐 Python _trigger_ai_daily；失败仅日志不阻断）
 	holdings.OnTradeChanged = aiSvc.MaybeAutoScoreDaily
@@ -221,7 +206,7 @@ func main() {
 	// 详情服务（个股/指数详情组装）
 	detailSvc := &detail.Service{
 		Cache: cacheDAO, Quote: quoteSvc, Live: liveSvc, Fx: fxSvc.GetFxRateCNY,
-		Indices: idxSvc, IsIndex: rfSvc.IsIndex, Stocks: holdingsDAO, DataDir: cfg.DataDir,
+		Indices: idxSvc, IsIndex: rfSvc.IsIndex, Cal: calSvc, Stocks: holdingsDAO, DataDir: cfg.DataDir,
 	}
 	// 个股预期数据服务
 	stockMetaSvc := stockmeta.New(gdb)

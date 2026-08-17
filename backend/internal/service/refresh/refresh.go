@@ -17,6 +17,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
@@ -51,14 +52,10 @@ type Service struct {
 	Jobs      *jobs.Manager
 	// Baidu 百度客户端（估值历史序列 sync_valuation 用；main 装配注入）
 	Baidu *raw.Baidu
+	// Cal 交易日历（全局统一入口：交易日/最近交易日/开盘前判定）
+	Cal *calendar.Service
 	// IsIndex 指数判定（注入：注册表）
 	IsIndex func(code string) bool
-	// IsTradeDay 交易日判定（注入：calendar）
-	IsTradeDay func(dateStr string) bool
-	// MarketOpened 开盘判定（<09:15 未开盘）
-	BeforeOpen func(now time.Time) bool
-	// MarketClosed 收盘判定（>=15:05 定格）
-	MarketClosed func(now time.Time) bool
 	// EnsureNews 个股新闻预拉（main 注入 ai.EnsureStockNews force 包装；全局全量刷新时批量拉）
 	EnsureNews func(code string)
 }
@@ -123,10 +120,10 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 	// 过滤非交易日 + 未开盘不写当日
 	var filtered []barRow
 	for _, b := range bars {
-		if s.IsTradeDay != nil && !s.IsTradeDay(b.Date) {
+		if s.Cal != nil && !s.Cal.IsTradeDay(b.Date) {
 			continue
 		}
-		if s.BeforeOpen != nil && s.BeforeOpen(now) && b.Date >= today {
+		if s.Cal != nil && s.Cal.IsBeforeOpen(now) && b.Date >= today {
 			continue
 		}
 		filtered = append(filtered, barRow{Date: b.Date, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume, Amount: b.Amount})
@@ -150,7 +147,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 			prev = &b.Close
 		}
 		_ = s.Cache.UpsertDailyPrices(rows)
-		if s.MarketClosed != nil && s.MarketClosed(now) && s.Cache.GetDailyPrice(code, today) != nil {
+		if s.Cal != nil && s.Cal.IsClosed(now) && s.Cache.GetDailyPrice(code, today) != nil {
 			s.Cache.MarkClosed(code, today)
 		}
 		return map[string]any{"code": code, "fetched": len(filtered), "reason": "ok"}
@@ -178,7 +175,7 @@ func (s *Service) syncRealtimeQuote(ctx context.Context, code string, now time.T
 	if quoteDay != "" && quoteDay != today {
 		return nil
 	}
-	if quoteDay == "" && s.BeforeOpen != nil && s.BeforeOpen(now) {
+	if quoteDay == "" && s.Cal != nil && s.Cal.IsBeforeOpen(now) {
 		return nil
 	}
 	prevClose := s.Cache.PrevClose(code, today)
@@ -272,37 +269,24 @@ func (s *Service) syncFundflow(ctx context.Context, code string, now time.Time) 
 	return map[string]any{"code": code, "fetched": len(points), "reason": "ok"}
 }
 
-// fundflowTargetDate 资金流目标日期（用户口径）：
-// 日K里有今天的行 → 今天（已开盘，数据是今天的）；
-// 否则 → 最近有效交易日（未开盘 <09:15 回退上一交易日；非交易日回退最近交易日——周六/周日读周五）。
-func (s *Service) fundflowTargetDate(code string, now time.Time) string {
-	today := now.Format("2006-01-02")
-	if s.hasTodayKline(code, today) {
-		return today
+// fundflowTargetDate 资金流目标日期（与 resolveTradeDay 对齐）：
+// 委托 calendar.ResolveLiveTradeDate —— 工作日 >=09:15 → 今天；否则回退最近交易日。
+// 不再依赖 hasTodayKline，避免与前端读取侧日期错位（已开盘但 daily_price_cache 无今日行时
+// 旧逻辑回退昨天，前端按今天读 → 显示"未开盘"）。
+func (s *Service) fundflowTargetDate(_ string, now time.Time) string {
+	if s.Cal != nil {
+		return s.Cal.ResolveLiveTradeDate(now).Format("2006-01-02")
 	}
+	// Cal 未注入时兜底：纯周末近似（与旧行为一致）
 	d := now
-	if now.Hour()*60+now.Minute() < 9*60+15 {
-		d = now.AddDate(0, 0, -1) // 未开盘：当日尚无数据，回退上一交易日
+	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday ||
+		now.Hour()*60+now.Minute() < 9*60+15 {
+		d = now.AddDate(0, 0, -1)
 	}
-	for !s.isTradeDayT(d) {
+	for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
 		d = d.AddDate(0, 0, -1)
 	}
 	return d.Format("2006-01-02")
-}
-
-// hasTodayKline 日K里是否有今天的行（= 今天已开盘；用户口径：接口有今天的日K就代表开盘了）
-func (s *Service) hasTodayKline(code, today string) bool {
-	var n int64
-	s.Cache.DB.Raw("SELECT COUNT(*) FROM daily_price_cache WHERE code=? AND trade_date=?", code, today).Scan(&n)
-	return n > 0
-}
-
-// isTradeDayT 交易日判定（优先 trade_calendar 注入回调；缺省周末近似）
-func (s *Service) isTradeDayT(d time.Time) bool {
-	if s.IsTradeDay != nil {
-		return s.IsTradeDay(d.Format("2006-01-02"))
-	}
-	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
 }
 
 // syncStockFull 一站式同步单股全部数据（开仓新股）
@@ -327,7 +311,7 @@ func (s *Service) ShouldRunDynamicLoop(now time.Time, busy bool) bool {
 	if busy {
 		return false
 	}
-	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+	if s.Cal != nil && !s.Cal.IsTradeDay(now.Format("2006-01-02")) {
 		return false
 	}
 	t := now.Hour()*60 + now.Minute()
@@ -339,7 +323,7 @@ func (s *Service) ShouldRunDynamicLoop(now time.Time, busy bool) bool {
 
 // ShouldRunDailySync 每日收盘后全量同步（16:10 后且当日未同步）
 func (s *Service) ShouldRunDailySync(now time.Time, lastDate string) bool {
-	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
+	if s.Cal != nil && !s.Cal.IsTradeDay(now.Format("2006-01-02")) {
 		return false
 	}
 	t := now.Hour()*60 + now.Minute()
@@ -484,8 +468,8 @@ func (s *Service) SyncPeriodKline(code string, force bool) {
 	now := time.Now()
 	today := now.Format("2006-01-02")
 	// 开盘前：源不产生当日周期行，用有效交易日（上一交易日）收口，避免拉到占位假K
-	if s.BeforeOpen != nil && s.BeforeOpen(now) {
-		today = lastTradeDateStr(now)
+	if s.Cal != nil && s.Cal.IsBeforeOpen(now) {
+		today = s.Cal.LastTradeDate(now.AddDate(0, 0, -1)).Format("2006-01-02")
 	}
 	for _, cfg := range []struct {
 		period   string
@@ -568,18 +552,6 @@ func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end 
 		out = append(out, b)
 	}
 	return out
-}
-
-// lastTradeDateStr 最近交易日字符串（工作日近似）
-func lastTradeDateStr(now time.Time) string {
-	d := now
-	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
-		d = now.AddDate(0, 0, -1)
-	}
-	for d.Weekday() == time.Saturday || d.Weekday() == time.Sunday {
-		d = d.AddDate(0, 0, -1)
-	}
-	return d.Format("2006-01-02")
 }
 
 // toSymbol2 腾讯代码符号（sh/sz/hk 前缀）

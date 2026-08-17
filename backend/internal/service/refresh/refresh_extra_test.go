@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
+
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
@@ -12,6 +14,20 @@ import (
 	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/model"
 )
+
+// seedTradeCalendar 在 trade_calendar 表中为指定日期写入 is_open 值（测试辅助）
+func seedTradeCalendar(t *testing.T, g *gorm.DB, dates map[string]bool) {
+	t.Helper()
+	for d, open := range dates {
+		isOpen := 0
+		if open {
+			isOpen = 1
+		}
+		if err := g.Exec("INSERT OR REPLACE INTO trade_calendar(trade_date, is_open) VALUES(?, ?)", d, isOpen).Error; err != nil {
+			t.Fatalf("seed trade_calendar %s: %v", d, err)
+		}
+	}
+}
 
 // flexMarketSource 可灵活配置 Quote/DailyBars/Ticks 的行情源（空市场链的补充）。
 type flexMarketSource struct {
@@ -128,10 +144,11 @@ func TestSyncDailyBarsSparseFallback(t *testing.T) {
 	}
 }
 
-// TestSyncDailyBarsNonTradeDayFilter 非交易日过滤：IsTradeDay=false 的 bar 不入库
+// TestSyncDailyBarsNonTradeDayFilter 非交易日过滤：trade_calendar 标记非交易日的 bar 不入库
 func TestSyncDailyBarsNonTradeDayFilter(t *testing.T) {
 	s, _, g := openRefreshBatch(t)
-	s.IsTradeDay = func(d string) bool { return d != "2026-08-13" } // 2026-08-13 非交易日
+	// 覆盖：2026-08-13 为非交易日
+	seedTradeCalendar(t, g, map[string]bool{"2026-08-13": false})
 	bars := []model.Bar{
 		{Date: "2026-08-12", Close: 8.5, Volume: 100, Amount: 1000},
 		{Date: "2026-08-13", Close: 9.0, Volume: 120, Amount: 1200}, // 将被过滤
@@ -155,7 +172,7 @@ func TestSyncDailyBarsNonTradeDayFilter(t *testing.T) {
 // TestSyncDailyBarsBeforeOpenNoToday 盘前刷新：不写当日行（b.Date>=today 被过滤）
 func TestSyncDailyBarsBeforeOpenNoToday(t *testing.T) {
 	s, _, g := openRefreshBatch(t)
-	s.BeforeOpen = func(time.Time) bool { return true } // 盘前
+	// now=08:30 → Cal.IsBeforeOpen=true → 自动过滤当日
 	bars := []model.Bar{
 		{Date: "2026-08-13", Close: 9.0, Volume: 120, Amount: 1200},
 		{Date: "2026-08-14", Close: 9.3, Volume: 130, Amount: 1300}, // 今日，将被过滤
@@ -297,7 +314,7 @@ func TestSyncFundflowPersist(t *testing.T) {
 	s, _, g := openRefreshBatch(t)
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local)
 	today := now.Format("2006-01-02")
-	// 预置今日日K → hasTodayKline=true → targetDate=today, filterFuture=true
+	// now=15:00 工作日 → Cal.ResolveLiveTradeDate → today → targetDate=today, filterFuture=true
 	closeV := 9.0
 	src := "tencent"
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})

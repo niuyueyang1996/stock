@@ -11,6 +11,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
@@ -37,9 +38,12 @@ func openRefreshBatch(t *testing.T) (*Service, *holdings.Service, *gorm.DB) {
 	mm := market.NewMarketManager() // 空链：所有源调用失败/返回空
 	fm := finance.NewFinanceManager(nil, nil, nil)
 	s := New(g, dao.NewCacheDAO(g), h, mm, fm, nil, nil, nil, jobs.New())
-	s.IsTradeDay = func(string) bool { return true }
-	s.BeforeOpen = func(time.Time) bool { return false }
-	s.MarketClosed = func(time.Time) bool { return true }
+	s.Cal = calendar.New(g)
+	// 种子默认交易日历：所有日期都是交易日（测试用；个别测试可覆盖）
+	seedTradeCalendar(t, g, map[string]bool{
+		"2026-08-11": true, "2026-08-12": true, "2026-08-13": true,
+		"2026-08-14": true, "2026-08-15": true, "2026-08-16": true, "2026-08-17": true,
+	})
 	return s, h, g
 }
 

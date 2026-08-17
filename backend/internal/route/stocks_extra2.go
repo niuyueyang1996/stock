@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -174,35 +173,6 @@ func isHKCode5(code string) bool {
 		}
 	}
 	return true
-}
-
-// tradeDayOf 最近有资金流/量价数据的交易日（今天优先，回退指定 code 的历史最近；
-// 指数量价在 daily_price_cache，个股资金流在 daily_fundflow_cache）
-func tradeDayOf(s *Services, code string) string {
-	// 对齐 Python resolve_trade_day：日历优先（今天若非周末=交易日；周末回退最近工作日），
-	// 而不是数据 MAX——避免「无数据日」被数据驱动回退，覆盖口径与 Python 一致
-	now := time.Now()
-	for i := 0; i < 8; i++ {
-		d := now.AddDate(0, 0, -i)
-		if d.Weekday() != time.Saturday && d.Weekday() != time.Sunday {
-			return d.Format("2006-01-02")
-		}
-	}
-	return now.Format("2006-01-02")
-}
-
-var flowLatestKeys = []string{"netamount", "main_net", "super_large_net", "large_net", "medium_net", "small_net", "xs_net", "buy_amount", "sell_amount"}
-
-// marketStatusStr 市场状态字符串（对齐 Python market_status()：open/pre_open/not_trade_day）
-func marketStatusStr() string {
-	now := time.Now()
-	if now.Weekday() == time.Saturday || now.Weekday() == time.Sunday {
-		return "not_trade_day"
-	}
-	if now.Hour()*60+now.Minute() < 9*60+15 {
-		return "pre_open"
-	}
-	return "open"
 }
 
 // autoMapETFIndex ETF 名称子串匹配指数名（多命中取最长名）

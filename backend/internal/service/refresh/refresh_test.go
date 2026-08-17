@@ -9,6 +9,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
 	"stockanalyzer/internal/service/market"
@@ -31,9 +32,7 @@ func openRefresh(t *testing.T) (*Service, *gorm.DB) {
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
 	mm := market.NewMarketManager()
 	s := New(g, dao.NewCacheDAO(g), h, mm, nil, nil, nil, nil, jobs.New())
-	s.IsTradeDay = func(string) bool { return true }
-	s.BeforeOpen = func(time.Time) bool { return false }
-	s.MarketClosed = func(time.Time) bool { return true }
+	s.Cal = calendar.New(g)
 	return s, g
 }
 

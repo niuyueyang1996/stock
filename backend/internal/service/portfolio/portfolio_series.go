@@ -96,7 +96,7 @@ func (s *Service) buildDayMaps(weights map[string]float64, period string) (map[s
 	for _, m := range raw {
 		for _, dm := range m {
 			for d := range dm {
-				if isTradeDayStr(d) {
+				if s.Cal.IsTradeDay(d) {
 					allDates[d] = true
 				}
 			}
@@ -168,15 +168,6 @@ func comboDay(dayMap map[string]*float64, weights map[string]float64) (*float64,
 	}
 	v := round2(wsum / denom)
 	return &v, coverage
-}
-
-// isTradeDayStr 日期字符串是否交易日（工作日近似，对齐 Python is_trade_day）
-func isTradeDayStr(d string) bool {
-	t, err := time.Parse("2006-01-02", d)
-	if err != nil {
-		return false
-	}
-	return t.Weekday() != time.Saturday && t.Weekday() != time.Sunday
 }
 
 // round4 四位小数

@@ -13,11 +13,14 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 )
 
 // Service 缓存行情服务
 type Service struct {
 	DB *gorm.DB
+	// Cal 交易日历（注入 calendar 全局统一入口）
+	Cal *calendar.Service
 	// BeforeOpen 开盘判定（<09:15 未开盘；非交易日）；nil 视为已开盘
 	BeforeOpen func(now time.Time) bool
 	// DataDir 数据目录（搜索读全市场列表缓存 stock_list.json/etf_list.json/hk_stock_list.json）
@@ -60,8 +63,8 @@ func (s *Service) Get(code string) *CachedQuote {
 		row = &cur
 	}
 	opened := true
-	if s.BeforeOpen != nil {
-		opened = !s.BeforeOpen(now)
+	if s.Cal != nil {
+		opened = !s.Cal.IsBeforeOpen(now)
 	}
 	if row != nil && opened {
 		return s.rowToQuote(row, today, false)
@@ -141,8 +144,9 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 	if period != "day" && period != "week" && period != "month" {
 		return 400, nil, "period 仅支持 day/week/month"
 	}
-	eff := resolveLiveTradeDate(time.Now())
-	ms := marketStatusStr()
+	now := time.Now()
+	eff := s.Cal.ResolveLiveTradeDate(now).Format("2006-01-02")
+	ms := s.Cal.MarketStatusStr(now)
 	type bar struct {
 		Date      string   `json:"date"`
 		Open      *float64 `json:"open"`
@@ -156,7 +160,7 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 	if period == "day" {
 		start := addDaysStr(eff, -800)
 		for _, r := range s.Bars(code, start, eff, 0) {
-			if !isTradeDayStr(r.TradeDate) {
+			if !s.Cal.IsTradeDay(r.TradeDate) {
 				continue
 			}
 			bars = append(bars, bar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
@@ -173,13 +177,13 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 			rows = s.periodRows(table, code, "1970-01-01", eff)
 		}
 		for _, r := range rows {
-			if !isTradeDayStr(r.TradeDate) {
+			if !s.Cal.IsTradeDay(r.TradeDate) {
 				continue
 			}
 			bars = append(bars, bar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
 		}
 	}
-	adjusted := eff != time.Now().Format("2006-01-02")
+	adjusted := eff != now.Format("2006-01-02")
 	return 200, map[string]any{
 		"code": code, "period": period, "bars": bars,
 		"as_of": eff, "as_of_adjusted": adjusted, "market_status": ms,
@@ -251,49 +255,6 @@ func (s *Service) readList(name string) []map[string]any {
 		return nil
 	}
 	return out
-}
-
-// resolveLiveTradeDate 当前时刻有效交易日（对齐 Python resolve_live_trade_date）
-func resolveLiveTradeDate(now time.Time) string {
-	d := now
-	if isWeekdayT(now) && now.Hour()*60+now.Minute() >= 9*60+15 {
-		return lastTradeDateT(d).Format("2006-01-02")
-	}
-	return lastTradeDateT(d.AddDate(0, 0, -1)).Format("2006-01-02")
-}
-
-// lastTradeDateT <=d 的最近交易日（工作日近似，忽略节假日）
-func lastTradeDateT(d time.Time) time.Time {
-	for !isWeekdayT(d) {
-		d = d.AddDate(0, 0, -1)
-	}
-	return d
-}
-
-// isWeekdayT 是否工作日（周六/周日 false，忽略节假日）
-func isWeekdayT(d time.Time) bool {
-	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
-}
-
-// isTradeDayStr 判断日期字符串是否交易日（工作日近似，忽略节假日）
-func isTradeDayStr(d string) bool {
-	t, err := time.Parse("2006-01-02", d)
-	if err != nil {
-		return false
-	}
-	return isWeekdayT(t)
-}
-
-// marketStatusStr 市场状态字符串（对齐 Python market_status()：open/pre_open/not_trade_day）
-func marketStatusStr() string {
-	now := time.Now()
-	if !isWeekdayT(now) {
-		return "not_trade_day"
-	}
-	if now.Hour()*60+now.Minute() < 9*60+15 {
-		return "pre_open"
-	}
-	return "open"
 }
 
 // addDaysStr 日期字符串加 n 天（解析失败原样返回）

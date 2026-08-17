@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
@@ -26,6 +27,7 @@ type Service struct {
 	Fx      func(currency, rateDate string) *float64
 	Indices *indices.Service
 	IsIndex func(code string) bool
+	Cal     *calendar.Service
 	// Stocks 股票基础信息 DAO（名称回填写 stocks 表，对齐 Python stock_detail）
 	Stocks *dao.HoldingsDAO
 	// DataDir 数据目录（读全市场列表缓存 stock_list.json/etf_list.json/hk_stock_list.json）
@@ -307,7 +309,7 @@ func (s *Service) buildDetail(code, name, currency string, q *quote.CachedQuote,
 	// 市场状态：历史回看时 null（对齐 Python：None if hist_view else market_status()）
 	var marketStatus any
 	if !histView {
-		marketStatus = marketStatusStr()
+		marketStatus = s.marketStatusStr()
 	}
 
 	// as_of_requested：Python 原样输出 as_of 参数（None→null；空串→""）
@@ -534,56 +536,14 @@ func segmentedKey(v float64) [2]float64 {
 	return [2]float64{2, v}
 }
 
-// resolveTradeDay 解析有效交易日（对齐 Python resolve_trade_day）：
-// 空串/None → 当前时刻有效交易日（未开盘回退上一交易日；非交易日回退最近交易日）；
-// 给定日 → 退到 <=d 最近交易日。返回 (day, adjusted)。
+// resolveTradeDay 解析有效交易日（委托 calendar 全局统一入口）
 func (s *Service) resolveTradeDay(d string) (string, bool) {
-	now := time.Now()
-	var raw time.Time
-	var resolved time.Time
-	if d == "" {
-		raw = now
-		resolved = resolveLiveTradeDate(now)
-	} else {
-		raw, _ = time.Parse("2006-01-02", d[:10])
-		resolved = lastTradeDate(raw)
-	}
-	return resolved.Format("2006-01-02"), resolved.Format("2006-01-02") != raw.Format("2006-01-02")
+	return s.Cal.ResolveTradeDay(time.Now(), d)
 }
 
-// resolveLiveTradeDate 当前时刻有效交易日（对齐 Python resolve_live_trade_date）
-func resolveLiveTradeDate(now time.Time) time.Time {
-	d := now
-	if isWeekday(d) && now.Hour()*60+now.Minute() >= 9*60+15 {
-		return lastTradeDate(d)
-	}
-	// 未开盘或非交易日 → 上一日再吸附
-	return lastTradeDate(d.AddDate(0, 0, -1))
-}
-
-// lastTradeDate <=d 的最近交易日（工作日近似，忽略节假日）
-func lastTradeDate(d time.Time) time.Time {
-	for !isWeekday(d) {
-		d = d.AddDate(0, 0, -1)
-	}
-	return d
-}
-
-// isWeekday 是否周一到周五（交易日近似，忽略节假日）
-func isWeekday(d time.Time) bool {
-	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
-}
-
-// marketStatusStr 市场状态字符串（对齐 Python market_status()：open/pre_open/not_trade_day）
-func marketStatusStr() any {
-	now := time.Now()
-	if !isWeekday(now) {
-		return "not_trade_day"
-	}
-	if now.Hour()*60+now.Minute() < 9*60+15 {
-		return "pre_open"
-	}
-	return "open"
+// marketStatusStr 市场状态字符串（委托 calendar）
+func (s *Service) marketStatusStr() string {
+	return s.Cal.MarketStatusStr(time.Now())
 }
 
 // instDefaultTag 类型默认标签（对齐 Python instruments RULES tag：个股/港股/ETF）

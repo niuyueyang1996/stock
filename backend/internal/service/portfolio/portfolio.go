@@ -16,6 +16,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
@@ -40,6 +41,7 @@ type Service struct {
 	Fx       FxGetter
 	Cache    *dao.CacheDAO
 	Indices  *indices.Service
+	Cal      *calendar.Service
 }
 
 // New 构建组合服务，注入 DB、持仓/估值服务、行情读取器、汇率函数、缓存 DAO 与指数服务。
@@ -1375,56 +1377,16 @@ func (s *Service) ComputePortfolioLite(tags []string) map[string]any {
 	}
 }
 
-// ---------- 交易日历工具（复制自 detail 包，与 Python resolve_trade_day/market_status 一致） ----------
+// ---------- 交易日历（委托 calendar 全局统一入口） ----------
 
-// isWeekday 工作日（忽略节假日，与 Python is_trade_day 一致）
-func isWeekday(d time.Time) bool {
-	return d.Weekday() != time.Saturday && d.Weekday() != time.Sunday
-}
-
-// lastTradeDate <=d 的最近交易日（工作日近似）
-func lastTradeDate(d time.Time) time.Time {
-	for !isWeekday(d) {
-		d = d.AddDate(0, 0, -1)
-	}
-	return d
-}
-
-// resolveLiveTradeDate 当前时刻有效交易日：已开盘（>=09:15 集合竞价）→ 当日；未开盘/非交易日 → 上一日再吸附
-func resolveLiveTradeDate(now time.Time) time.Time {
-	d := now
-	if isWeekday(d) && now.Hour()*60+now.Minute() >= 9*60+15 {
-		return lastTradeDate(d)
-	}
-	return lastTradeDate(d.AddDate(0, 0, -1))
-}
-
-// resolveTradeDay 解析有效交易日（对齐 Python resolve_trade_day）：
-// 空串 → 当前有效交易日（未开盘回退上一交易日；非交易日回退最近交易日）；
-// 给定日 → 退到 <=d 最近交易日。返回 (day, adjusted)。
+// resolveTradeDay 解析有效交易日（委托 calendar）
 func (s *Service) resolveTradeDay(asOf string) (string, bool) {
-	now := time.Now()
-	var raw, resolved time.Time
-	if asOf == "" {
-		raw = now
-		resolved = resolveLiveTradeDate(now)
-	} else {
-		raw, _ = time.Parse("2006-01-02", asOf[:len(asOf)])
-		resolved = lastTradeDate(raw)
-	}
-	return resolved.Format("2006-01-02"), resolved.Format("2006-01-02") != raw.Format("2006-01-02")
+	return s.Cal.ResolveTradeDay(time.Now(), asOf)
 }
 
-// marketStatusStr 市场状态字符串（对齐 Python market_status()：open/pre_open/not_trade_day）
-func marketStatusStr() string {
-	now := time.Now()
-	if !isWeekday(now) {
-		return "not_trade_day"
-	}
-	if now.Hour()*60+now.Minute() < 9*60+15 {
-		return "pre_open"
-	}
-	return "open"
+// marketStatusStr 市场状态字符串（委托 calendar）
+func (s *Service) marketStatusStr() string {
+	return s.Cal.MarketStatusStr(time.Now())
 }
 
 // isHKCode5 港股五位纯数字代码判定（港股无资金流参与）
@@ -1511,7 +1473,7 @@ func (s *Service) comboFundflow(codes []string, tradeDay, asOfRequested, note st
 			"fundflow_windows": []int{1, 5, 15, 30},
 			"covered":          0, "total": total, "trade_date": tradeDay,
 			"as_of": tradeDay, "as_of_adjusted": tradeDay != time.Now().Format("2006-01-02"),
-			"market_status": marketStatusStr(), "as_of_requested": asOfOut, "note": note,
+			"market_status": s.marketStatusStr(), "as_of_requested": asOfOut, "note": note,
 		}
 	}
 	if len(members) == 0 {
@@ -1729,7 +1691,7 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 			"mode": "index", "intraday": []any{}, "daily": []any{},
 			"covered": 0, "total": total, "trade_date": tradeDay,
 			"as_of": tradeDay, "as_of_adjusted": tradeDay != time.Now().Format("2006-01-02"),
-			"market_status": marketStatusStr(), "as_of_requested": nil, "note": "指数等权量价求和",
+			"market_status": s.marketStatusStr(), "as_of_requested": nil, "note": "指数等权量价求和",
 		}
 	}
 	if len(members) == 0 {
