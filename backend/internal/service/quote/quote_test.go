@@ -9,6 +9,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 )
 
 // openQuote 临时库 + quote.Service
@@ -26,6 +27,7 @@ func openQuote(t *testing.T) (*Service, *dao.CacheDAO) {
 	})
 	d := dao.NewCacheDAO(g)
 	s := New(g)
+	s.Cal = calendar.New(g)
 	return s, d
 }
 

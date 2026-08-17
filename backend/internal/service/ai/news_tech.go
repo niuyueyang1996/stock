@@ -203,7 +203,7 @@ func (s *Service) AnalyzeNews(code, systemPrompt, intensity string) (map[string]
 	user := "消息面分析对象（news=系统抓取的该股近期新闻，按时间倒序；优先依据新闻正文判断，引用注明日期与来源；不足/过时再结合公开知识）：\n" +
 		ctxJSON(ctx) + "\n\n" + newsSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		newsSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		newsSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "消息面")
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (s *Service) AnalyzeTechnical(code, systemPrompt, intensity string) (map[st
 		"monthly_bars": s.MonthlyBars(code, 36)}
 	user := "技术面分析对象：\n" + ctxJSON(ctx) + "\n\n" + techSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		techSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		techSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "技术面")
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +382,7 @@ func (s *Service) AnalyzeBatchNews(tags, codes []string, systemPrompt, intensity
 	user := "组合内标的消息面分析（每只 news=系统抓取的近期新闻，按时间倒序；优先依据新闻正文判断，引用注明日期与来源；不足/过时再结合公开知识）：\n" +
 		ctxJSON(ctx) + "\n\n" + batchNewsSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		batchNewsSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		batchNewsSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "批量消息面")
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +445,7 @@ func (s *Service) AnalyzeBatchTechnical(tags, codes []string, systemPrompt, inte
 	ctx := map[string]any{"as_of_datetime": asOf, "bars_as_of": techEndDay(asOf), "stocks": stocks}
 	user := "组合内标的技术面分析（K线已截断到 as_of 对应交易日）：\n" + ctxJSON(ctx) + "\n\n" + batchTechSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		batchTechSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		batchTechSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "批量技术面")
 	if err != nil {
 		return nil, err
 	}

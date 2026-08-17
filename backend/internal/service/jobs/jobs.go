@@ -191,9 +191,10 @@ func (m *Manager) finalize(job *Job, err error) {
 	job.OK = &ok
 	job.Pct = 100
 	job.UpdatedAt = nowStr()
-	m.recent = append(m.recent, recentPublic(job))
+	// 最新完成的放最前（recent[0] 始终是最新；前端进度条/primary 兜底都按 [0] 取）
+	m.recent = append([]RecentPublic{recentPublic(job)}, m.recent...)
 	if len(m.recent) > recentMax {
-		m.recent = m.recent[len(m.recent)-recentMax:]
+		m.recent = m.recent[:recentMax]
 	}
 	if job.BatchID != "" {
 		m.finishBatchIfDone(job.BatchID)
@@ -448,7 +449,16 @@ func (m *Manager) Snapshot() map[string]any {
 		}
 	}
 	if primary == nil && len(active) > 0 {
-		primary = m.primaryOf(active[0])
+		// 优先选 ai.* 类型（用户分析任务），避免 system.prewarm 抢占显示
+		for _, j := range active {
+			if strings.HasPrefix(j.Kind, "ai.") {
+				primary = m.primaryOf(j)
+				break
+			}
+		}
+		if primary == nil {
+			primary = m.primaryOf(active[0])
+		}
 	}
 	if primary == nil {
 		var last *RecentPublic

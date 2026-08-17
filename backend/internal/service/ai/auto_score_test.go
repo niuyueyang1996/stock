@@ -24,7 +24,7 @@ type mockClient struct {
 	chatErr error
 }
 
-func (m *mockClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int) (map[string]any, error) {
+func (m *mockClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int, task ...string) (map[string]any, error) {
 	if m.chatErr != nil {
 		return nil, m.chatErr
 	}

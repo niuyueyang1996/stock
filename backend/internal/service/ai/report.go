@@ -169,8 +169,8 @@ func sumN(nets []float64, n int) float64 {
 }
 
 // IntradaySeries 分时行重聚合到指定窗口（对齐 intraday_window_series）：
-// [{ts, super, large, medium, small, xs, main, cum, buy, sell, price}] 按 ts 升序
-func IntradaySeries(rows []db.FundflowMinuteCache, windowMin int) []map[string]any {
+// 按 ts 升序返回 IntradayPoint 列表。
+func IntradaySeries(rows []db.FundflowMinuteCache, windowMin int) []IntradayPoint {
 	type acc struct {
 		super, large, medium, small, xs, buy, sell float64
 	}
@@ -207,25 +207,29 @@ func IntradaySeries(rows []db.FundflowMinuteCache, windowMin int) []map[string]a
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make([]map[string]any, 0, len(keys))
+	out := make([]IntradayPoint, 0, len(keys))
 	cum := 0.0
 	for _, ts := range keys {
 		a := agg[ts]
 		main := a.super + a.large
 		cum += main
-		var p any
+		var p *float64
 		if v, ok := lastPrice[ts]; ok && v != nil {
-			p = roundF(*v, 3)
+			p = float64Ptr(roundF(*v, 3))
 		}
-		out = append(out, map[string]any{
-			"ts": ts, "super": roundF(a.super, 2), "large": roundF(a.large, 2),
-			"medium": roundF(a.medium, 2), "small": roundF(a.small, 2), "xs": roundF(a.xs, 2),
-			"main": roundF(main, 2), "cum": roundF(cum, 2),
-			"buy": roundF(a.buy, 2), "sell": roundF(a.sell, 2), "price": p,
+		out = append(out, IntradayPoint{
+			Ts: ts, Price: p,
+			SuperLarge: roundF(a.super, 2), Large: roundF(a.large, 2),
+			Medium: roundF(a.medium, 2), Small: roundF(a.small, 2), Xs: roundF(a.xs, 2),
+			Main: roundF(main, 2), Cum: roundF(cum, 2),
+			Buy: roundF(a.buy, 2), Sell: roundF(a.sell, 2),
 		})
 	}
 	return out
 }
+
+// float64Ptr 返回 float64 指针（便捷辅助）
+func float64Ptr(v float64) *float64 { return &v }
 
 // hmMin 把 "HH:MM" 时分转成当天分钟数；格式不足则返回 0
 func hmMin(hm string) int {
@@ -568,7 +572,7 @@ func (s *Service) AnalyzeStock(code, systemPrompt, intensity string) (map[string
 		"\n\n只输出严格 JSON，不要任何额外文字、不要 markdown 围栏。"
 
 	raw, err := s.Client.ChatJSON(requestCtx(), baseURL, apiKey, model,
-		analyzeSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		analyzeSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "诊股")
 	if err != nil {
 		return nil, err
 	}

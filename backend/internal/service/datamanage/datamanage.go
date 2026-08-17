@@ -5,6 +5,7 @@ package datamanage
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"gorm.io/gorm"
@@ -141,11 +142,11 @@ func roundP(v *float64, digits int) *float64 {
 	return &r
 }
 
-// round 四舍五入保留指定小数位数
+// round 四舍五入保留指定小数位数（math.Round 对负值同样远离零舍入）
 func round(v float64, digits int) float64 {
 	p := 1.0
 	for i := 0; i < digits; i++ {
 		p *= 10
 	}
-	return float64(int64(v*p+0.5)) / p
+	return math.Round(v*p) / p
 }

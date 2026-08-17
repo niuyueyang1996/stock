@@ -4,7 +4,6 @@ package route
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,19 +12,6 @@ import (
 )
 
 func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) {
-	parseTags := func(c *gin.Context) []string {
-		qs := strings.TrimSpace(c.Query("tags"))
-		if qs == "" {
-			return nil // 对齐 Python：无参数 = None = 全部（nil 与空切片语义不同）
-		}
-		var out []string
-		for _, t := range strings.Split(qs, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				out = append(out, t)
-			}
-		}
-		return out
-	}
 	configured := func() bool { return aiSvc.GetActiveModel() != nil }
 
 	// ---- 标签偏好 ----
@@ -112,48 +98,6 @@ func setupAIScoringRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) 
 		tag := c.Param("tag")
 		_ = aiSvc.DeleteTagPref(tag)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"deleted": tag}})
-	})
-
-	// ---- 组合打分 ----
-	// GET /api/ai-scoring/portfolio —— 读取组合打分报告（对齐 app/api/ai_scoring.py）：query tags 逗号分隔筛选子组合，
-	// 空=「全部」；返回 report + configured；画像变化标 stale。
-	api.GET("/ai-scoring/portfolio", func(c *gin.Context) {
-		tags := parseTags(c)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
-			"report": aiSvc.GetPortfolioReport(tags), "configured": configured(),
-		}})
-	})
-	// POST /api/ai-scoring/portfolio —— 触发组合 AI 打分（异步，对齐 app/api/ai_scoring.py）：query tags 筛选子组合；
-	// body 可传 system_prompt/intensity；未配置模型 400；返回 job_id。
-	api.POST("/ai-scoring/portfolio", func(c *gin.Context) {
-		if !configured() {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
-			return
-		}
-		tags := parseTags(c)
-		var body struct {
-			SystemPrompt *string `json:"system_prompt"`
-			Intensity    string  `json:"intensity"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		intensity := body.Intensity
-		if intensity == "" {
-			intensity = "normal"
-		}
-		var prompt string
-		if body.SystemPrompt != nil {
-			prompt = *body.SystemPrompt
-		}
-		label := "组合 AI 打分"
-		if len(tags) > 0 {
-			label += "·" + strings.Join(tags, ",")
-		}
-		jobID := s.Jobs.Start("ai.portfolio", label, func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.ScorePortfolio(tags, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
 	})
 
 	// ---- 每日打分 ----

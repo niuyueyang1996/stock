@@ -4,6 +4,7 @@ package quote
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,11 +89,14 @@ func (s *Service) rowToQuote(row *db.DailyPriceCache, today string, stale bool) 
 		prevClose = prev.Close
 	}
 	var pctChg *float64
-	if row.PctChange != nil {
+	if row.PctChange != nil && (*row.PctChange != 0 || prevClose == nil) {
+		// 有非零 pct_change 直用；pct_change=0 且有 prevClose 时重算（修复旧 PrevClose <= 带来的0值）
 		pctChg = row.PctChange
 	} else if prevClose != nil && *prevClose != 0 && row.Close != nil {
 		v := round2((*row.Close / *prevClose - 1) * 100)
 		pctChg = &v
+	} else if row.PctChange != nil {
+		pctChg = row.PctChange
 	}
 	pc := &CachedQuote{
 		Code: row.Code, Price: row.Close, PctChg: pctChg, PrevClose: prevClose,
@@ -133,8 +137,8 @@ func (s *Service) Bars(code, start, end string, limit int) []db.DailyPriceCache 
 	return rows
 }
 
-// round2 四舍五入保留两位小数
-func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+// round2 四舍五入保留两位小数（math.Round 对负值同样远离零舍入）
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 // Kline 日/周/月K线（腾讯源缓存；对齐 Python get_kline）。
 // 返回 (status, data, errMsg)：period 非法 400；day 查近 800 天；week/month 查周期表，

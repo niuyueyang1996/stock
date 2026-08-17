@@ -92,8 +92,18 @@ func naturalGroupKey(dateStr, mode string) string {
 }
 
 // fundflowToday 最近有资金流数据的交易日（今天优先，回退历史最近）
+// 指数走 index_intraday_cache，个股走 daily_fundflow_cache
 func (s *Service) fundflowToday(code string) string {
 	today := time.Now().Format("2006-01-02")
+	// 指数：数据在 index_intraday_cache（非 daily_fundflow_cache）
+	if s.IsIndex(code) {
+		var maxDate string
+		s.DB.Raw("SELECT MAX(trade_date) FROM index_intraday_cache WHERE code=?", code).Scan(&maxDate)
+		if maxDate == "" {
+			return today
+		}
+		return maxDate
+	}
 	var n int64
 	s.DB.Raw("SELECT COUNT(*) FROM daily_fundflow_cache WHERE code=? AND trade_date=?", code, today).Scan(&n)
 	if n > 0 {
@@ -109,26 +119,31 @@ func (s *Service) fundflowToday(code string) string {
 
 // BucketDayFlows 逐日五档序列按聚合模式分组（day 逐日 / week 自然周 / month 自然月）；
 // price/pct_chg 取分组末交易日；分组标签为「组首日期~组末日期（月日）」
-func BucketDayFlows(rows []db.DailyFundflowCache, mode string, priceMap map[string]map[string]any) []map[string]any {
+func BucketDayFlows(rows []db.DailyFundflowCache, mode string, priceMap map[string]map[string]any) []DailyFlowPoint {
 	if len(rows) == 0 {
-		return []map[string]any{}
+		return []DailyFlowPoint{}
 	}
-	dayPoint := func(r *db.DailyFundflowCache) map[string]any {
-		p := map[string]any{
-			"date": r.TradeDate, "netamount": r.Netamount, "main_net": r.MainNet,
-			"super_large_net": r.SuperLargeNet, "large_net": r.LargeNet,
-			"medium_net": r.MediumNet, "small_net": r.SmallNet, "xs_net": r.XsNet,
-			"buy_amount": r.BuyAmount, "sell_amount": r.SellAmount,
+	dayPoint := func(r *db.DailyFundflowCache) DailyFlowPoint {
+		p := DailyFlowPoint{
+			Date:          r.TradeDate,
+			NetAmount:     r.Netamount,
+			MainNet:       r.MainNet,
+			SuperLargeNet: r.SuperLargeNet,
+			LargeNet:      r.LargeNet,
+			MediumNet:     r.MediumNet,
+			SmallNet:      r.SmallNet,
+			XsNet:         r.XsNet,
+			BuyAmount:     r.BuyAmount,
+			SellAmount:    r.SellAmount,
 		}
 		if pm, ok := priceMap[r.TradeDate]; ok {
-			for k, v := range pm {
-				p[k] = v
-			}
+			p.Price = pm["price"]
+			p.PctChg = pm["pct_chg"]
 		}
 		return p
 	}
 	if mode == "day" {
-		out := make([]map[string]any, 0, len(rows))
+		out := make([]DailyFlowPoint, 0, len(rows))
 		for i := range rows {
 			out = append(out, dayPoint(&rows[i]))
 		}
@@ -144,7 +159,7 @@ func BucketDayFlows(rows []db.DailyFundflowCache, mode string, priceMap map[stri
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make([]map[string]any, 0, len(keys))
+	out := make([]DailyFlowPoint, 0, len(keys))
 	for _, key := range keys {
 		g := buckets[key]
 		last := g[len(g)-1]
@@ -152,63 +167,50 @@ func BucketDayFlows(rows []db.DailyFundflowCache, mode string, priceMap map[stri
 		if len(g) > 1 {
 			label += "~" + last.TradeDate[5:]
 		}
-		p := map[string]any{"date": label}
-		for _, k := range []string{"netamount", "main_net", "super_large_net", "large_net", "medium_net", "small_net", "xs_net", "buy_amount", "sell_amount"} {
-			sum := 0.0
-			cnt := 0
+		p := DailyFlowPoint{Date: label}
+		for _, f := range []struct {
+			get func(*db.DailyFundflowCache) *float64
+			set func(*DailyFlowPoint, *float64)
+		}{
+			{func(r *db.DailyFundflowCache) *float64 { return r.Netamount }, func(dp *DailyFlowPoint, v *float64) { dp.NetAmount = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.MainNet }, func(dp *DailyFlowPoint, v *float64) { dp.MainNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.SuperLargeNet }, func(dp *DailyFlowPoint, v *float64) { dp.SuperLargeNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.LargeNet }, func(dp *DailyFlowPoint, v *float64) { dp.LargeNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.MediumNet }, func(dp *DailyFlowPoint, v *float64) { dp.MediumNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.SmallNet }, func(dp *DailyFlowPoint, v *float64) { dp.SmallNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.XsNet }, func(dp *DailyFlowPoint, v *float64) { dp.XsNet = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.BuyAmount }, func(dp *DailyFlowPoint, v *float64) { dp.BuyAmount = v }},
+			{func(r *db.DailyFundflowCache) *float64 { return r.SellAmount }, func(dp *DailyFlowPoint, v *float64) { dp.SellAmount = v }},
+		} {
+			sum, cnt := 0.0, 0
 			for _, r := range g {
-				if v := fval2(r, k); v != nil {
+				if v := f.get(r); v != nil {
 					sum += *v
 					cnt++
 				}
 			}
 			if cnt > 0 {
-				p[k] = sum
+				v := sum
+				f.set(&p, &v)
 			}
 		}
 		if pm, ok := priceMap[last.TradeDate]; ok {
-			for k, v := range pm {
-				p[k] = v
-			}
+			p.Price = pm["price"]
+			p.PctChg = pm["pct_chg"]
 		}
 		out = append(out, p)
 	}
 	return out
 }
 
-// fval2 按字段名取逐日五档金额字段值；未知键返回 nil
-func fval2(r *db.DailyFundflowCache, key string) *float64 {
-	switch key {
-	case "netamount":
-		return r.Netamount
-	case "main_net":
-		return r.MainNet
-	case "super_large_net":
-		return r.SuperLargeNet
-	case "large_net":
-		return r.LargeNet
-	case "medium_net":
-		return r.MediumNet
-	case "small_net":
-		return r.SmallNet
-	case "xs_net":
-		return r.XsNet
-	case "buy_amount":
-		return r.BuyAmount
-	case "sell_amount":
-		return r.SellAmount
-	}
-	return nil
-}
-
 // BuildFundflowContext 个股资金流 AI 分析上下文（统一时间窗）。
 // 分钟窗口：当日分时序列（带缓存末笔价）；天窗口：多日逐日/周/月聚合 + 收盘价。
 // 指数（is_index）：无五档 → 量价分时（index_intraday_cache 带 amount）。
-func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) map[string]any {
+func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) *FundflowStockCtx {
 	w := NormFlowWindow(window)
 	isDay := w == "day" || w == "week" || w == "month"
 	today := s.fundflowToday(code)
-	out := map[string]any{"mode": "stock", "window": w, "date": today, "points": []any{}}
+	out := &FundflowStockCtx{Mode: "stock", Window: w, Date: today, Points: []any{}}
 
 	// 指数：量价分时（分时 mkline）或日级量价（日K volume×scale 派生成交额；简化直接用 amount 列）
 	if s.IsIndex(code) {
@@ -218,34 +220,41 @@ func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) 
 			if len(rows) == 0 {
 				return out
 			}
-			out["mode"] = "index"
-			out["points"] = bucketDayPrices(rows, mode)
-			out["code"] = code
+			out.Mode = "index"
+			out.Points = toAnySlice(bucketDayPrices(rows, mode))
+			out.Code = code
 			return out
 		}
 		raw := s.Cache.GetIndexIntraday(code, today)
-		series := indexIntradaySeries(raw, int(w[0]-'0'))
+		// 解析窗口分钟数（"15m" → 15，"1m" → 1）
+		windowMin := 15
+		if len(w) > 1 {
+			if n, err := strconv.Atoi(w[:len(w)-1]); err == nil && n > 0 {
+				windowMin = n
+			}
+		}
+		series := indexIntradaySeries(raw, windowMin)
 		if len(series) == 0 {
 			return out
 		}
-		out["mode"] = "index"
-		out["points"] = series
-		out["code"] = code
+		out.Mode = "index"
+		out.Points = toAnySlice(series)
+		out.Code = code
 		return out
 	}
 
 	// 今日五档 + 自适应分档区间
 	flow := s.Cache.GetDailyFundflow(code, today)
 	if flow != nil {
-		out["day_net"] = flow.Netamount
-		out["day_main_net"] = flow.MainNet
+		out.DayNet = flow.Netamount
+		out.DayMainNet = flow.MainNet
 		if flow.P15 != nil && flow.P40 != nil && flow.P75 != nil && flow.P95 != nil {
-			out["bands"] = map[string]any{
-				"xs":     fmt.Sprintf("<%.0f元", *flow.P15),
-				"small":  fmt.Sprintf("%.0f~%.0f元", *flow.P15, *flow.P40),
-				"medium": fmt.Sprintf("%.0f~%.0f元", *flow.P40, *flow.P75),
-				"large":  fmt.Sprintf("%.0f~%.0f元", *flow.P75, *flow.P95),
-				"super":  fmt.Sprintf(">%.0f元", *flow.P95),
+			out.Bands = &BandValues{
+				Xs:     fmt.Sprintf("<%.0f元", *flow.P15),
+				Small:  fmt.Sprintf("%.0f~%.0f元", *flow.P15, *flow.P40),
+				Medium: fmt.Sprintf("%.0f~%.0f元", *flow.P40, *flow.P75),
+				Large:  fmt.Sprintf("%.0f~%.0f元", *flow.P75, *flow.P95),
+				Super:  fmt.Sprintf(">%.0f元", *flow.P95),
 			}
 		}
 	}
@@ -271,15 +280,15 @@ func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) 
 		for _, pr := range s.priceRows(code, today, 760) {
 			priceMap[pr.TradeDate] = map[string]any{"price": pr.Close, "pct_chg": pr.PctChange}
 		}
-		out["points"] = BucketDayFlows(rows, mode, priceMap)
+		out.Points = toAnySlice(BucketDayFlows(rows, mode, priceMap))
 		sum := 0.0
 		for _, r := range rows {
 			if r.Netamount != nil {
 				sum += *r.Netamount
 			}
 		}
-		out["total_net"] = sum
-		out["code"] = code
+		out.TotalNet = &sum
+		out.Code = code
 		return out
 	}
 
@@ -295,8 +304,17 @@ func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) 
 	if len(series) == 0 {
 		return out
 	}
-	out["points"] = series
-	out["code"] = code
+	out.Points = toAnySlice(series)
+	out.Code = code
+	return out
+}
+
+// toAnySlice 把具体类型的切片转为 []any（用于 FundflowStockCtx.Points 等 []any 字段）
+func toAnySlice[T any](s []T) []any {
+	out := make([]any, len(s))
+	for i, v := range s {
+		out[i] = v
+	}
 	return out
 }
 
@@ -316,15 +334,15 @@ func (s *Service) priceRows(code, end string, lookbackDays int) []db.DailyPriceC
 }
 
 // bucketDayPrices 指数日级量价按模式聚合（day 逐日 / week 自然周 / month 自然月）
-func bucketDayPrices(rows []db.DailyPriceCache, mode string) []map[string]any {
+func bucketDayPrices(rows []db.DailyPriceCache, mode string) []IndexPricePoint {
 	if len(rows) == 0 {
-		return []map[string]any{}
+		return []IndexPricePoint{}
 	}
-	dayPoint := func(r *db.DailyPriceCache) map[string]any {
-		return map[string]any{"date": r.TradeDate, "price": r.Close, "volume": r.Volume, "amount": r.Amount}
+	dayPoint := func(r *db.DailyPriceCache) IndexPricePoint {
+		return IndexPricePoint{Date: r.TradeDate, Price: r.Close, Volume: fval(r.Volume), Amount: fval(r.Amount)}
 	}
 	if mode == "day" {
-		out := make([]map[string]any, 0, len(rows))
+		out := make([]IndexPricePoint, 0, len(rows))
 		for i := range rows {
 			out = append(out, dayPoint(&rows[i]))
 		}
@@ -340,7 +358,7 @@ func bucketDayPrices(rows []db.DailyPriceCache, mode string) []map[string]any {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	out := make([]map[string]any, 0, len(keys))
+	out := make([]IndexPricePoint, 0, len(keys))
 	for _, key := range keys {
 		g := buckets[key]
 		last := g[len(g)-1]
@@ -357,20 +375,20 @@ func bucketDayPrices(rows []db.DailyPriceCache, mode string) []map[string]any {
 				amt += *r.Amount
 			}
 		}
-		out = append(out, map[string]any{"date": label, "price": last.Close, "volume": vol, "amount": amt})
+		out = append(out, IndexPricePoint{Date: label, Price: last.Close, Volume: vol, Amount: amt})
 	}
 	return out
 }
 
 // indexIntradaySeries 指数分时量价 → 指定窗口序列（对齐 index_intraday_window_series 输出键）
-func indexIntradaySeries(rows []db.IndexIntradayCache, windowMin int) []map[string]any {
+func indexIntradaySeries(rows []db.IndexIntradayCache, windowMin int) []IndexIntradayPoint {
 	if len(rows) == 0 {
-		return []map[string]any{}
+		return []IndexIntradayPoint{}
 	}
 	if windowMin <= 1 {
 		windowMin = 1
 	}
-	type acc struct{ vol, amt, pct float64 }
+	type acc struct{ vol, amt float64 }
 	agg := map[string]*acc{}
 	lastPrice := map[string]*float64{}
 	for i := range rows {
@@ -398,7 +416,7 @@ func indexIntradaySeries(rows []db.IndexIntradayCache, windowMin int) []map[stri
 	for _, a := range agg {
 		totalVol += a.vol
 	}
-	out := make([]map[string]any, 0, len(keys))
+	out := make([]IndexIntradayPoint, 0, len(keys))
 	cumVol, cumAmt := 0.0, 0.0
 	for _, ts := range keys {
 		a := agg[ts]
@@ -413,10 +431,11 @@ func indexIntradaySeries(rows []db.IndexIntradayCache, windowMin int) []map[stri
 		if v, ok := lastPrice[ts]; ok && v != nil {
 			p = roundF(*v, 3)
 		}
-		out = append(out, map[string]any{
-			"ts": ts, "price": p, "volume": roundF(a.vol, 0), "amount": roundF(a.amt, 0),
-			"cum": roundF(cumVol, 0), "cum_amount": roundF(cumAmt, 0),
-			"day_pct": roundF(dayPct, 2), "cum_pct": roundF(cumPct, 2),
+		out = append(out, IndexIntradayPoint{
+			Ts: ts, Price: p,
+			Volume: roundF(a.vol, 0), Amount: roundF(a.amt, 0),
+			CumVolume: roundF(cumVol, 0), CumAmount: roundF(cumAmt, 0),
+			DayPct: roundF(dayPct, 2), CumPct: roundF(cumPct, 2),
 		})
 	}
 	return out
@@ -471,25 +490,22 @@ func NormalizeCoherence(data map[string]any) map[string]any {
 func (s *Service) AnalyzeFundflow(code string, window any, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.requireModel()
 	ctx := s.BuildFundflowContext(code, window, true)
-	points, _ := ctx["points"].([]any)
-	if len(points) == 0 {
+	if len(ctx.Points) == 0 {
 		return nil, fmt.Errorf("该时间窗资金流数据为空，请先刷新资金流")
 	}
-	w, _ := ctx["window"].(string)
-	date, _ := ctx["date"].(string)
 	user := "资金流与股价数据：\n" + ctxJSON(ctx) + "\n\n" + fundflowSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		fundflowSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		fundflowSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "资金流")
 	if err != nil {
 		return nil, err
 	}
 	analysis := NormalizeFundflowAnalysis(raw)
 	modelTag := modelTagOf(modelCfg)
-	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, date, w, aiReportSummary(analysis))
-	_ = s.UpsertFundflowReport(code, date, "single", w, analysis, modelTag)
+	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, ctx.Date, ctx.Window, aiReportSummary(analysis))
+	_ = s.UpsertFundflowReport(code, ctx.Date, "single", ctx.Window, analysis, modelTag)
 	return map[string]any{
-		"mode": ctx["mode"], "code": code, "name": s.StockDisplayName(code),
-		"window": w, "date": date, "points_count": len(points), "analysis": analysis,
+		"mode": ctx.Mode, "code": code, "name": s.StockDisplayName(code),
+		"window": ctx.Window, "date": ctx.Date, "points_count": len(ctx.Points), "analysis": analysis,
 	}, nil
 }
 
@@ -570,19 +586,18 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 		return nil, fmt.Errorf("批量分析窗口过小，请选择 15 分钟及以上")
 	}
 	ctx := s.BuildBatchFundflowContext(tags, w, codes, weights)
-	stocks, _ := ctx["stocks"].([]map[string]any)
-	if len(stocks) == 0 {
+	if len(ctx.Stocks) == 0 {
 		return nil, fmt.Errorf("该组合暂无有资金流数据的标的，请先全量刷新")
 	}
 	user := "组合标的资金流数据（列表）：\n" + ctxJSON(ctx) + "\n\n" + batchFundflowSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		batchFundflowSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		batchFundflowSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "批量资金流")
 	if err != nil {
 		return nil, err
 	}
 	nameMap := map[string]string{}
-	for _, st := range stocks {
-		nameMap[st["code"].(string)] = st["name"].(string)
+	for _, st := range ctx.Stocks {
+		nameMap[st.Code] = st.Name
 	}
 	modelTag := modelTagOf(modelCfg)
 	reports := []map[string]any{}
@@ -601,7 +616,7 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 			}
 			analysis := NormalizeFundflowAnalysis(it)
 			log.Printf("[ai] 落库 资金流 code=%s window=%s source=batch %s", code, w, aiReportSummary(analysis))
-			_ = s.UpsertFundflowReport(code, ctx["date"].(string), "batch", w, analysis, modelTag)
+			_ = s.UpsertFundflowReport(code, ctx.Date, "batch", w, analysis, modelTag)
 			reports = append(reports, map[string]any{
 				"code": code, "name": nameMap[code],
 				"correlation": analysis["correlation"], "summary": analysis["summary"], "source": "batch",
@@ -612,7 +627,7 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 	coherence := NormalizeCoherence(cohRaw)
 	batchHTML := strv(raw["html"])
 	scope := "portfolio"
-	if m, _ := ctx["mode"].(string); m == "indices" {
+	if ctx.Mode == "indices" {
 		scope = "indices"
 	}
 	scopeKey := "全部"
@@ -621,12 +636,12 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 	} else if len(tags) > 0 {
 		scopeKey = strings.Join(sortedCopy(tags), ",")
 	}
-	_ = s.FlowCoh.Upsert(scope, scopeKey, ctx["date"].(string), w,
+	_ = s.FlowCoh.Upsert(scope, scopeKey, ctx.Date, w,
 		strv(coherence["correlation"]), strv(coherence["summary"]),
 		jsonList(coherence["points"]), strv(coherence["conclusion"]), batchHTML, modelTag)
 	return map[string]any{
-		"mode": ctx["mode"], "window": w, "date": ctx["date"],
-		"covered": ctx["covered"], "total": ctx["total"],
+		"mode": ctx.Mode, "window": w, "date": ctx.Date,
+		"covered": ctx.Covered, "total": ctx.Total,
 		"stocks_count": len(reports), "reports": reports,
 		"coherence": coherence, "html": batchHTML,
 	}, nil
@@ -646,7 +661,7 @@ func jsonList(v any) string {
 }
 
 // BuildBatchFundflowContext 批量资金流上下文：每只有资金流数据的标的，按统一窗口的紧凑序列
-func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []string, weights []float64) map[string]any {
+func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []string, weights []float64) *FundflowBatchCtx {
 	today := time.Now().Format("2006-01-02")
 	mode := "portfolio"
 	type member struct {
@@ -683,31 +698,30 @@ func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []str
 			}
 		}
 	}
-	out := map[string]any{"mode": mode, "window": w, "date": today, "covered": 0, "total": len(members), "stocks": []any{}}
-	stocks := []map[string]any{}
+	out := &FundflowBatchCtx{Mode: mode, Window: w, Date: today, Stocks: []FundflowStockMember{}}
 	for _, m := range members {
-		if s.IsIndex(m.code) || m.code == "" {
+		// codes 路径（显式指定的指数）不跳过 IsIndex；tags 路径（持仓组合）跳过指数
+		if len(codes) == 0 && s.IsIndex(m.code) {
+			continue
+		}
+		if m.code == "" {
 			continue
 		}
 		ctx := s.BuildFundflowContext(m.code, w, true)
-		points, _ := ctx["points"].([]any)
-		if len(points) == 0 {
-			if _, has := ctx["day_net"]; !has {
-				continue
-			}
+		if len(ctx.Points) == 0 && ctx.DayNet == nil {
+			continue
 		}
 		var price, pctChg any
 		if q := s.Quote.Get(m.code); q != nil {
 			price = q.Price
 			pctChg = q.PctChg
 		}
-		stocks = append(stocks, map[string]any{
-			"code": m.code, "name": m.name, "tag": m.tag, "weight_pct": m.weight,
-			"price": price, "pct_chg": pctChg,
-			"day_net": ctx["day_net"], "day_main_net": ctx["day_main_net"], "points": points,
+		out.Stocks = append(out.Stocks, FundflowStockMember{
+			Code: m.code, Name: m.name, Tag: m.tag, WeightPct: m.weight,
+			Price: price, PctChg: pctChg,
+			DayNet: ctx.DayNet, DayMainNet: ctx.DayMainNet, Points: ctx.Points,
 		})
 	}
-	out["stocks"] = stocks
-	out["covered"] = len(stocks)
+	out.Covered = len(out.Stocks)
 	return out
 }

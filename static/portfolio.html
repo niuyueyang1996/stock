@@ -142,31 +142,12 @@
         tabsWrap.appendChild(b);
       });
       show('score');
-      const currentTags = () => {
-        const t = tagsQS();
-        return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
-      };
-      // 统一入口按钮（评分区「🤖 AI诊组合」）执行勾选项；tab 切换只负责展示
-      window._pfRunAiExt = async (keys, intensity, overrides) => {
-        const tags = currentTags();
-        const dummy = document.createElement('span');
-        const ov = overrides || {};
-        for (const k of keys) {
-          if (k === 'news') {
-            await runNewsBatch({ tags, btn: dummy, panel: panels.news, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.news || null });
-          } else if (k === 'tech') {
-            await runTechBatch({ tags, btn: dummy, panel: panels.tech, onDone: loadAndRenderExt, skipEditor: true, intensity, systemPrompt: ov.tech || null });
-          } else if (k === 'flow') {
-            if (/^(1|5)m$/.test(pfFlowWindow)) { toast('批量分析窗口过小，请选择 15 分钟及以上'); continue; }
-            await runFundflowBatch({
-              tags, window: pfFlowWindow, btn: dummy, panel: panels.flow,
-              onDone: async () => { await loadAndRender(); renderPfFlow(); }, skipEditor: true, intensity, systemPrompt: ov.flow || null,
-            });
-          }
-        }
-      };
     })();
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
+    function currentTags() {
+      const t = tagsQS();
+      return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+    }
     let allTags = [];
     let tagCards = [];              // 全持仓按标签聚合（{tag,value_cny,day_pnl,count}，市值降序）
     let selectedTags = new Set();
@@ -277,11 +258,11 @@
       try {
         const [p, aiData] = await Promise.all([
           api('/portfolio' + tagsQS()),
-          api('/ai-scoring/portfolio' + tagsQS(), { silent: true }).catch(() => ({ configured: false, report: null })),
+          api('/ai/analyze-portfolio' + tagsQS(), { silent: true }).catch(() => ({ configured: false, score: null })),
         ]);
         lastPortfolio = p;
         aiConfigured = aiData.configured;
-        aiPortfolioReport = aiData.report || null;
+        aiPortfolioReport = aiData.score || null;
         if (!tagsLoaded) {                               // 首次加载后默认全选
           tagsLoaded = true;
           allTags = p.all_tags || [];
@@ -404,36 +385,16 @@
       wireAiHtmlButton(body, r);
     }
 
-    // 组合打分执行体（收敛弹窗勾选「组合打分」时直接调用，跳过指令编辑）
-    async function portfolioScoreDo(systemPrompt, intensity) {
-      try {
-        const body = { intensity: intensity || 'normal' };
-        if (systemPrompt) body.system_prompt = systemPrompt;
-        const job = await startBackgroundJob('/ai-scoring/portfolio' + tagsQS(), body, { toast: '组合打分已开始' });
-        await waitForJob(job.job_id);
-        const aiData = await api('/ai-scoring/portfolio' + tagsQS(), { silent: true });
-        aiPortfolioReport = aiData.report || null;
-        aiConfigured = aiData.configured;
-        renderSummary(lastPortfolio);
-        renderAiScore();
-        renderTagPrefList();
-        const score = aiPortfolioReport && aiPortfolioReport.report;
-        toast(score ? `AI 组合打分完成：${score.score} 分（${cardGrade(score) || '—'}）` : 'AI 组合打分完成');
-      } catch (e) {
-        toast('AI 打分失败：' + e.message, 5000);
-      }
-    }
-
     // 手动触发组合 AI 打分（保留：弹窗编辑指令后执行）
     function runPortfolioAi() {
-      openPromptEditor('portfolio', portfolioScoreDo);
+      openPromptEditor('portfolio', portfolioAiMenu);
     }
 
     // 组合 AI 统一入口（评分区唯一按钮）：勾选 组合打分/消息面/技术面/资金流（默认不勾）+ 强度
-    function portfolioAiMenu() {
+    async function portfolioAiMenu() {
       openAiExtPicker({
         title: '🤖 AI诊组合',
-        note: '勾选要分析的内容（默认不勾），将逐个进行分析（批量分析跟随当前标签筛选），进度见顶部；每项可单独「改提示词」。',
+        note: '勾选要分析的内容（默认不勾），将并发执行全部选中项（批量分析跟随当前标签筛选），进度见顶部；每项可单独「改提示词」。',
         withIntensity: true,
         items: [
           { key: 'score', label: '组合打分', desc: '（AI 质量评级 + 操作建议）', checked: false, promptKind: 'portfolio' },
@@ -442,16 +403,34 @@
           { key: 'flow', label: '批量资金流', desc: '（分时五档 × 组合净值）', checked: false, promptKind: 'batch' },
         ],
         onRun: async (keys, intensity, overrides) => {
-          const ov = overrides || {};
-          for (const k of keys) {
-            if (k === 'score') {
-              await portfolioScoreDo(ov.score || null, intensity);
-            }
+          if (/^(1|5)m$/.test(pfFlowWindow) && keys.includes('flow')) {
+            toast('批量分析窗口过小，请选择 15 分钟及以上'); return;
           }
-          // 扩展分析项（消息面/技术面/资金流批量）
-          const extKeys = keys.filter((k) => k !== 'score');
-          if (extKeys.length && typeof window._pfRunAiExt === 'function') {
-            await window._pfRunAiExt(extKeys, intensity, ov);
+          const tags = currentTags();
+          const body = {
+            tags: tags,
+            types: keys,
+            intensity: intensity || 'normal',
+            window: pfFlowWindow,
+            system_prompts: overrides || {},
+          };
+          try {
+            const result = await startBackgroundJob('/ai/analyze-portfolio', body, { toast: '组合 AI 分析已开始，并发执行 ' + keys.length + ' 项' });
+            await waitForJob(result.job_id);
+            // 一次拉取全部分析结果（打分/消息面/技术面/资金流）
+            const all = await api('/ai/analyze-portfolio?tags=' + encodeURIComponent(tags || '') + '&window=' + encodeURIComponent(pfFlowWindow), { silent: true });
+            aiPortfolioReport = all.score || null;
+            aiConfigured = !!all.configured;
+            // 重新渲染全部面板
+            renderSummary(lastPortfolio);
+            renderAiScore();
+            renderTagPrefList();
+            await loadAndRender();
+            await loadAndRenderExt();
+            renderPfFlow();
+            toast('组合 AI 分析完成');
+          } catch (e) {
+            toast('组合 AI 分析失败：' + e.message, 5000);
           }
         },
       });
@@ -721,9 +700,10 @@
       const panel = document.getElementById('flowBatchPanel');
       if (!panel) return;
       const nameMap = {};
+      const currentCodes = new Set((lastPortfolio && lastPortfolio.stocks || []).map((s) => s.code));
       ((lastPortfolio && lastPortfolio.stocks) || []).forEach((s) => { nameMap[s.code] = s.name; });
       const reports = Object.entries(flowReports)
-        .filter(([, r]) => r && r.source === 'batch')
+        .filter(([code, r]) => r && r.source === 'batch' && currentCodes.has(code))
         .map(([code, r]) => ({
           code, name: nameMap[code] || '', correlation: r.correlation, summary: r.summary,
           trade_date: r.trade_date, window: r.window, source: r.source,
@@ -761,13 +741,15 @@
       const codes = (lastPortfolio.stocks || []).map((s) => s.code);
       const nameMap = {};
       (lastPortfolio.stocks || []).forEach((s) => { nameMap[s.code] = s.name; });
-      // 组合标识（与资金流批量同口径）：tags 排序归一同 key，空/全选='全部'
       const t = tagsQS();
       const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
-      const key = tags ? tags.split(',').filter(Boolean).sort().join(',') : '全部';
-      const newsCoh = await loadNewsCoherence('portfolio', key);
-      const techCoh = await loadTechCoherence('portfolio', key);
-      const newsReports = await loadNewsReports(codes);
+      // 一次拉取消息面/技术面 coherence + 个股报告
+      const [allCoh, newsReports] = await Promise.all([
+        api('/ai/analyze-portfolio?tags=' + encodeURIComponent(tags || '') + '&window=' + encodeURIComponent(pfFlowWindow), { silent: true }).catch(() => ({})),
+        loadNewsReports(codes),
+      ]);
+      const newsCoh = allCoh.news || null;
+      const techCoh = allCoh.tech || null;
       const newsRows = Object.entries(newsReports)
         .filter(([, r]) => r && r.source === 'batch')
         .map(([code, r]) => ({ code, name: nameMap[code] || '',

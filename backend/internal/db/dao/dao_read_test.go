@@ -97,13 +97,13 @@ func TestPrevClose(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// 边界：等于该日取该日
-	if c := d.PrevClose(code, "2026-08-11"); c == nil || *c != 11.0 {
-		t.Fatalf("PrevClose(同日)=%v", c)
+	// PrevClose 返回该日之前最近一条收盘价（严格 < 该日，不含当日）
+	if c := d.PrevClose(code, "2026-08-11"); c == nil || *c != 10.0 {
+		t.Fatalf("PrevClose(08-11) 应返回 08-10 的 10.0, got %v", c)
 	}
-	// 边界：未到该日取前一
-	if c := d.PrevClose(code, "2026-08-12"); c == nil || *c != 12.0 {
-		t.Fatalf("PrevClose(当日)=%v", c)
+	// 最后一天的昨收 = 前一天
+	if c := d.PrevClose(code, "2026-08-12"); c == nil || *c != 11.0 {
+		t.Fatalf("PrevClose(08-12) 应返回 08-11 的 11.0, got %v", c)
 	}
 	// 无数据
 	if c := d.PrevClose(code, "2026-08-05"); c != nil {

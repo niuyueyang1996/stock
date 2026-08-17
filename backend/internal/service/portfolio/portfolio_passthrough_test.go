@@ -10,6 +10,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
@@ -49,6 +50,7 @@ func openPortfolioFull(t *testing.T, hkdRate *float64) (*Service, *holdings.Serv
 	cache := dao.NewCacheDAO(g)
 	idx := indices.New(g, nil, nil)
 	s := New(g, h, live, &fakeQuote{}, fx, cache, idx)
+	s.Cal = calendar.New(g)
 	return s, h, g, cache
 }
 
@@ -285,8 +287,9 @@ func TestDayPnlScenarios(t *testing.T) {
 func seedValuationSeries(g *gorm.DB, code string, days int, pe, pb float64, start string) {
 	t := start
 	written := 0
+	cal := calendar.New(g)
 	for written < days {
-		if isTradeDayStr(t) {
+		if cal.IsTradeDay(t) {
 			_ = g.Exec(`INSERT INTO valuation_history_cache(code,indicator,period,trade_date,value) VALUES(?,?,?,?,?)`,
 				code, "pe", "1y", t, pe).Error
 			_ = g.Exec(`INSERT INTO valuation_history_cache(code,indicator,period,trade_date,value) VALUES(?,?,?,?,?)`,
@@ -317,7 +320,7 @@ func TestComputePortfolioSeries(t *testing.T) {
 		seedValuationSeries(g, "A", 70, 10, 2, start)
 		seedValuationSeries(g, "B", 70, 20, 4, start)
 		cache := dao.NewCacheDAO(g)
-		s := &Service{Cache: cache}
+		s := &Service{Cache: cache, Cal: calendar.New(g)}
 		res := s.ComputePortfolioSeries(weights, cny, asOf)
 		p1 := res["1y"].(map[string]any)
 		if p1["sample_days"].(int) != 70 {
@@ -350,7 +353,7 @@ func TestComputePortfolioSeries(t *testing.T) {
 		seedValuationSeries(g, "A", 70, 10, 2, start)
 		seedValuationSeries(g, "B", 65, 20, 4, advanceWeekdays(start, 5))
 		cache := dao.NewCacheDAO(g)
-		s := &Service{Cache: cache}
+		s := &Service{Cache: cache, Cal: calendar.New(g)}
 		res := s.ComputePortfolioSeries(weights, cny, asOf)
 		p1 := res["1y"].(map[string]any)
 		if sDays := p1["sample_days"].(int); sDays != 65 {
@@ -363,7 +366,7 @@ func TestComputePortfolioSeries(t *testing.T) {
 		_, _, g, _ := openPortfolioEmpty(t)
 		seedValuationSeries(g, "A", 70, 10, 2, start)
 		cache := dao.NewCacheDAO(g)
-		s := &Service{Cache: cache}
+		s := &Service{Cache: cache, Cal: calendar.New(g)}
 		res := s.ComputePortfolioSeries(weights, cny, asOf)
 		p1 := res["1y"].(map[string]any)
 		if sDays := p1["sample_days"].(int); sDays != 0 {
@@ -380,7 +383,7 @@ func advanceWeekdays(start string, n int) string {
 	cur, _ := time.Parse("2006-01-02", start)
 	for n > 0 {
 		cur = cur.AddDate(0, 0, 1)
-		if isWeekday(cur) {
+		if cur.Weekday() != time.Saturday && cur.Weekday() != time.Sunday {
 			n--
 		}
 	}
@@ -564,6 +567,7 @@ func TestIndexVolume(t *testing.T) {
 	cache := dao.NewCacheDAO(g)
 	idx := indices.New(g, nil, nil)
 	s := New(g, nil, live, &indexQuote{&fakeQuote{}}, nil, cache, idx)
+	s.Cal = calendar.New(g)
 
 	// 与 IndexVolume 内部 resolveTradeDay("") 保持一致（周末返回最近工作日）
 	tradeDay, _ := s.resolveTradeDay("")

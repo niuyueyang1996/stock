@@ -5,6 +5,7 @@ package dividend
 import (
 	"context"
 	"log"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -144,8 +145,8 @@ func (s *Service) ApplyDividendAdjustments(ctx context.Context) map[string]any {
 	return map[string]any{"today": today, "applied": applied, "skipped": skipped, "failed": failed}
 }
 
-// round2 四舍五入保留 2 位小数
-func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+// round2 四舍五入保留 2 位小数（math.Round 对负值同样远离零舍入）
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 // round4 四舍五入保留 4 位小数
 func round4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }

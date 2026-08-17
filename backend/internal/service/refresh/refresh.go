@@ -450,11 +450,11 @@ func addDays(dateStr string, days int) string {
 	return t.AddDate(0, 0, days).Format("2006-01-02")
 }
 
-// round2 四舍五入保留 2 位小数
-func round2(v float64) float64 { return float64(int64(v*100+0.5)) / 100 }
+// round2 四舍五入保留 2 位小数（math.Round 对负值同样远离零舍入）
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
 
 // round4 四舍五入保留 4 位小数
-func round4(v float64) float64 { return float64(int64(v*10000+0.5)) / 10000 }
+func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 
 // SyncPeriodKline 周/月K同步（腾讯 fqkline，对齐 Python sync_kline_bars）：
 // force=false 增量：从缓存末条日期往前一个周期重拉（覆盖可能仍在变动/未收盘的当周当月），无缓存则全量；

@@ -4,6 +4,7 @@
 package calendar
 
 import (
+	"log"
 	"time"
 
 	"gorm.io/gorm"
@@ -29,7 +30,13 @@ func New(g *gorm.DB) *Service {
 func (s *Service) IsOpenDay(dateStr string) bool {
 	var cal db.TradeCalendar
 	if err := s.DB.Where("trade_date = ?", dateStr).First(&cal).Error; err == nil {
-		return cal.IsOpen == 1
+		open := cal.IsOpen == 1
+		// DB 记录覆盖周末默认：调休/节假日场景
+		t, _ := time.Parse("2006-01-02", dateStr)
+		if t.Weekday() == time.Saturday || t.Weekday() == time.Sunday {
+			log.Printf("[日历] %s DB覆盖 周末→%v（调休）", dateStr, open)
+		}
+		return open
 	}
 	t, err := time.Parse("2006-01-02", dateStr)
 	if err != nil {
@@ -72,6 +79,7 @@ func (s *Service) LastTradeDate(now time.Time) time.Time {
 		d = d.AddDate(0, 0, -1)
 		if d.Before(now.AddDate(0, 0, -30)) {
 			// 兜底：30 天内找不到交易日，回退纯周末近似
+			log.Printf("[日历] LastTradeDate 30天内无交易日 %s，触发周末近似兜底", now.Format("2006-01-02"))
 			return s.lastTradeDateFallback(now)
 		}
 	}
@@ -125,7 +133,11 @@ func (s *Service) ResolveTradeDay(now time.Time, asOf string) (string, bool) {
 	} else {
 		resolved = s.LastTradeDate(raw)
 	}
-	return resolved.Format("2006-01-02"), resolved.Format("2006-01-02") != raw.Format("2006-01-02")
+	adjusted := resolved.Format("2006-01-02") != raw.Format("2006-01-02")
+	if adjusted {
+		log.Printf("[日历] ResolveTradeDay %s→%s（asOf=%q）", raw.Format("2006-01-02"), resolved.Format("2006-01-02"), asOf)
+	}
+	return resolved.Format("2006-01-02"), adjusted
 }
 
 // ---- 市场状态 ----
