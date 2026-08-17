@@ -191,7 +191,14 @@ func Setup(r *gin.Engine, s *Services) {
 				"legu_code": d.LeguCode, "pe_source": d.PeSource, "pb_source": d.PbSource,
 			}
 			item["quote"] = indexQuoteOut(s, d.Code)
-			item["turnover"] = s.Portfolio.TurnoverCompare(d.Code)
+			if s.Portfolio != nil {
+				item["turnover"] = s.Portfolio.TurnoverCompare(d.Code)
+			} else {
+				item["turnover"] = map[string]any{
+					"amount": nil, "prev_amount": nil, "chg_pct": nil,
+					"state": nil, "as_of": nil, "basis": nil,
+				}
+			}
 			out = append(out, item)
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
