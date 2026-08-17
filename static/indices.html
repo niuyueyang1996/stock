@@ -25,7 +25,7 @@
       <div id="rightContent">
         <div id="summary"></div>
         <div class="panel" id="fundflowPanel">
-          <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">读图：浅蓝柱=各期成交额（高低看放缩），深灰折线=累计成交额；悬停看较上期变化。分钟窗=当日分时，天窗=多日聚合</span></h2>
+          <h2>指数资金面（全量价）<span class="sub" id="pfFlowNote">读图：浅蓝柱=各期成交量（高低看放缩），深灰折线=累计成交量；悬停看较上期变化。分钟窗=当日分时，天窗=多日聚合</span></h2>
           <div class="flow-toolbar">
             <div id="pfFlowTabs"></div>
             <div style="flex:1"></div>
@@ -99,15 +99,15 @@
 
       const volLabel = (t) => {
         if (!t || t.chg_pct == null || !t.state) {
-          return '<span class="tc-vol flat" title="请先「刷新全部指数」拉取分时后再看额较昨">额较昨 —</span>';
+          return '<span class="tc-vol flat" title="请先「刷新全部指数」拉取分时后再看量较昨">量较昨 —</span>';
         }
         const word = t.state === 'expand' ? '放量' : (t.state === 'shrink' ? '缩量' : '持平');
         const est = t.basis === 'scaled' ? '估' : '';
         const tip = t.basis === 'intraday' && t.as_of
-          ? `成交额较昨同时段实算（至 ${t.as_of}）`
+          ? `成交量较昨同时段实算（至 ${t.as_of}）`
           : (t.basis === 'scaled' && t.as_of
-            ? `成交额较昨同时段估算（至 ${t.as_of}；昨分时未缓存，按交易进度折算。刷新后可落昨分时改实算）`
-            : '成交额较昨全日');
+            ? `成交量较昨同时段估算（至 ${t.as_of}；昨分时未缓存，按交易进度折算。刷新后可落昨分时改实算）`
+            : '成交量较昨全日');
         const prev = t.prev_amount != null ? `，昨约 ${fmtAmt(t.prev_amount)}` : '';
         const sign = t.chg_pct > 0 ? '+' : '';
         return `<span class="tc-vol ${t.state}" title="${tip}${prev}">${word}${est} ${sign}${t.chg_pct}%</span>`;
@@ -118,7 +118,7 @@
         const s = selected.has(d.code);
         const q = d.quote || {};
         const t = d.turnover || {};
-        const amt = t.amount != null ? t.amount : q.amount;
+        const vol = t.amount != null ? t.amount : q.volume;
         return `
         <div class="tag-card ${s ? 'on' : ''}" data-i="${i}" title="点击切换（勾选 = 参与汇总）">
           <div class="tc-head">
@@ -130,7 +130,7 @@
             <span class="tc-day ${cls(q.pct_chg)}">${q.pct_chg == null ? '—' : signed(q.pct_chg) + '%'}</span>
           </div>
           <div class="tc-meta">
-            <span class="tc-amt">额 <b>${amt == null ? '—' : fmtAmt(amt)}</b></span>
+            <span class="tc-amt">量 <b>${vol == null ? '—' : fmtAmt(vol)}</b></span>
             ${volLabel(t)}
           </div>
         </div>`;
@@ -161,7 +161,7 @@
         if (job && job.job_id) await waitForJob(job.job_id);
         loaded = false;
         await loadPage();
-        toast('指数刷新完成，侧栏已更新成交额较昨');
+        toast('指数刷新完成，侧栏已更新成交量较昨');
       } catch (e) {
         toast('指数刷新失败：' + e.message, 5000);
       } finally {
@@ -276,7 +276,7 @@
         if (panel) panel.style.display = '';               // 成功渲染恢复面板可见
         const note = document.getElementById('pfFlowNote');
         if (note) {
-          note.textContent = '读图：浅蓝柱=各期成交额（柱高看放缩），深灰线=累计额；悬停看较上期%。覆盖 '
+          note.textContent = '读图：浅蓝柱=各期成交量（柱高看放缩），深灰线=累计量；悬停看较上期%。覆盖 '
             + d.covered + '/' + d.total + ' 指数 · 分钟窗=当日分时，天窗=多日';
         }
         setPanelSummary('fundflowPanel',
@@ -332,7 +332,7 @@
     const showEmpty = () => { right.style.display = 'none'; noSel.style.display = 'block'; };
     const showContent = () => { right.style.display = ''; noSel.style.display = 'none'; };
 
-    // 拉全量指数列表（含点位/成交额）：只在首次 / 手动刷新后调用；切换选中不重拉
+    // 拉全量指数列表（含点位/成交量）：只在首次 / 手动刷新后调用；切换选中不重拉
     async function loadList() {
       try {
         const keep = selected;

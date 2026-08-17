@@ -118,19 +118,8 @@ func (s *Service) UpdateTrade(tradeID int64, fields map[string]any) (map[string]
 		amount = round(price*quantity, 4)
 	}
 	// 汇率计算在写事务外（汇率落库需独立连接，事务内会锁库）
-	currency := s.DB.CurrencyOf(code)
-	var fxRate, amountCny *float64
-	if currency == "CNY" {
-		v1, v2 := 1.0, round(amount, 2)
-		fxRate, amountCny = &v1, &v2
-	} else if s.FxEnsure != nil {
-		rate := s.FxEnsure("HKD", tradeTime[:10])
-		if rate != nil {
-			v1 := round(*rate, 6)
-			v2 := round(amount**rate, 2)
-			fxRate, amountCny = &v1, &v2
-		}
-	}
+	_, fxRate, amountCny := s.tradeFx(code, tradeTime, amount)
+	s.ensureListedStock(code, nil, s.resolveTradeCurrency(code))
 	if err := s.DB.DB.Exec(
 		`UPDATE trades SET code=?, side=?, price=?, quantity=?, amount=?, fee=?, trade_time=?, note=?, fx_rate=?, amount_cny=? WHERE id=?`,
 		code, side, price, quantity, amount, fee, tradeTime, note, fxRate, amountCny, tradeID).Error; err != nil {

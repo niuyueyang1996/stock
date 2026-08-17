@@ -18,7 +18,7 @@
         <div id="searchBox"></div>
         <button class="btn" id="buyBtn" onclick="quickTrade('buy')">买入</button>
         <button class="btn danger" id="sellBtn" onclick="quickTrade('sell')">卖出</button>
-        <button class="btn" id="aiBtn" onclick="aiAnalyzeMenu()" title="勾选要分析的 AI 内容（诊股/消息面/技术面/资金流，默认不勾）">🤖 AI诊股</button>
+        <button class="btn" id="aiBtn" onclick="aiAnalyzeMenu()" title="勾选要分析的 AI 内容（默认不勾）">🤖 AI诊股</button>
         <button class="btn" id="refreshDyn" onclick="refreshStock(false)">⚡ 更新此股行情</button>
         <button class="btn primary" id="refreshFull" onclick="refreshStock(true)">🔄 完整更新此股</button>
       </div>
@@ -115,9 +115,9 @@
       <div class="empty" id="flowEmpty" style="display:none;padding:20px">资金流暂无数据 — 今日可能未开盘/无成交，打开页面时已自动更新。</div>
     </div>
 
-    <div class="panel panel-action-bar">
+    <div class="panel panel-action-bar" id="aiExtBar">
       <b>🤖 AI 扩展分析</b>
-      <span class="muted panel-action-note">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI」勾选分析</span>
+      <span class="muted panel-action-note" id="aiExtNote">消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI诊股」勾选分析</span>
     </div>
 
     <div class="panel" id="newsAiPanel">
@@ -541,18 +541,28 @@
     }
 
     // AI 分析统一入口：勾选（默认一个都不勾）+ 强度 + 每项「改提示词」→ 单次 API 调用
+    // 指数：只提供技术面 + 资金面（无公司财报/新闻，不跑 10 维诊股与消息面）
     async function aiAnalyzeMenu() {
       if (!currentCode) return toast('请先选择股票');
-      openAiExtPicker({
-        title: '🤖 AI诊股',
-        note: '勾选要分析的内容（默认不勾），后端一次性执行全部选中项，进度见顶部；每项可单独「改提示词」。',
-        withIntensity: true,
-        items: [
+      const idx = isIndexMode || lastIsIndex;
+      const items = idx
+        ? [
+          { key: 'tech', label: '技术面', desc: '（日/周/月K 结构，截至最近交易日）', checked: false, promptKind: 'technical' },
+          { key: 'flow', label: '资金面', desc: '（量价 × 指数价格，当前窗口）', checked: false, promptKind: 'fundflow' },
+        ]
+        : [
           { key: 'diagnose', label: 'AI 诊股', desc: '（周期性/护城河/基本面/增长/股息/估值/同业/资金面/消息面/技术面 10 维）', checked: false, promptKind: 'stock' },
           { key: 'news', label: '消息面', desc: '（自动抓取该股近期新闻）', checked: false, promptKind: 'news' },
           { key: 'tech', label: '技术面', desc: '（日/周/月K 结构，截至最近交易日）', checked: false, promptKind: 'technical' },
           { key: 'flow', label: '资金流', desc: '（分时五档 × 股价，当前窗口）', checked: false, promptKind: 'fundflow' },
-        ],
+        ];
+      openAiExtPicker({
+        title: idx ? '🤖 AI分析（指数）' : '🤖 AI诊股',
+        note: idx
+          ? '指数只分析技术面与资金面（默认不勾），后端一次性执行选中项，进度见顶部；每项可单独「改提示词」。'
+          : '勾选要分析的内容（默认不勾），后端一次性执行全部选中项，进度见顶部；每项可单独「改提示词」。',
+        withIntensity: true,
+        items,
         onRun: async (keys, intensity, overrides) => {
           const code = currentCode;
           // 构建每项的自定义提示词
@@ -568,9 +578,9 @@
             await waitForJob(result.job_id);
             // 一次性读取全部结果
             const all = await api('/ai/analyze/' + encodeURIComponent(code) + '?window=' + encodeURIComponent(flowWindow), { silent: true });
-            // 逐项渲染
-            if (all.diagnose) renderAiReport(all.diagnose);
-            if (all.news) {
+            // 逐项渲染（指数不展示诊股/消息面，即使缓存里有旧报告）
+            if (!idx && all.diagnose) renderAiReport(all.diagnose);
+            if (!idx && all.news) {
               renderNewsPanel(document.getElementById('newsAiBody'), all.news);
               const meta = document.getElementById('newsAiMeta');
               if (meta && all.news.as_of) meta.textContent = (all.news.model_name ? all.news.model_name + ' · ' : '') + all.news.as_of.replace('T', ' ');
@@ -846,10 +856,10 @@
       setPanelSummary(meta, parts.length ? parts.join(sumSep()) : '增速 / 标签 / 跟踪指数');
     }
 
-    // 指数模式：隐藏个股专属面板（无五档/估值/财务/诊股），保留 点位卡 + 资金流趋势 + 刷新
+    // 指数模式：隐藏个股专属面板（无五档/财务/10维诊股/消息面），保留点位卡 + 技术面 + 资金面 + AI入口
     function toggleStockPanels(idxMode) {
       // 个股专属面板：指数模式隐藏；估值/分位面板由 render 按「是否有估值数据」单独控制（指数可拿到乐咕估值）
-      // 消息面 AI 指数模式隐藏（不该编造公司新闻），技术面 AI 保留（指数有日K）
+      // 消息面 / 10 维诊股报告指数隐藏；右上角 AI 按钮保留（弹窗仅技术面+资金面）
       ['growthPanel', 'growthTablePanel', 'finPanel', 'flowBarsPanel', 'metaPanel', 'newsAiPanel']
         .forEach((id) => { const el = document.getElementById(id); if (el) el.style.display = idxMode ? 'none' : ''; });
       // 非指数（个股/ETF）：估值/分位面板始终显示；指数由 render 分支按数据决定
@@ -863,7 +873,18 @@
       // 非指数：显示由 loadAiReport/clearStockView 管理，这里只强制隐藏指数模式
       if (aiReport) aiReport.style.display = idxMode ? 'none' : aiReport.style.display;
       const aiBtn = document.getElementById('aiBtn');
-      if (aiBtn) aiBtn.style.display = idxMode ? 'none' : '';
+      if (aiBtn) {
+        aiBtn.style.display = '';
+        aiBtn.title = idxMode
+          ? '勾选技术面 / 资金面（默认不勾）'
+          : '勾选要分析的 AI 内容（诊股/消息面/技术面/资金流，默认不勾）';
+      }
+      const extNote = document.getElementById('aiExtNote');
+      if (extNote) {
+        extNote.textContent = idxMode
+          ? '技术面（日/周/月K） / 资金面（量价）· 点右上角「🤖 AI诊股」勾选分析'
+          : '消息面（自动抓取近期新闻） / 技术面（日/周/月K） / 资金流 · 点右上角「🤖 AI诊股」勾选分析';
+      }
     }
 
     // 资金流趋势面板标题：指数模式换「指数资金面（全量价）」口径
@@ -871,7 +892,7 @@
       const t = document.getElementById('flowTitle');
       if (!t) return;
       t.innerHTML = idxMode
-        ? '指数资金面（全量价） <span class="sub">腾讯量价：Σ累计成交额折线 + 各期成交额柱 + 指数价格 · 分钟窗口=当日分时，天窗口=多日聚合</span>'
+        ? '指数资金面（全量价） <span class="sub">腾讯量价：Σ累计成交量折线 + 各期成交量柱 + 指数价格 · 分钟窗口=当日分时，天窗口=多日聚合</span>'
         : '资金流趋势 <span class="sub">腾讯分笔 · 按单笔成交额自适应分档 · 分钟窗口=当日分时，天窗口=多日聚合 · 正=净流入 负=净流出</span>';
     }
 
@@ -931,7 +952,7 @@
     function render(d) {
       document.getElementById('title').textContent = `${d.code} ${d.name}`;
       setAsOfHint(document.getElementById('asOfPicker'), d);
-      // 指数模式：隐藏买卖/个股面板（无五档/估值/财务），资金流趋势改量价渲染；AI 资金流照常可用
+      // 指数模式：隐藏买卖/个股面板（无五档/财务/诊股/消息面），资金流趋势改量价；AI 入口保留（仅技术面+资金面）
       const idxMode = !!d.is_index;
       lastIsIndex = idxMode;
       toggleStockPanels(idxMode);

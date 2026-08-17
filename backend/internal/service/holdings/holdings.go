@@ -43,7 +43,7 @@ type HoldingResult struct {
 
 // Rebuild 按 id 顺序重放 code 的全部交易，重建持仓
 func (s *Service) Rebuild(code string) (*HoldingResult, error) {
-	currency := s.DB.CurrencyOf(code)
+	currency := s.resolveTradeCurrency(code)
 	trades := s.DB.TradesByCode(code)
 	qty, avgCost, totalBuy := 0.0, 0.0, 0.0
 	avgCostCny, totalBuyCny := 0.0, 0.0
@@ -137,23 +137,9 @@ func (s *Service) RecordTrade(code, side string, price, quantity, fee float64, t
 		tradeTime = time.Now().Format("2006-01-02 15:04:05")
 	}
 	amount := round(price*quantity, 4)
-	currency := s.DB.CurrencyOf(code)
 	// 汇率计算在事务外（汇率落库需独立连接，事务内会锁库）
-	var fxRate, amountCny *float64
-	if currency == "CNY" {
-		v1, v2 := 1.0, round(amount, 2)
-		fxRate, amountCny = &v1, &v2
-	} else if s.FxEnsure != nil {
-		rate := s.FxEnsure("HKD", tradeTime[:10])
-		if rate != nil {
-			v1 := round(*rate, 6)
-			v2 := round(amount**rate, 2)
-			fxRate, amountCny = &v1, &v2
-		}
-	}
-	if name != nil {
-		_ = s.DB.EnsureStock(code, *name, "sh", "", currency)
-	}
+	currency, fxRate, amountCny := s.tradeFx(code, tradeTime, amount)
+	s.ensureListedStock(code, name, currency)
 	t := &dao.Trade{
 		Code: code, Side: side, Price: price, Quantity: quantity, Amount: amount,
 		Fee: fee, TradeTime: tradeTime, Note: strptr(note), FxRate: fxRate, AmountCny: amountCny,
@@ -249,6 +235,44 @@ func round(v float64, digits int) float64 {
 	return math.Round(v*p) / p
 }
 
+// resolveTradeCurrency 交易计价币种：五位港股代码一律 HKD，不信 stocks 表缺省 CNY。
+func (s *Service) resolveTradeCurrency(code string) string {
+	if isHKCode5(code) {
+		return "HKD"
+	}
+	return s.DB.CurrencyOf(code)
+}
+
+// tradeFx 按币种折算成交金额。港股缺汇率返回 nil amount_cny（不按 1:1）。
+func (s *Service) tradeFx(code, tradeTime string, amount float64) (currency string, fxRate, amountCny *float64) {
+	currency = s.resolveTradeCurrency(code)
+	if currency == "CNY" {
+		v1, v2 := 1.0, round(amount, 2)
+		return currency, &v1, &v2
+	}
+	if s.FxEnsure != nil && len(tradeTime) >= 10 {
+		if rate := s.FxEnsure("HKD", tradeTime[:10]); rate != nil {
+			v1 := round(*rate, 6)
+			v2 := round(amount**rate, 2)
+			return currency, &v1, &v2
+		}
+	}
+	return currency, nil, nil
+}
+
+// ensureListedStock 建/纠正 stocks 的 market+currency；name 为空时冲突不覆盖已有名称。
+func (s *Service) ensureListedStock(code string, name *string, currency string) {
+	mkt := "sh"
+	if isHKCode5(code) {
+		mkt = "hk"
+	}
+	n := ""
+	if name != nil {
+		n = *name
+	}
+	_ = s.DB.EnsureStock(code, n, mkt, "", currency)
+}
+
 // AdjustCost 成本/股数调整（POST /holdings/{code}/cost-adjust）。
 // amount：成本变化额（正=加 负=减）；deltaQty：股数变化（拆股/送股）。
 // 插入 adjust 交易并重放；isDividend=1 标记计入累计分红。
@@ -257,18 +281,8 @@ func (s *Service) AdjustCost(code string, amount, deltaQty float64, note string,
 		tradeTime = time.Now().Format("2006-01-02 15:04:05")
 	}
 	// adjust 用微秒时间戳避免与同日交易 UNIQUE 冲突（对齐 Python：adjust 排在同日买入前）
-	currency := s.DB.CurrencyOf(code)
-	var fxRate, amountCny *float64
-	if currency == "CNY" {
-		v1, v2 := 1.0, round(amount, 2)
-		fxRate, amountCny = &v1, &v2
-	} else if s.FxEnsure != nil {
-		if rate := s.FxEnsure("HKD", tradeTime[:10]); rate != nil {
-			v1 := round(*rate, 6)
-			v2 := round(amount**rate, 2)
-			fxRate, amountCny = &v1, &v2
-		}
-	}
+	currency, fxRate, amountCny := s.tradeFx(code, tradeTime, amount)
+	s.ensureListedStock(code, name, currency)
 	dv := 0
 	if isDividend {
 		dv = 1

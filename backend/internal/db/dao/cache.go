@@ -102,6 +102,15 @@ func (d *CacheDAO) PurgeWeekend(code string) {
 	_ = d.DB.Exec("DELETE FROM daily_price_cache WHERE code=? AND (strftime('%w', trade_date) IN ('0','6'))", code)
 }
 
+// PurgeDailyPricesNotIn 删除 [start,end] 内不在 keepDates 的日K（源未返回的节假日占位假K）。
+func (d *CacheDAO) PurgeDailyPricesNotIn(code, start, end string, keepDates []string) error {
+	if code == "" || start == "" || end == "" || len(keepDates) == 0 {
+		return nil
+	}
+	return d.DB.Where("code = ? AND trade_date >= ? AND trade_date <= ? AND trade_date NOT IN ?",
+		code, start, end, keepDates).Delete(&DailyPrice{}).Error
+}
+
 // PurgeFundflowFuture 清理 code+trade_date 下超前时刻的 分钟分时（盘前污染）
 func (d *CacheDAO) PurgeFundflowFuture(code, date, ts string) {
 	_ = d.DB.Exec("DELETE FROM fundflow_15m_cache WHERE code=? AND trade_date=? AND ts>?", code, date, ts)

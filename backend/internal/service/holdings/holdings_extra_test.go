@@ -415,4 +415,39 @@ func TestGetHoldings(t *testing.T) {
 	}
 }
 
+// TestHKFirstTradeInfersCurrency 无 stocks 行时五位代码按 HKD 折算，并写入 market=hk。
+func TestHKFirstTradeInfersCurrency(t *testing.T) {
+	svc, g := openSvc(t)
+	rate := 0.91
+	svc.FxEnsure = func(currency, rateDate string) *float64 { return &rate }
+	name := "腾讯控股"
+	_, h, err := svc.RecordTrade("00700", "buy", 400, 100, 0, "2026-01-01 10:00:00", "", &name, false)
+	if err != nil {
+		t.Fatalf("first hk buy: %v", err)
+	}
+	if h.Currency != "HKD" {
+		t.Fatalf("currency=%q, want HKD", h.Currency)
+	}
+	if h.MissingFx || h.AvgCostCny == nil || *h.AvgCostCny != 364 {
+		t.Fatalf("应折算 400*0.91=364, got %+v", h)
+	}
+	var st struct{ Name, Market, Currency string }
+	g.Raw("SELECT name, market, currency FROM stocks WHERE code='00700'").Scan(&st)
+	if st.Name != "腾讯控股" || st.Market != "hk" || st.Currency != "HKD" {
+		t.Fatalf("stocks 行 %+v", st)
+	}
+	// 无 name：仍建 hk/HKD，不把已有名称改成代码
+	_, h2, err := svc.RecordTrade("00700", "buy", 400, 100, 0, "2026-01-02 10:00:00", "", nil, false)
+	if err != nil {
+		t.Fatalf("second buy: %v", err)
+	}
+	if h2.Currency != "HKD" || h2.AvgCostCny == nil || *h2.AvgCostCny != 364 {
+		t.Fatalf("第二笔仍应 HKD 折算: %+v", h2)
+	}
+	g.Raw("SELECT name, market FROM stocks WHERE code='00700'").Scan(&st)
+	if st.Name != "腾讯控股" || st.Market != "hk" {
+		t.Fatalf("无 name 不应覆盖名称: %+v", st)
+	}
+}
+
 func float64ptr(v float64) *float64 { return &v }

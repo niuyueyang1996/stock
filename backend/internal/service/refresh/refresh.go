@@ -29,7 +29,7 @@ import (
 
 // 常量（对齐 refresh.py）
 const (
-	historyDays     = 760 // 日K历史窗口（约2年）
+	historyDays     = 760 // 日K历史窗口（约3年，全量/增量统一，对齐 Python FUNDFLOW_HISTORY_DAYS）
 	historyMinDays  = 60  // 稀疏判定下限
 	fundflowMinDays = 60  // 资金流历史窗口下限
 	intradayEndHour = 16
@@ -89,7 +89,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 		lastDate = latest.TradeDate
 	}
 	var start string
-	// 计算 start（对齐 Python）
+	// 计算 start（对齐 Python：force 全量 / 增量首次均用 760 天窗口）
 	if force {
 		start = now.AddDate(0, 0, -historyDays).Format("2006-01-02")
 	} else if lastDate == today {
@@ -113,7 +113,8 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 	if start > today {
 		return map[string]any{"code": code, "fetched": 0, "reason": "cached"}
 	}
-	bars, err := s.Market.DailyBars(ctx, code, start, today)
+	bars, err := s.fetchDailyBars(ctx, code, start, today)
+	log.Printf("[syncDailyBars] code=%s start=%s today=%s fetched_bars=%d err=%v", code, start, today, len(bars), err)
 	if err != nil || len(bars) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "source_fail"}
 	}
@@ -121,6 +122,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 	var filtered []barRow
 	for _, b := range bars {
 		if s.Cal != nil && !s.Cal.IsTradeDay(b.Date) {
+			log.Printf("[syncDailyBars] filter skip %s: not trade day", b.Date)
 			continue
 		}
 		if s.Cal != nil && s.Cal.IsBeforeOpen(now) && b.Date >= today {
@@ -128,6 +130,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 		}
 		filtered = append(filtered, barRow{Date: b.Date, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume, Amount: b.Amount})
 	}
+	log.Printf("[syncDailyBars] code=%s bars=%d filtered=%d", code, len(bars), len(filtered))
 	s.Cache.PurgeWeekend(code)
 	if len(filtered) > 0 {
 		prev := s.Cache.PrevClose(code, filtered[0].Date)
@@ -147,6 +150,11 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 			prev = &b.Close
 		}
 		_ = s.Cache.UpsertDailyPrices(rows)
+		keep := make([]string, len(filtered))
+		for i, b := range filtered {
+			keep[i] = b.Date
+		}
+		_ = s.Cache.PurgeDailyPricesNotIn(code, start, today, keep)
 		if s.Cal != nil && s.Cal.IsClosed(now) && s.Cache.GetDailyPrice(code, today) != nil {
 			s.Cache.MarkClosed(code, today)
 		}
@@ -304,6 +312,11 @@ func (s *Service) syncStockFull(ctx context.Context, code string) map[string]any
 // SyncIndexFundflow 单指数资金流（量价分时）同步（对齐 Python refresh_index：out["fundflow"] = sync_fundflow）
 func (s *Service) SyncIndexFundflow(ctx context.Context, code string) {
 	s.syncFundflow(ctx, code, time.Now())
+}
+
+// SyncIndexDailyBars 单指数日K同步（对齐 Python refresh_index：out["daily"] = sync_daily_bars(code, now)）
+func (s *Service) SyncIndexDailyBars(ctx context.Context, code string) map[string]any {
+	return s.syncDailyBars(ctx, code, time.Now(), false)
 }
 
 // ShouldRunDynamicLoop 盘中动态刷新窗口（16:30 后停止）
@@ -526,7 +539,7 @@ func (s *Service) SyncPeriodKline(code string, force bool) {
 
 // fetchPeriodBars 拉取周期K（腾讯 fqkline）
 func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end string, count int) []db.PeriodPrice {
-	symbol := toSymbol2(code)
+	symbol := s.resolveSymbol(code)
 	rows := s.Tencent.Kline(ctx, symbol, period, start, end, count)
 	out := make([]db.PeriodPrice, 0, len(rows))
 	for _, r := range rows {
@@ -554,10 +567,41 @@ func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end 
 	return out
 }
 
-// toSymbol2 腾讯代码符号（sh/sz/hk 前缀）
+// fetchDailyBars 拉取日K（指数从 index_defs 取正确 symbol，非指数走 Market 降级链）。
+func (s *Service) fetchDailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
+	// 指数：从 index_defs 取 sh/sz 正确 symbol，直接走腾讯 Kline（对齐 Python inst.daily_bars）
+	if s.IsIndex != nil && s.IsIndex(code) {
+		symbol := s.resolveSymbol(code)
+		rows := s.Tencent.Kline(ctx, symbol, "day", start, end, 800)
+		if len(rows) == 0 {
+			return nil, fmt.Errorf("index kline empty: %s", symbol)
+		}
+		return market.NormalizeBars(rows, code, start, end), nil
+	}
+	return s.Market.DailyBars(ctx, code, start, end)
+}
+
+// resolveSymbol 解析腾讯代码符号：指数代码从 index_defs.symbol 读取（避免 000xxx 上海指数被误标为 sz），
+// 其余走 toSymbol2 兜底。
+func (s *Service) resolveSymbol(code string) string {
+	if s.IsIndex != nil && s.IsIndex(code) {
+		var symbol string
+		s.DB.Raw("SELECT symbol FROM index_defs WHERE code=?", code).Scan(&symbol)
+		if symbol != "" {
+			return symbol
+		}
+	}
+	return toSymbol2(code)
+}
+
+// toSymbol2 腾讯代码符号（sh/sz/hk/bj 前缀；注意：不适用于 000xxx 上海指数代码）
 func toSymbol2(code string) string {
 	if len(code) == 5 {
 		return "hk" + code
+	}
+	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") ||
+		strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
+		return "bj" + code
 	}
 	if strings.HasPrefix(code, "6") {
 		return "sh" + code
@@ -633,7 +677,7 @@ func isHKCode5(code string) bool {
 
 // syncIndexIntraday 指数分时量价同步（腾讯 mkline，对齐 Python sync_fundflow 指数分支）：
 // 一次请求含跨日分钟（今+昨尾盘，约 320 分钟），按交易日拆分逐日落 index_intraday_cache，
-// 供「较昨同时段成交额」用真实数据而非进度估算。
+// 供「较昨同时段成交量」用真实数据而非进度估算。
 func (s *Service) syncIndexIntraday(ctx context.Context, code string) map[string]any {
 	if s.Tencent == nil {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}

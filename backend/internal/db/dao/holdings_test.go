@@ -38,6 +38,23 @@ func TestHoldingsDAO(t *testing.T) {
 		t.Fatalf("缺省币种应 CNY: %q", cur)
 	}
 
+	// 冲突：空 name 不覆盖已有名称，但纠正 market/currency
+	if err := d.EnsureStock("00700", "", "sh", "", "CNY"); err != nil {
+		t.Fatalf("EnsureStock 冲突: %v", err)
+	}
+	var st struct{ Name, Market, Currency string }
+	d.DB.Raw("SELECT name, market, currency FROM stocks WHERE code='00700'").Scan(&st)
+	if st.Name != "腾讯控股" || st.Market != "sh" || st.Currency != "CNY" {
+		t.Fatalf("空 name 冲突应保留名称并更新 market/currency, got %+v", st)
+	}
+	if err := d.EnsureStock("00700", "腾讯控股", "hk", "", "HKD"); err != nil {
+		t.Fatalf("EnsureStock 纠正: %v", err)
+	}
+	d.DB.Raw("SELECT name, market, currency FROM stocks WHERE code='00700'").Scan(&st)
+	if st.Market != "hk" || st.Currency != "HKD" {
+		t.Fatalf("应纠正为 hk/HKD, got %+v", st)
+	}
+
 	// BackfillStockName 幂等不覆盖 currency
 	if err := d.BackfillStockName("00700", "Tencent", "HK"); err != nil {
 		t.Fatalf("BackfillStockName: %v", err)

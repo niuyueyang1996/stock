@@ -96,8 +96,8 @@ func normalizeIndexQuote(parts []string, code string) *model.Quote {
 	return q
 }
 
-// normalizeBars K线原始行（[date, open, close, high, low, volume] 或中文列）→ Bar（[start,end] 区间）
-func normalizeBars(rows [][]string, code, start, end string) []model.Bar {
+// NormalizeBars K线原始行（[date, open, close, high, low, volume] 或中文列）→ Bar（[start,end] 区间）
+func NormalizeBars(rows [][]string, code, start, end string) []model.Bar {
 	var bars []model.Bar
 	for _, r := range rows {
 		if len(r) < 5 {

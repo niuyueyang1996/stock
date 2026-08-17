@@ -155,6 +155,9 @@ func (s *Service) passthrough(code string, quantity float64) map[string]any {
 			return nil
 		}
 	}
+	if totalShares == nil || *totalShares == 0 || math.IsInf(*totalShares, 0) || math.IsNaN(*totalShares) {
+		return nil // 推算股本无效则剔除，避免 Inf/NaN 污染组合
+	}
 	ratio := quantity / *totalShares
 	var profitSeries, revenueSeries []map[string]any
 	if fin.ProfitSeries != nil {
@@ -475,12 +478,10 @@ func (s *Service) ComputePortfolio(tags []string) map[string]any {
 	// 增长率/前瞻：穿透式（同一覆盖集合归属合计，亏损股负值参与）
 	var ttmCur, ttmPrev, staticSum, staticPrev, revCur, revPrev, revACur, revAPrev float64
 	var hasTTMPrev, hasStatic, hasStaticPrev, hasRevPrev, hasRevAPrev bool
-	fwdProfitAttr, fwdNAAttr, fwdValue := 0.0, 0.0, 0.0
+	fwdProfitAttr, fwdNAAttr, fwdValuePE, fwdValuePB := 0.0, 0.0, 0.0, 0.0
 	var hasFwdProfit, hasFwdNA bool
 	for _, st := range fundSet {
 		ps, _ := st["passthrough"].(map[string]any)
-		psProfit := derefF(ps["attr_profit"])
-		psNA := derefF(ps["attr_net_assets"])
 		if v := derefF(ps["ttm_cur"]); ps["ttm_cur"] != nil {
 			ttmCur += v
 		}
@@ -510,23 +511,18 @@ func (s *Service) ComputePortfolio(tags []string) map[string]any {
 			revAPrev += v
 			hasRevAPrev = true
 		}
-		// 前瞻 PE/PB：预测净利/净资产穿透（亏损股负值参与）
-		if v := derefF(st["fwd_net_profit"]); st["fwd_net_profit"] != nil && psProfit != 0 && ps["total_shares"] != nil {
-			ts := derefF(ps["total_shares"])
-			qty := derefF(st["quantity"])
-			if ts > 0 {
-				fwdProfitAttr += qty / ts * v
-				fwdValue += derefF(st["value_cny"])
-				hasFwdProfit = true
-			}
+		// 前瞻 PE/PB：两套市值分子；仅分母合计为 0 才 N/A（盈亏平衡股利润为 0 仍进分子）
+		ts := derefF(ps["total_shares"])
+		qty := derefF(st["quantity"])
+		if st["fwd_net_profit"] != nil && ts > 0 {
+			fwdProfitAttr += qty / ts * derefF(st["fwd_net_profit"])
+			fwdValuePE += derefF(st["value_cny"])
+			hasFwdProfit = true
 		}
-		if v := derefF(st["fwd_net_assets"]); st["fwd_net_assets"] != nil && psNA != 0 && ps["total_shares"] != nil {
-			ts := derefF(ps["total_shares"])
-			qty := derefF(st["quantity"])
-			if ts > 0 {
-				fwdNAAttr += qty / ts * v
-				hasFwdNA = true
-			}
+		if st["fwd_net_assets"] != nil && ts > 0 {
+			fwdNAAttr += qty / ts * derefF(st["fwd_net_assets"])
+			fwdValuePB += derefF(st["value_cny"])
+			hasFwdNA = true
 		}
 	}
 	var profitYoy, profitYoyStatic, revenueYoy, revenueYoyStatic *float64
@@ -548,16 +544,16 @@ func (s *Service) ComputePortfolio(tags []string) map[string]any {
 	}
 	var fwdPE, fwdPB *float64
 	if hasFwdProfit && fwdProfitAttr != 0 {
-		v := round2(fwdValue / fwdProfitAttr)
+		v := round2(fwdValuePE / fwdProfitAttr)
 		fwdPE = &v
 	}
 	if hasFwdNA && fwdNAAttr != 0 {
-		v := round2(fwdValue / fwdNAAttr)
+		v := round2(fwdValuePB / fwdNAAttr)
 		fwdPB = &v
 	}
 	fwdPBCoverage := 0.0
 	if totalValue > 0 {
-		fwdPBCoverage = math.Round(fwdValue/totalValue*10000) / 10000
+		fwdPBCoverage = math.Round(fwdValuePB/totalValue*10000) / 10000
 	}
 	// 静态/前瞻 ROE 与增长率（穿透式）
 	var roeStatic, fwdROE, fwdProfitYoy, fwdRevenueYoy *float64
@@ -1676,8 +1672,8 @@ func (s *Service) attachPriceLine(out map[string]any, codes []string, qty map[st
 // ---------- 指数量价等权求和 ----------
 
 // IndexVolume 多指数量价等权求和（对齐 Python combo_index_volume，等价旧 comboIndexVolume）：
-// 仅指数参与（GetIndexDef 非空）；腾讯指数分时/日K只有量无额，用「行情实时成交额 ÷ 最新交易日量」
-// 得到每单位量→金额比例，再乘各分钟/各日量派生成交额，等权加总，叠加各指数价格线。读缓存零网络。
+// 仅指数参与（GetIndexDef 非空）；腾讯分时/日K无成交额，直接对成交量等权加总，叠加各指数价格线。
+// JSON 点上的 amount 字段承载成交量（前端 resample/bucket 复用该键）。读缓存零网络。
 func (s *Service) IndexVolume(codes []string) map[string]any {
 	tradeDay, _ := s.resolveTradeDay("")
 	members := []string{}
@@ -1691,30 +1687,14 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 			"mode": "index", "intraday": []any{}, "daily": []any{},
 			"covered": 0, "total": total, "trade_date": tradeDay,
 			"as_of": tradeDay, "as_of_adjusted": tradeDay != time.Now().Format("2006-01-02"),
-			"market_status": s.marketStatusStr(), "as_of_requested": nil, "note": "指数等权量价求和",
+			"market_status": s.marketStatusStr(), "as_of_requested": nil, "note": "指数等权成交量求和",
 		}
 	}
 	if len(members) == 0 {
 		return base(len(members))
 	}
 
-	// 每指数「每单位量→成交额」比例：行情实时成交额 / 最新交易日量
-	scale := map[string]float64{}
-	for _, code := range members {
-		amount, vol := 0.0, 0.0
-		if q := s.Quote.Get(code); q != nil && q.Amount != nil {
-			amount = *q.Amount
-		}
-		var last db.DailyPriceCache
-		if err := s.DB.Where("code = ?", code).Order("trade_date DESC").First(&last).Error; err == nil && last.Volume != nil {
-			vol = *last.Volume
-		}
-		if vol > 0 {
-			scale[code] = amount / vol
-		}
-	}
-
-	// 当日分时 Σ成交额 + 各指数分时价（同 ts 覆盖取末分钟）
+	// 当日分时 Σ成交量 + 各指数分时价（同 ts 覆盖取末分钟）
 	intraday := map[string]float64{}
 	intradayPrice := map[string]map[string]*float64{}
 	covered := 0
@@ -1725,7 +1705,7 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 		}
 		for i := range rows {
 			r := &rows[i]
-			intraday[r.Ts] += derefF(r.Volume) * scale[code]
+			intraday[r.Ts] += derefF(r.Volume)
 			m := intradayPrice[code]
 			if m == nil {
 				m = map[string]*float64{}
@@ -1750,13 +1730,13 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 		intradayList = append(intradayList, map[string]any{"ts": ts, "amount": round2(intraday[ts]), "prices": prices})
 	}
 
-	// 近 2 年 Σ成交额 + 各指数日收盘
-	dailyAmt := map[string]float64{}
+	// 近 2 年 Σ成交量 + 各指数日收盘
+	dailyVol := map[string]float64{}
 	dailyClose := map[string]map[string]*float64{}
 	start := addDays(tradeDay, -fundflowHistoryDays)
 	for _, code := range members {
 		for _, r := range s.Cache.GetDailyPrices(code, start, tradeDay) {
-			dailyAmt[r.TradeDate] += derefF(r.Volume) * scale[code]
+			dailyVol[r.TradeDate] += derefF(r.Volume)
 			m := dailyClose[code]
 			if m == nil {
 				m = map[string]*float64{}
@@ -1766,7 +1746,7 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 		}
 	}
 	var dateList []string
-	for d := range dailyAmt {
+	for d := range dailyVol {
 		dateList = append(dateList, d)
 	}
 	sort.Strings(dateList)
@@ -1778,12 +1758,187 @@ func (s *Service) IndexVolume(codes []string) map[string]any {
 				closes[code] = v
 			}
 		}
-		dailyList = append(dailyList, map[string]any{"date": d, "amount": round2(dailyAmt[d]), "closes": closes})
+		dailyList = append(dailyList, map[string]any{"date": d, "amount": round2(dailyVol[d]), "closes": closes})
 	}
 
 	out := base(len(members))
 	out["intraday"] = intradayList
 	out["daily"] = dailyList
 	out["covered"] = covered
+	return out
+}
+
+// ---------- 指数成交量较昨（对齐 Python indices.index_turnover_compare + _a_share_session_progress） ----------
+
+// AShareSessionProgress A 股交易时段进度 0~1（09:30-11:30 + 13:00-15:00，共 240 分钟）。
+// as_of='HH:MM'。对齐 Python _a_share_session_progress。
+func AShareSessionProgress(asOf string) float64 {
+	parts := strings.SplitN(asOf, ":", 2)
+	if len(parts) < 2 {
+		return 0.0
+	}
+	hh, err1 := strconv.Atoi(parts[0])
+	mm, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0.0
+	}
+	mins := hh*60 + mm
+	// 09:30=570, 11:30=690, 13:00=780, 15:00=900
+	var elapsed int
+	switch {
+	case mins <= 570:
+		elapsed = 0
+	case mins <= 690:
+		elapsed = mins - 570
+	case mins < 780:
+		elapsed = 120
+	case mins <= 900:
+		elapsed = 120 + (mins - 780)
+	default:
+		elapsed = 240
+	}
+	v := float64(elapsed) / 240.0
+	if v < 0 {
+		v = 0
+	}
+	if v > 1 {
+		v = 1
+	}
+	return v
+}
+
+// indexIntradayCoversAsOf 昨分时在 asOf 之前是否够「同时段」样本。
+// 期望分钟 ≈ 交易进度×240；实际点数 < 80% 视为残缺（仅尾盘、仅上午等），不能实算。
+func indexIntradayCoversAsOf(rows []db.IndexIntradayCache, asOf string) bool {
+	exp := AShareSessionProgress(asOf) * 240
+	if exp < 1 {
+		return false
+	}
+	n := 0
+	for i := range rows {
+		if rows[i].Ts != "" && rows[i].Ts <= asOf {
+			n++
+		}
+	}
+	return float64(n) >= exp*0.8
+}
+
+// TurnoverCompare 指数成交量 + 较上一交易日同时段成交量（纯缓存零网络）。
+// JSON 仍用 amount/prev_amount 承载量（前端侧栏键不变）。
+func (s *Service) TurnoverCompare(code string) map[string]any {
+	out := map[string]any{
+		"amount": nil, "prev_amount": nil, "chg_pct": nil,
+		"state": nil, "as_of": nil, "basis": nil,
+	}
+	// 1) 当日成交量（行情实时量）
+	q := s.Quote.Get(code)
+	var todayVol float64
+	if q != nil && q.Volume != nil {
+		todayVol = *q.Volume
+		out["amount"] = todayVol
+	}
+
+	// 2) 找上一交易日（近 21 天内）
+	today := time.Now().Format("2006-01-02")
+	start := time.Now().AddDate(0, 0, -21).Format("2006-01-02")
+	bars := s.Cache.GetDailyPrices(code, start, today)
+	var prevDates []string
+	for _, r := range bars {
+		if r.TradeDate < today {
+			prevDates = append(prevDates, r.TradeDate)
+		}
+	}
+	if len(prevDates) == 0 {
+		return out
+	}
+	prevDate := prevDates[len(prevDates)-1]
+	prevBar := s.Cache.GetDailyPrice(code, prevDate)
+	prevVolFull := 0.0
+	if prevBar != nil {
+		prevVolFull = derefF(prevBar.Volume)
+	}
+
+	setVolChg := func(todayV, prevV float64) {
+		if prevV <= 0 || todayV < 0 {
+			return
+		}
+		chg := (todayV/prevV - 1.0) * 100.0
+		out["chg_pct"] = math.Round(chg*10) / 10
+		out["prev_amount"] = math.Round(prevV)
+		if chg > 3 {
+			out["state"] = "expand"
+		} else if chg < -3 {
+			out["state"] = "shrink"
+		} else {
+			out["state"] = "flat"
+		}
+	}
+
+	// 3) 今日分时 + 昨日分时
+	todayIntra := s.Cache.GetIndexIntraday(code, today)
+	prevIntra := s.Cache.GetIndexIntraday(code, prevDate)
+
+	if len(todayIntra) > 0 {
+		asOf := todayIntra[len(todayIntra)-1].Ts
+		intraVol := 0.0
+		for _, r := range todayIntra {
+			intraVol += derefF(r.Volume)
+		}
+		if asOf != "" {
+			out["as_of"] = asOf
+		}
+		if todayVol <= 0 {
+			todayVol = intraVol
+			if todayVol > 0 {
+				out["amount"] = todayVol
+			}
+		}
+		if todayVol <= 0 {
+			return out
+		}
+
+		progress := AShareSessionProgress(asOf)
+		// 收盘后同时段=全日：两边都用日K，不再拿分时加总（残缺上午/尾盘会假放量）
+		if progress >= 0.99 {
+			if len(bars) > 0 && bars[len(bars)-1].TradeDate == today {
+				if v := derefF(bars[len(bars)-1].Volume); v > 0 {
+					todayVol = v
+					out["amount"] = todayVol
+				}
+			}
+			if prevVolFull > 0 {
+				out["basis"] = "daily"
+				setVolChg(todayVol, prevVolFull)
+			}
+			return out
+		}
+
+		if indexIntradayCoversAsOf(prevIntra, asOf) {
+			prevVol := 0.0
+			for _, r := range prevIntra {
+				if r.Ts <= asOf {
+					prevVol += derefF(r.Volume)
+				}
+			}
+			out["basis"] = "intraday"
+			setVolChg(todayVol, prevVol)
+		} else if prevVolFull > 0 {
+			out["basis"] = "scaled"
+			setVolChg(todayVol, prevVolFull*progress)
+		}
+		return out
+	}
+
+	// 4) 无今日分时：全日量对比
+	if todayVol <= 0 && len(bars) > 0 && bars[len(bars)-1].TradeDate == today {
+		todayVol = derefF(bars[len(bars)-1].Volume)
+		if todayVol > 0 {
+			out["amount"] = todayVol
+		}
+	}
+	if todayVol > 0 && prevVolFull > 0 {
+		out["basis"] = "daily"
+		setVolChg(todayVol, prevVolFull)
+	}
 	return out
 }

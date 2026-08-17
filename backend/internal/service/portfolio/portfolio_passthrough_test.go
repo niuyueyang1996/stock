@@ -1,6 +1,7 @@
 package portfolio
 
 import (
+	"fmt"
 	"math"
 	"path/filepath"
 	"testing"
@@ -18,6 +19,21 @@ import (
 )
 
 // ===== 工具 =====
+
+// isWeekday 是否工作日（周一~周五）
+func isWeekday(t time.Time) bool {
+	d := t.Weekday()
+	return d != time.Saturday && d != time.Sunday
+}
+
+// isTradeDayStr 日期字符串是否工作日（简化版：只判周末，不查交易日历）
+func isTradeDayStr(s string) bool {
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return false
+	}
+	return isWeekday(t)
+}
 
 // openPortfolioFull 构造带 汇率(Cache, Fx) + 估值服务 + 指数服务 的组合 Service。
 // fx 缺失时仍可为 CNY 股票提供 1:1；HKD 股票缺 fx 会被剔除（不按 1:1）。
@@ -170,6 +186,32 @@ func TestPassthroughPortfolioLoss(t *testing.T) {
 	cw := pf["coverage_weight"].(map[string]any)
 	if c := fval(cw["pe"]); c != 1.0 {
 		t.Fatalf("coverage.pe = %v, 期望 1.0（亏损也全程参与）", c)
+	}
+}
+
+// ===== 盈亏平衡股：attr_profit=0 仍进前瞻 PB 市值分子 =====
+
+func TestFwdPBIncludesZeroProfitStock(t *testing.T) {
+	s, h, g, _ := openPortfolioFull(t, nil)
+	insertStock(g, "600519", "贵州茅台", "sh", "CNY")
+	insertStock(g, "000333", "美的集团", "sz", "CNY")
+	buyStock(t, h, "600519", 100, "2026-01-01") // value 1000
+	buyStock(t, h, "000333", 100, "2026-01-01") // value 1000
+	// 盈亏平衡股：TTM 利润 0，但有上年净资产 → 能算出 fwd_net_assets
+	seedFinancial(g, "600519", 1000, 0, 2000)
+	_ = g.Exec("UPDATE financial_cache SET last_year_net_assets=2000 WHERE code=?", "600519").Error
+	// 盈利股：fwd_net_assets = 2000+1000 = 3000（增速/支付率均为 0）
+	seedFinancial(g, "000333", 1000, 1000, 2000)
+	_ = g.Exec("UPDATE financial_cache SET last_year_net_assets=2000 WHERE code=?", "000333").Error
+
+	pf := portfolioPePf(t, s)
+	// A attr_fwd_na=200，B attr_fwd_na=300；分子含两票市值 2000 → PB=4
+	// 旧门控用 TTM 利润≠0，会把 A 的 1000 从分子剔掉得到 2
+	if pb := fval(pf["fwd_pb"]); pb != 4 {
+		t.Fatalf("fwd_pb = %v, 期望 4（盈亏平衡股市值须计入分子）", pb)
+	}
+	if cov := fval(pf["fwd_pb_coverage"]); cov != 1 {
+		t.Fatalf("fwd_pb_coverage = %v, 期望 1", cov)
 	}
 }
 
@@ -410,19 +452,24 @@ func openPortfolioEmpty(t *testing.T) (*Service, *holdings.Service, *gorm.DB, *d
 // ===== 组合分位（样本≥60，分段排序）=====
 
 func TestSegmentedPercentile(t *testing.T) {
-	// 分段顺序：正小→大 → 0 → 负(绝对值大→小)
+	// 分段顺序：正小→大 → 0 → 负(绝对值大→小)  8,15,30,0,-100,-20,-5
 	hist := []float64{8, 15, 30, 0, -100, -20, -5}
-	// target=-20 → segKey(2,20)：计数所有正(3)、0(1)、及 |负|<=20 的(-5,-20)，不含 -100
+	// target=-20 → (2,-20)：正3+0+(-100,-20)，不含更靠后的 -5
 	tgt := fptr(-20.0)
 	if got := *segmentedWeightedCount(hist, tgt); got != 6 {
-		t.Fatalf("分段计数应 6（去掉 -100），实为 %d", got)
+		t.Fatalf("分段计数应 6（含 -100 不含 -5），实为 %d", got)
 	}
-	// target=-100 → segKey(2,100)：正3+0+3负=7
+	// target=-100 → (2,-100)：正3+0+自身=5，不含 -20/-5
 	tgt2 := fptr(-100.0)
-	if got := *segmentedWeightedCount(hist, tgt2); got != 7 {
-		t.Fatalf("分段计数应 7，实为 %d", got)
+	if got := *segmentedWeightedCount(hist, tgt2); got != 5 {
+		t.Fatalf("分段计数应 5，实为 %d", got)
 	}
-	// target=8（正段最小）→ 分段升序 8,15,30,0,-5,-20,-100 中仅 8 自身 ≤8（其余正/零/负都更大）
+	// target=-10 → (2,-10)：正3+0+(-100,-20)=6，不含 -5（85.7%）
+	tgt10 := fptr(-10.0)
+	if got := *segmentedWeightedCount(hist, tgt10); got != 6 {
+		t.Fatalf("分段计数应 6（-10 介于 -20 与 -5），实为 %d", got)
+	}
+	// target=8（正段最小）→ 仅 8 自身
 	tgt3 := fptr(8.0)
 	if got := *segmentedWeightedCount(hist, tgt3); got != 1 {
 		t.Fatalf("分段计数应 1（仅 8 本身），实为 %d", got)
@@ -571,9 +618,7 @@ func TestIndexVolume(t *testing.T) {
 
 	// 与 IndexVolume 内部 resolveTradeDay("") 保持一致（周末返回最近工作日）
 	tradeDay, _ := s.resolveTradeDay("")
-	// 最新日K量（scale=amount/volume 分母）
 	_ = g.Exec(`INSERT INTO daily_price_cache(code,trade_date,close,volume) VALUES('000300','`+tradeDay+`',4000,1e6)`).Error
-	// 分时量（amount=1e9, volume=1e6 → 每单位成交额 scale=1000）
 	_ = g.Exec(`INSERT INTO index_intraday_cache(code,trade_date,ts,price,volume) VALUES('000300','`+tradeDay+`','09:35',4000,1000)`).Error
 
 	out := s.IndexVolume([]string{"000300"})
@@ -584,8 +629,8 @@ func TestIndexVolume(t *testing.T) {
 	if len(intr) != 1 {
 		t.Fatalf("intraday 点数 = %d, 期望 1", len(intr))
 	}
-	if v := fval(intr[0]["amount"]); v != 1e6 { // 1000 量 × 1000 scale
-		t.Fatalf("index intraday amount = %v, 期望 1000000", v)
+	if v := fval(intr[0]["amount"]); v != 1000 {
+		t.Fatalf("index intraday amount = %v, 期望 1000（直接成交量）", v)
 	}
 	if p, ok := intr[0]["prices"].(map[string]any)["000300"].(*float64); !ok || p == nil || *p != 4000 {
 		t.Fatalf("index intraday price 缺失: %+v", intr[0]["prices"])
@@ -594,7 +639,28 @@ func TestIndexVolume(t *testing.T) {
 	if len(daily) != 1 {
 		t.Fatalf("daily 点数 = %d, 期望 1", len(daily))
 	}
-	if v := fval(daily[0]["amount"]); v != 1e9 { // 日K量 1e6 × scale 1000
-		t.Fatalf("index daily amount = %v, 期望 1e9（volume 1e6×scale 1000）", v)
+	if v := fval(daily[0]["amount"]); v != 1e6 {
+		t.Fatalf("index daily amount = %v, 期望 1e6（日K volume）", v)
+	}
+}
+
+func TestIndexIntradayCoversAsOf(t *testing.T) {
+	if indexIntradayCoversAsOf(nil, "15:00") {
+		t.Fatal("空分时不应覆盖")
+	}
+	tail := []db.IndexIntradayCache{{Ts: "14:50"}, {Ts: "15:00"}}
+	if indexIntradayCoversAsOf(tail, "15:00") {
+		t.Fatal("仅尾盘收盘后不应当同时段")
+	}
+
+	morning := make([]db.IndexIntradayCache, 0, 121)
+	for mins := 9*60 + 30; mins <= 11*60+30; mins++ {
+		morning = append(morning, db.IndexIntradayCache{Ts: fmt.Sprintf("%02d:%02d", mins/60, mins%60)})
+	}
+	if indexIntradayCoversAsOf(morning, "15:00") {
+		t.Fatal("仅上午、对照收盘不应当同时段")
+	}
+	if !indexIntradayCoversAsOf(morning, "10:30") {
+		t.Fatal("仅上午、对照 10:30 应够同时段")
 	}
 }

@@ -906,9 +906,9 @@ function fundflowPrice(el, points, windowLabel) {
   return chart;
 }
 
-// 量价图：Σ累计成交额折线（右轴粗线）+ 各期成交额柱（右轴）+ 各指数价格折线（左轴）。
-// points 为 [{ts|date, amount(该期成交额), prices|closes:{code:price}}]，names={code:指数名}。
-// 成交额从起始逐期累积（单调递增），避免当期波动造成「越看越少」的错觉；柱显示各期独立量。
+// 量价图：Σ累计成交量折线（右轴粗线）+ 各期成交量柱（右轴）+ 各指数价格折线（左轴）。
+// points 为 [{ts|date, amount(该期成交量), prices|closes:{code:price}}]，names={code:指数名}。
+// 成交量从起始逐期累积（单调递增），避免当期波动造成「越看越少」的错觉；柱显示各期独立量。
 function indexVolumePrice(el, points, windowLabel, names) {
   if (!points || !points.length) { clearChart(el); return null; }
   const chart = initChart(el);
@@ -928,16 +928,16 @@ function indexVolumePrice(el, points, windowLabel, names) {
       lineStyle: { width: 1.6, color: PALETTE[i % PALETTE.length] },
       emphasis: { focus: 'series' },
     })),
-    { name: '各期成交额', type: 'bar', yAxisIndex: 1, data: amounts, barWidth: '50%',
+    { name: '各期成交量', type: 'bar', yAxisIndex: 1, data: amounts, barWidth: '50%',
       itemStyle: { color: 'rgba(59,130,246,.32)' } },
-    { name: '累计成交额', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 1, data: cum,
+    { name: '累计成交量', type: 'line', smooth: true, symbol: 'none', yAxisIndex: 2, data: cum,
       itemStyle: { color: '#495057' },                      // 图例色块颜色 = 折线颜色
       lineStyle: { width: 3, color: '#495057' },
       emphasis: { focus: 'series' } },
   ];
   const zr = defaultZoomRange(labels.length, 60);
   chart.setOption({
-    title: { text: windowLabel + ' · 成交额变化（柱=各期 / 线=累计）+ 价格', left: 'center', textStyle: { fontSize: 13 } },
+    title: { text: windowLabel + ' · 成交量变化（柱=各期 / 线=累计）+ 价格', left: 'center', textStyle: { fontSize: 13 } },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross' },
       formatter: (ps) => {
@@ -951,16 +951,16 @@ function indexVolumePrice(el, points, windowLabel, names) {
           const tag = pct > 3 ? '放量' : (pct < -3 ? '缩量' : '持平');
           deltaLine = `较上期 ${tag} ${(pct >= 0 ? '+' : '') + pct.toFixed(1)}%（${d >= 0 ? '+' : ''}${fmtAmt(d)}）`;
         } else if (prev != null) {
-          deltaLine = '较上期 —（上期无额）';
+          deltaLine = '较上期 —（上期无量）';
         }
         const lines = [
           '<b>' + labels[i] + '</b>',
-          '各期成交额  ' + fmtAmt(cur),
+          '各期成交量  ' + fmtAmt(cur),
           deltaLine,
-          '累计成交额  ' + fmtAmt(cum[i]),
+          '累计成交量  ' + fmtAmt(cum[i]),
         ].filter(Boolean);
         for (const p of ps) {
-          if (!['累计成交额', '各期成交额'].includes(p.seriesName) && p.value != null) {
+          if (!['累计成交量', '各期成交量'].includes(p.seriesName) && p.value != null) {
             lines.push(p.seriesName + '  ' + fmtNum(p.value));
           }
         }
@@ -975,8 +975,10 @@ function indexVolumePrice(el, points, windowLabel, names) {
     yAxis: [
       { type: 'value', scale: true, name: '点位', nameTextStyle: { fontSize: 10, color: '#8b95a5' },
         axisLabel: { fontSize: 10 } },
-      { type: 'value', scale: true, name: '成交额', nameTextStyle: { fontSize: 10, color: '#8b95a5' },
+      // 各期柱单独轴（min=0），避免与累计量共用右轴时被压成一条缝
+      { type: 'value', min: 0, name: '成交量', nameTextStyle: { fontSize: 10, color: '#8b95a5' },
         splitLine: { show: false }, axisLabel: { fontSize: 10, formatter: (v) => fmtAmt(v) } },
+      { type: 'value', min: 0, show: false },
     ],
     dataZoom: [
       { type: 'inside', start: zr.start, end: zr.end },
@@ -988,7 +990,7 @@ function indexVolumePrice(el, points, windowLabel, names) {
   return chart;
 }
 
-// 分时 1 分钟量价 → 目标窗口聚合（Σ成交额、价格取窗口末分钟），与后端 index_intraday_window_series 同构
+// 分时 1 分钟量价 → 目标窗口聚合（Σ成交量、价格取窗口末分钟），与后端 index_intraday_window_series 同构
 function resampleIndexVolume(points, windowMin) {
   if (windowMin <= 1) return points;
   const buckets = new Map();
@@ -1004,7 +1006,7 @@ function resampleIndexVolume(points, windowMin) {
   return [...buckets.values()].sort((a, b) => (a.ts < b.ts ? -1 : 1));
 }
 
-// 逐日量价 → 聚合模式分组（day=逐日、week=自然周、month=自然月，Σ成交额、价格取组末交易日），与后端 _bucket_day_prices 同构
+// 逐日量价 → 聚合模式分组（day=逐日、week=自然周、month=自然月，Σ成交量、价格取组末交易日），与后端 _bucket_day_prices 同构
 function bucketIndexVolume(daily, bucket) {
   if (!daily.length) return daily;
   if (bucket === 'week' || bucket === 'month') {
@@ -1045,6 +1047,7 @@ function klineChart(el, bars, opts) {
   const chart = initChart(el);
   if (!chart) return null;
   const o = opts || {};
+  bars = filterKlinePriceOutliers(bars || []);
   const n = bars.length;
   if (!n) {
     el.innerHTML = '<div class="empty" style="padding:24px">暂无K线数据 — 打开页面时已自动更新。</div>';
@@ -1056,6 +1059,12 @@ function klineChart(el, bars, opts) {
   const defaultShow = Math.max(1, Math.min(n, o.defaultShow || 250));
   const startPct = ((n - defaultShow) / n) * 100;
   const fmt = (v) => (v == null || v === '' ? '—' : Number(v).toFixed(2));
+  const axisPad = (v, sign) => {
+    if (v == null || v.min == null || v.max == null) return null;
+    const span = v.max - v.min;
+    const pad = span > 0 ? span * 0.08 : Math.abs(v.min || v.max || 1) * 0.02;
+    return sign < 0 ? v.min - pad : v.max + pad;
+  };
   chart.setOption({
     animation: false,
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
@@ -1087,8 +1096,12 @@ function klineChart(el, bars, opts) {
       },
     ],
     yAxis: [
-      { scale: true, splitLine: { lineStyle: { color: CHART_COLORS.grid } }, axisLabel: { color: CHART_COLORS.muted } },
-      { gridIndex: 1, splitLine: { show: false }, axisLabel: { show: false } },
+      {
+        type: 'value', scale: true,
+        min: (v) => axisPad(v, -1), max: (v) => axisPad(v, 1),
+        splitLine: { lineStyle: { color: CHART_COLORS.grid } }, axisLabel: { color: CHART_COLORS.muted },
+      },
+      { type: 'value', min: 0, gridIndex: 1, splitLine: { show: false }, axisLabel: { show: false } },
     ],
     dataZoom: [
       { type: 'inside', xAxisIndex: [0, 1], start: startPct, end: 100 },
@@ -1113,4 +1126,19 @@ function klineChart(el, bars, opts) {
     ],
   });
   return chart;
+}
+
+// 丢掉相对收盘中位数偏离过大的 K 线（指数缓存混入 ~10 点假K 时，Y 轴会被拉成一条直线）
+function filterKlinePriceOutliers(bars) {
+  const closes = (bars || []).map((b) => Number(b && b.close)).filter((n) => Number.isFinite(n) && n > 0);
+  if (closes.length < 8) return bars || [];
+  const sorted = closes.slice().sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  if (!(med > 0)) return bars;
+  const lo = med / 20, hi = med * 20;
+  const out = bars.filter((b) => {
+    const c = Number(b && b.close);
+    return Number.isFinite(c) && c >= lo && c <= hi;
+  });
+  return out.length >= 8 ? out : bars;
 }

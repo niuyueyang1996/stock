@@ -91,10 +91,18 @@ func (d *HoldingsDAO) GetHoldings(activeOnly bool) []Holding {
 	return rows
 }
 
-// EnsureStock 幂等写股票基础信息
+// EnsureStock 幂等写股票基础信息。name 为空时插入用 code 占位，冲突不覆盖已有名称。
 func (d *HoldingsDAO) EnsureStock(code, name, market, tag, currency string) error {
-	return d.DB.Exec("INSERT INTO stocks(code, name, market, tag, currency) VALUES(?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET name=excluded.name, currency=excluded.currency",
-		code, name, market, tag, currency).Error
+	insertName := name
+	if insertName == "" {
+		insertName = code
+	}
+	return d.DB.Exec(`INSERT INTO stocks(code, name, market, tag, currency) VALUES(?,?,?,?,?)
+		ON CONFLICT(code) DO UPDATE SET
+			name=CASE WHEN ? != '' THEN excluded.name ELSE stocks.name END,
+			market=excluded.market,
+			currency=excluded.currency`,
+		code, insertName, market, tag, currency, name).Error
 }
 
 // BackfillStockName 名称回填（对齐 Python stock_detail：只 INSERT code/name/market，冲突仅 SET name）

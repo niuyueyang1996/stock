@@ -699,6 +699,7 @@ func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []str
 		}
 	}
 	out := &FundflowBatchCtx{Mode: mode, Window: w, Date: today, Stocks: []FundflowStockMember{}}
+	attempted := 0
 	for _, m := range members {
 		// codes 路径（显式指定的指数）不跳过 IsIndex；tags 路径（持仓组合）跳过指数
 		if len(codes) == 0 && s.IsIndex(m.code) {
@@ -707,6 +708,7 @@ func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []str
 		if m.code == "" {
 			continue
 		}
+		attempted++
 		ctx := s.BuildFundflowContext(m.code, w, true)
 		if len(ctx.Points) == 0 && ctx.DayNet == nil {
 			continue
@@ -723,5 +725,6 @@ func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []str
 		})
 	}
 	out.Covered = len(out.Stocks)
+	out.Total = attempted
 	return out
 }

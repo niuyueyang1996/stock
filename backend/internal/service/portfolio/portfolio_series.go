@@ -173,7 +173,8 @@ func comboDay(dayMap map[string]*float64, weights map[string]float64) (*float64,
 // round4 四位小数
 func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 
-// segKey 分段排序键（对齐 Python _segmented_key）：正 (0,v) → 零 (1,0) → 负 (2,-v)
+// segKey 分段排序键：正 (0,v) → 零 (1,0) → 负 (2,v)。
+// 负值带原值 v（负号保留），使 segLess 升序得到 -100 < -20 < -5，满足「负 绝对值大→小」。
 func segKey(v float64) [2]float64 {
 	if v > 0 {
 		return [2]float64{0, v}
@@ -181,7 +182,7 @@ func segKey(v float64) [2]float64 {
 	if v == 0 {
 		return [2]float64{1, 0}
 	}
-	return [2]float64{2, -v}
+	return [2]float64{2, v}
 }
 
 // segLess 分段键严格小于

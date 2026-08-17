@@ -113,3 +113,13 @@ func TestPassthrough(t *testing.T) {
 		t.Fatalf("attr_profit = %v, 期望 10", *attr)
 	}
 }
+
+func TestPassthroughZeroShares(t *testing.T) {
+	s, _, g := openPortfolio(t)
+	_ = g.Exec("INSERT INTO stocks(code,name,market,currency) VALUES('600519','贵州茅台','sh','CNY')").Error
+	// NetProfit=0 且 Eps>0 会推出 totalShares=0；须剔除以免 Inf/NaN
+	_ = g.Exec(`INSERT INTO financial_cache(code, report_date, net_profit, eps, net_assets, profit_series) VALUES('600519','20251231',0,1,2000,'[]')`).Error
+	if ps := s.passthrough("600519", 10); ps != nil {
+		t.Fatalf("股本推算为 0 应剔除, got %+v", ps)
+	}
+}

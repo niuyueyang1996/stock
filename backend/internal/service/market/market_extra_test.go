@@ -518,7 +518,7 @@ func TestNormalizeBars_DateTruncAndRange(t *testing.T) {
 		{"2026-08-01 10:00:00", "1", "2", "3", "0.5", "100"},
 		{"2026-08-05", "2", "3", "4", "1", "200"},
 	}
-	bars := normalizeBars(rows, "600519", "2026-08-02", "2026-08-31")
+	bars := NormalizeBars(rows, "600519", "2026-08-02", "2026-08-31")
 	if len(bars) != 1 {
 		t.Fatalf("bars = %+v", bars)
 	}

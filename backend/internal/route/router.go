@@ -4,6 +4,7 @@
 package route
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -190,9 +191,7 @@ func Setup(r *gin.Engine, s *Services) {
 				"legu_code": d.LeguCode, "pe_source": d.PeSource, "pb_source": d.PbSource,
 			}
 			item["quote"] = indexQuoteOut(s, d.Code)
-			item["turnover"] = map[string]any{
-				"amount": 0.0, "prev_amount": nil, "chg_pct": nil, "state": nil, "as_of": nil, "basis": nil,
-			}
+			item["turnover"] = s.Portfolio.TurnoverCompare(d.Code)
 			out = append(out, item)
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
@@ -234,10 +233,13 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetIndexDef(code)})
 	})
-	// POST /api/indices/refresh-all —— 全量刷新所有指数定义（对齐 app/api/index.py）：拉行情+估值序列，返回逐指数刷新结果。
+	// POST /api/indices/refresh-all —— 全量刷新所有指数（异步 job，返回 job_id 供前端进度跟踪）。
 	api.POST("/indices/refresh-all", func(c *gin.Context) {
-		out := s.Indices.RefreshAllIndices(c.Request.Context())
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
+		jobID := s.Jobs.Start("index.refresh_all", "刷新全部指数", func(p *jobs.Progress) error {
+			s.Indices.RefreshAllIndices(context.Background())
+			return nil
+		})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
 	})
 	// GET /api/indices/etf-map/:etf_code —— 查询某 ETF 跟踪的指数映射（对齐 app/api/index.py ETF 估值映射）；无映射返回 data=null。
 	api.GET("/indices/etf-map/:etf_code", func(c *gin.Context) {

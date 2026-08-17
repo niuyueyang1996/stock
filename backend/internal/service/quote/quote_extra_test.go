@@ -100,6 +100,34 @@ func TestKlineDayFromCache(t *testing.T) {
 	_ = s
 }
 
+// TestKlineDropsPriceOutliers 指数缓存混入 ~10 点假K 时从日K结果剔除（避免 Y 轴被拉穿）。
+func TestKlineDropsPriceOutliers(t *testing.T) {
+	s, d := openQuote(t)
+	// 10 根正常指数点位 + 1 根节假日假K（量级差 400 倍）
+	dates := []string{
+		"2026-07-27", "2026-07-28", "2026-07-29", "2026-07-30", "2026-07-31",
+		"2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+	}
+	for i, dt := range dates {
+		_ = d.UpsertDailyPrices([]dao.DailyPrice{{Code: "000300", TradeDate: dt, Close: fq(4000 + float64(i))}})
+	}
+	_ = d.UpsertDailyPrices([]dao.DailyPrice{{Code: "000300", TradeDate: "2026-08-10", Close: fq(10.23)}})
+
+	_, data, msg := s.Kline("000300", "day")
+	if msg != "" {
+		t.Fatalf("kline msg=%q", msg)
+	}
+	bars := klineBars(data)
+	if len(bars) != 10 {
+		t.Fatalf("应剔除假K 剩 10 根, got %d %+v", len(bars), bars)
+	}
+	for _, b := range bars {
+		if b.Close != nil && *b.Close < 100 {
+			t.Fatalf("假K 仍在结果里: %+v", b)
+		}
+	}
+}
+
 // TestKlineDayNoCache 日K：无缓存 → 空 bars，且不触发 SyncPeriodKline。
 func TestKlineDayNoCache(t *testing.T) {
 	s, _ := openQuote(t)

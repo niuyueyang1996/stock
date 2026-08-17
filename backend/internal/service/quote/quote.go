@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -151,23 +152,14 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 	now := time.Now()
 	eff := s.Cal.ResolveLiveTradeDate(now).Format("2006-01-02")
 	ms := s.Cal.MarketStatusStr(now)
-	type bar struct {
-		Date      string   `json:"date"`
-		Open      *float64 `json:"open"`
-		High      *float64 `json:"high"`
-		Low       *float64 `json:"low"`
-		Close     *float64 `json:"close"`
-		Volume    *float64 `json:"volume"`
-		PctChange *float64 `json:"pct_change"`
-	}
-	bars := []bar{}
+	bars := []klineBar{}
 	if period == "day" {
 		start := addDaysStr(eff, -800)
 		for _, r := range s.Bars(code, start, eff, 0) {
 			if !s.Cal.IsTradeDay(r.TradeDate) {
 				continue
 			}
-			bars = append(bars, bar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
+			bars = append(bars, klineBar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
 		}
 	} else {
 		table := dao.PeriodWeekly
@@ -184,14 +176,57 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 			if !s.Cal.IsTradeDay(r.TradeDate) {
 				continue
 			}
-			bars = append(bars, bar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
+			bars = append(bars, klineBar{r.TradeDate, r.Open, r.High, r.Low, r.Close, r.Volume, r.PctChange})
 		}
 	}
+	bars = filterKlinePriceOutliers(bars)
 	adjusted := eff != now.Format("2006-01-02")
 	return 200, map[string]any{
 		"code": code, "period": period, "bars": bars,
 		"as_of": eff, "as_of_adjusted": adjusted, "market_status": ms,
 	}, ""
+}
+
+// klineBar K 线一根（Kline JSON 出参）
+type klineBar struct {
+	Date      string   `json:"date"`
+	Open      *float64 `json:"open"`
+	High      *float64 `json:"high"`
+	Low       *float64 `json:"low"`
+	Close     *float64 `json:"close"`
+	Volume    *float64 `json:"volume"`
+	PctChange *float64 `json:"pct_change"`
+}
+
+// filterKlinePriceOutliers 丢掉相对收盘中位数偏离过大的 K 线。
+// 指数日K缓存偶发混入节假日假K（OHLC≈10、量 1000），会把 Y 轴拉到 0～几千，K 线看起来像一条直线。
+func filterKlinePriceOutliers(bars []klineBar) []klineBar {
+	closes := make([]float64, 0, len(bars))
+	for _, b := range bars {
+		if b.Close != nil && *b.Close > 0 {
+			closes = append(closes, *b.Close)
+		}
+	}
+	if len(closes) < 8 {
+		return bars
+	}
+	sort.Float64s(closes)
+	med := closes[len(closes)/2]
+	if med <= 0 {
+		return bars
+	}
+	lo, hi := med/20, med*20
+	out := make([]klineBar, 0, len(bars))
+	for _, b := range bars {
+		if b.Close == nil || *b.Close < lo || *b.Close > hi {
+			continue
+		}
+		out = append(out, b)
+	}
+	if len(out) < 8 {
+		return bars
+	}
+	return out
 }
 
 // periodRows 周/月K缓存行（复用 CacheDAO 周期表查询）

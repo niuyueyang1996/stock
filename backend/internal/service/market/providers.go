@@ -40,7 +40,7 @@ func (t *TencentMarket) DailyBars(ctx context.Context, code, start, end string) 
 	if len(rows) == 0 {
 		return nil, ErrNotSupported
 	}
-	return normalizeBars(rows, code, start, end), nil
+	return NormalizeBars(rows, code, start, end), nil
 }
 
 // Ticks 取当日分笔；港股无逐笔返回 nil（由分时派生）

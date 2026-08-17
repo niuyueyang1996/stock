@@ -5,6 +5,8 @@ package indices
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"gorm.io/gorm"
 
 	"stockanalyzer/internal/db"
@@ -19,6 +21,8 @@ type Service struct {
 	Lg *raw.Legu
 	// Cache 估值序列缓存读取
 	Cache *dao.CacheDAO
+	// SyncDailyBars 指数日K同步（main 注入 refresh.syncDailyBars；对齐 refresh_index 的 sync_daily_bars）
+	SyncDailyBars func(ctx context.Context, code string)
 	// SyncKline 周/月K同步（main 注入 refresh.SyncPeriodKline；指数刷新时调用，对齐 refresh_index）
 	SyncKline func(code string)
 	// SyncFundflow 指数分时量价同步（main 注入 refresh.SyncIndexFundflow；对齐 refresh_index 的 sync_fundflow）
@@ -151,11 +155,16 @@ func (s *Service) RefreshAllIndices(ctx context.Context) map[string]any {
 	return map[string]any{"codes": codes, "ok": ok, "fail": fail}
 }
 
-// RefreshOne 单指数刷新：行情落 daily_price_cache + 乐咕估值落 valuation_history_cache
+// RefreshOne 单指数刷新：日K(增量) + 周/月K + 实时点位 + 估值(乐咕源) + 资金流(量价)。
+// 对齐 Python refresh_index：sync_daily_bars → sync_kline_bars → _sync_realtime_quote → sync_valuation → sync_fundflow
 func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	def := s.GetIndexDef(code)
 	if def == nil || def.Symbol == nil {
 		return nil
+	}
+	// 日K历史（增量；对齐 refresh_index：out["daily"] = sync_daily_bars(code, now)）
+	if s.SyncDailyBars != nil {
+		s.SyncDailyBars(ctx, code)
 	}
 	// 周/月K跟随日K（对齐 refresh_index：out["kline"] = sync_kline_bars(code, now)）
 	if s.SyncKline != nil {
@@ -165,13 +174,34 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	if s.SyncFundflow != nil {
 		s.SyncFundflow(ctx, code)
 	}
-	// 腾讯指数行情
+	// 腾讯指数行情（完整 OHLCV + amount）
 	parts := s.Tx.QuoteRaw(ctx, *def.Symbol)
 	if parts != nil && len(parts) > 5 {
 		closeV := parseF(parts[3])
+		openV := parseF(parts[5])
+		var highV, lowV float64
+		if len(parts) > 33 {
+			highV = parseF(parts[33])
+		}
+		if len(parts) > 34 {
+			lowV = parseF(parts[34])
+		}
+		volumeV := parseF(parts[6])
+		// 指数成交额取 parts[35] 的「价格/量/成交额」三元组第 3 段（对齐 normalizeIndexQuote）
+		var amountV float64
+		if len(parts) > 35 {
+			seg := strings.Split(parts[35], "/")
+			if len(seg) >= 3 {
+				amountV = parseF(seg[2])
+			}
+		}
 		src := "tencent"
-		_ = s.DB.Exec("INSERT INTO daily_price_cache(code, trade_date, close, source, is_closed) VALUES(?, date('now','localtime'), ?, ?, 1) ON CONFLICT(code, trade_date) DO UPDATE SET close=excluded.close, source=excluded.source, is_closed=1",
-			code, closeV, src).Error
+		_ = s.DB.Exec(`INSERT INTO daily_price_cache(code, trade_date, open, high, low, close, volume, amount, source, is_closed)
+			VALUES(?, date('now','localtime'), ?, ?, ?, ?, ?, ?, ?, 1)
+			ON CONFLICT(code, trade_date) DO UPDATE SET
+				open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close,
+				volume=excluded.volume, amount=excluded.amount, source=excluded.source, is_closed=1`,
+			code, openV, highV, lowV, closeV, volumeV, amountV, src).Error
 	}
 	// 乐咕估值
 	if def.LeguCode != nil && *def.LeguCode != "" && def.PeSource == "legu" {

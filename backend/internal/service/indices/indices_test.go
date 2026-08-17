@@ -43,10 +43,30 @@ func failTransport(*http.Request) (*http.Response, error) {
 	return nil, errors.New("blocked")
 }
 
-// tencentQuoteMock 模拟腾讯 qt.gtimg.cn 行情响应，parts[3] = 收盘价。
+// tencentQuoteMock 模拟腾讯 qt.gtimg.cn 行情响应（完整 OHLCV）。
+// parts[3]=close, parts[5]=open, parts[33]=high, parts[34]=low, parts[6]=volume, parts[35]="price/vol/amt"三元组
 func tencentQuoteMock(closePx string) func(*http.Request) (*http.Response, error) {
+	return tencentQuoteFullMock(closePx, "2980.00", "3020.00", "2970.00", "1500", "3000.00/1500/5000000")
+}
+
+func tencentQuoteFullMock(closePx, openPx, highPx, lowPx, vol, triple string) func(*http.Request) (*http.Response, error) {
 	return func(r *http.Request) (*http.Response, error) {
-		body := `v_sh000016="1~idx~000016~` + closePx + `~3020~2990~1000~...";`
+		// 构造 ~20 个占位字段（0~34），parts[35] = 三元组
+		parts := make([]string, 36)
+		parts[0] = "1"
+		parts[1] = "idx"
+		parts[2] = "000016"
+		parts[3] = closePx
+		parts[4] = "2990"  // prev_close
+		parts[5] = openPx  // open
+		parts[6] = vol     // volume
+		for i := 7; i <= 32; i++ {
+			parts[i] = "0"
+		}
+		parts[33] = highPx // high
+		parts[34] = lowPx  // low
+		parts[35] = triple // "price/volume/amount" 三元组
+		body := `v_sh000016="` + strings.Join(parts, "~") + `";`
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
 	}
 }
@@ -306,19 +326,42 @@ func TestRefreshOneQuoteAndValuationPersist(t *testing.T) {
 		t.Fatalf("RefreshOne: %v", err)
 	}
 
-	// 行情落 daily_price_cache（source=tencent, is_closed=1）
+	// 行情落 daily_price_cache：完整 OHLCV + source=tencent + is_closed=1
 	var row struct {
 		Code      string
 		TradeDate string
+		Open      float64
+		High      float64
+		Low       float64
 		Close     float64
+		Volume    float64
+		Amount    float64
 		Source    string
 		IsClosed  int
 	}
-	if err := g.Raw("SELECT code, trade_date, close, source, is_closed FROM daily_price_cache WHERE code=? ORDER BY trade_date DESC LIMIT 1", "000016").Scan(&row).Error; err != nil {
+	if err := g.Raw("SELECT code, trade_date, open, high, low, close, volume, amount, source, is_closed FROM daily_price_cache WHERE code=? ORDER BY trade_date DESC LIMIT 1", "000016").Scan(&row).Error; err != nil {
 		t.Fatalf("query daily_price_cache: %v", err)
 	}
-	if row.Source != "tencent" || row.IsClosed != 1 || row.Close != 3000.12 {
-		t.Fatalf("daily_price_cache 落库错误: %+v", row)
+	if row.Source != "tencent" || row.IsClosed != 1 {
+		t.Fatalf("source/is_closed 错误: source=%s is_closed=%d", row.Source, row.IsClosed)
+	}
+	if row.Close != 3000.12 {
+		t.Fatalf("close = %v, 期望 3000.12", row.Close)
+	}
+	if row.Open != 2980.00 {
+		t.Fatalf("open = %v, 期望 2980.00", row.Open)
+	}
+	if row.High != 3020.00 {
+		t.Fatalf("high = %v, 期望 3020.00", row.High)
+	}
+	if row.Low != 2970.00 {
+		t.Fatalf("low = %v, 期望 2970.00", row.Low)
+	}
+	if row.Volume != 1500 {
+		t.Fatalf("volume = %v, 期望 1500", row.Volume)
+	}
+	if row.Amount != 5000000 {
+		t.Fatalf("amount = %v, 期望 5000000 (来自三元组)", row.Amount)
 	}
 
 	// 乐咕估值落 valuation_history_cache
@@ -364,9 +407,16 @@ func TestRefreshOneNonLeguSourceSkipsValuation(t *testing.T) {
 
 func TestRefreshOneCallsSyncHooks(t *testing.T) {
 	s, _ := openIndices(t)
+	s.Tx.AttachTestTransport(tencentQuoteMock("3000.00"))
+	dailyBarsCalled := false
 	klineCalled := false
 	fundflowCalled := false
 	var fctx context.Context
+	s.SyncDailyBars = func(ctx context.Context, code string) {
+		if code == "000016" {
+			dailyBarsCalled = true
+		}
+	}
 	s.SyncKline = func(code string) {
 		if code == "000016" {
 			klineCalled = true
@@ -381,8 +431,14 @@ func TestRefreshOneCallsSyncHooks(t *testing.T) {
 	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
 		t.Fatalf("RefreshOne: %v", err)
 	}
-	if !klineCalled || !fundflowCalled {
-		t.Fatalf("SyncKline=%v SyncFundflow=%v", klineCalled, fundflowCalled)
+	if !dailyBarsCalled {
+		t.Fatal("SyncDailyBars 未被调用")
+	}
+	if !klineCalled {
+		t.Fatal("SyncKline 未被调用")
+	}
+	if !fundflowCalled {
+		t.Fatal("SyncFundflow 未被调用")
 	}
 	if fctx == nil {
 		t.Fatal("SyncFundflow 应收到 ctx")
@@ -465,5 +521,211 @@ func TestNumV(t *testing.T) {
 	}
 	if v := numV(struct{}{}); v != nil {
 		t.Fatalf("任意类型应返回 nil: %v", v)
+	}
+}
+
+// ---------- RefreshOne OHLCV 落库 ----------
+
+// TestRefreshOneOHLCVAmountFromTriple amount 从 parts[35] 三元组第三段解析（对齐 normalizeIndexQuote）
+func TestRefreshOneOHLCVAmountFromTriple(t *testing.T) {
+	s, g := openIndices(t)
+	// 自定义三元组：price/volume/amount = "2999.0/2000/8888888"
+	s.Tx.AttachTestTransport(tencentQuoteFullMock("3100.0", "3050.0", "3150.0", "3000.0", "2000", "2999.0/2000/8888888"))
+	s.Lg.AttachTestTransport(failTransport) // 估值不影响行情落库
+
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("RefreshOne: %v", err)
+	}
+	var row struct {
+		Close  float64
+		Open   float64
+		High   float64
+		Low    float64
+		Volume float64
+		Amount float64
+	}
+	g.Raw("SELECT open, high, low, close, volume, amount FROM daily_price_cache WHERE code='000016' ORDER BY trade_date DESC LIMIT 1").Scan(&row)
+	if row.Close != 3100.0 {
+		t.Fatalf("close = %v, 期望 3100.0", row.Close)
+	}
+	if row.Open != 3050.0 {
+		t.Fatalf("open = %v, 期望 3050.0", row.Open)
+	}
+	if row.High != 3150.0 {
+		t.Fatalf("high = %v, 期望 3150.0", row.High)
+	}
+	if row.Low != 3000.0 {
+		t.Fatalf("low = %v, 期望 3000.0", row.Low)
+	}
+	if row.Volume != 2000 {
+		t.Fatalf("volume = %v, 期望 2000", row.Volume)
+	}
+	if row.Amount != 8888888 {
+		t.Fatalf("amount = %v, 期望 8888888（来自三元组）", row.Amount)
+	}
+}
+
+// TestRefreshOneOHLCVAmountZeroWhenNoTriple 三元组缺失时 amount=0（不 panic）
+func TestRefreshOneOHLCVAmountZeroWhenNoTriple(t *testing.T) {
+	s, g := openIndices(t)
+	// 构造仅 36 个字段但 parts[35] 为空（无三元组）的行情
+	parts := make([]string, 36)
+	parts[3] = "2500.0"
+	parts[5] = "2480.0"
+	parts[33] = "2520.0"
+	parts[34] = "2460.0"
+	parts[6] = "500"
+	// parts[35] 保持空 → 三元组解析 seg 长度<3 → amount=0
+	body := `v_sh000016="` + strings.Join(parts, "~") + `";`
+	s.Tx.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{}}, nil
+	})
+	s.Lg.AttachTestTransport(failTransport)
+
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("RefreshOne: %v", err)
+	}
+	var row struct {
+		Close  float64
+		Amount float64
+	}
+	g.Raw("SELECT close, amount FROM daily_price_cache WHERE code='000016' ORDER BY trade_date DESC LIMIT 1").Scan(&row)
+	if row.Close != 2500.0 {
+		t.Fatalf("close = %v", row.Close)
+	}
+	if row.Amount != 0 {
+		t.Fatalf("无三元组时 amount 应为 0, got %v", row.Amount)
+	}
+}
+
+// TestRefreshOneOverwritesExistingCache ON CONFLICT → 更新已有行（不重复插入）
+func TestRefreshOneOverwritesExistingCache(t *testing.T) {
+	s, g := openIndices(t)
+	// 第一次刷新
+	s.Tx.AttachTestTransport(tencentQuoteMock("3000.00"))
+	s.Lg.AttachTestTransport(failTransport)
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("RefreshOne #1: %v", err)
+	}
+	// 第二次刷新（不同价格）
+	s.Tx.AttachTestTransport(tencentQuoteMock("3100.00"))
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("RefreshOne #2: %v", err)
+	}
+	// 应只有 1 行，且 close = 3100（覆盖）
+	var n int64
+	g.Raw("SELECT COUNT(*) FROM daily_price_cache WHERE code='000016'").Scan(&n)
+	if n != 1 {
+		t.Fatalf("ON CONFLICT 应保持 1 行, got %d", n)
+	}
+	var closePx float64
+	g.Raw("SELECT close FROM daily_price_cache WHERE code='000016'").Scan(&closePx)
+	if closePx != 3100.0 {
+		t.Fatalf("覆盖后 close = %v, 期望 3100.0", closePx)
+	}
+}
+
+// TestRefreshOneNilHooksSafe SyncDailyBars/SyncKline/SyncFundflow 为 nil 时不 panic
+func TestRefreshOneNilHooksSafe(t *testing.T) {
+	s, _ := openIndices(t)
+	s.Tx.AttachTestTransport(tencentQuoteMock("3000.00"))
+	s.Lg.AttachTestTransport(failTransport)
+	// 所有 hook 都为 nil（默认状态）
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("nil hooks 不应 panic: %v", err)
+	}
+}
+
+// TestRefreshOneSyncDailyBarsOrder 日K同步在行情写入之前（对齐 Python：sync_daily_bars → quote）
+func TestRefreshOneSyncDailyBarsOrder(t *testing.T) {
+	s, _ := openIndices(t)
+	s.Tx.AttachTestTransport(tencentQuoteMock("3000.00"))
+	s.Lg.AttachTestTransport(failTransport)
+	var callOrder []string
+	s.SyncDailyBars = func(_ context.Context, code string) {
+		callOrder = append(callOrder, "dailyBars")
+	}
+	s.SyncKline = func(code string) {
+		callOrder = append(callOrder, "kline")
+	}
+	s.SyncFundflow = func(_ context.Context, code string) {
+		callOrder = append(callOrder, "fundflow")
+	}
+	if err := s.RefreshOne(context.Background(), "000016"); err != nil {
+		t.Fatalf("RefreshOne: %v", err)
+	}
+	// 期望顺序：dailyBars → kline → fundflow（quote 在 fundflow 之后写入，不记录顺序）
+	if len(callOrder) != 3 {
+		t.Fatalf("hook 调用数 = %d, 期望 3: %v", len(callOrder), callOrder)
+	}
+	if callOrder[0] != "dailyBars" {
+		t.Fatalf("第一个 hook 应为 dailyBars, got %v", callOrder)
+	}
+	if callOrder[1] != "kline" {
+		t.Fatalf("第二个 hook 应为 kline, got %v", callOrder)
+	}
+	if callOrder[2] != "fundflow" {
+		t.Fatalf("第三个 hook 应为 fundflow, got %v", callOrder)
+	}
+}
+
+// ---------- 实际 API 集成测试（上证指数 000001） ----------
+
+// TestRealRefreshOne000001Quote 实际调用腾讯 API 拉上证指数行情并验证 OHLCV 落库
+func TestRealRefreshOne000001Quote(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过集成测试")
+	}
+	s, g := openIndices(t)
+	s.Lg.AttachTestTransport(failTransport) // 不拉估值，只测行情
+
+	// 000001 种子已含 symbol=sh000001
+	if err := s.RefreshOne(context.Background(), "000001"); err != nil {
+		t.Fatalf("RefreshOne(000001): %v", err)
+	}
+
+	// 验证 daily_price_cache 有完整 OHLCV
+	var row struct {
+		Close  float64
+		Open   float64
+		High   float64
+		Low    float64
+		Volume float64
+		Amount float64
+		Source string
+	}
+	if err := g.Raw("SELECT open, high, low, close, volume, amount, source FROM daily_price_cache WHERE code='000001' ORDER BY trade_date DESC LIMIT 1").Scan(&row).Error; err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	t.Logf("上证指数 RefreshOne: close=%.2f open=%.2f high=%.2f low=%.2f volume=%.0f amount=%.0f source=%s",
+		row.Close, row.Open, row.High, row.Low, row.Volume, row.Amount, row.Source)
+	if row.Close <= 0 {
+		t.Fatalf("close = %v, 应 > 0", row.Close)
+	}
+	if row.Source != "tencent" {
+		t.Fatalf("source = %s, 期望 tencent", row.Source)
+	}
+	// OHLCV 至少 open/close 应有值（high/low 取决于腾讯返回格式）
+	if row.Open <= 0 {
+		t.Logf("注意: open=%.0f（腾讯字段解析可能需要调整）", row.Open)
+	}
+}
+
+// TestRealRefreshOne399001 实际拉深证成指（深圳指数，验证 sz 前缀）
+func TestRealRefreshOne399001(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过集成测试")
+	}
+	s, g := openIndices(t)
+	// 399001 种子已含 symbol=sz399001
+	s.Lg.AttachTestTransport(failTransport)
+	if err := s.RefreshOne(context.Background(), "399001"); err != nil {
+		t.Fatalf("RefreshOne(399001): %v", err)
+	}
+	var closePx float64
+	g.Raw("SELECT close FROM daily_price_cache WHERE code='399001' ORDER BY trade_date DESC LIMIT 1").Scan(&closePx)
+	t.Logf("深证成指 RefreshOne: close=%.2f", closePx)
+	if closePx <= 0 {
+		t.Fatalf("399001 close = %v, 应 > 0", closePx)
 	}
 }
