@@ -9,6 +9,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
@@ -41,6 +42,7 @@ func openDetail(t *testing.T) (*Service, *gorm.DB) {
 		}
 	})
 	idx := indices.New(g, nil, nil)
+	cal := calendar.New(g)
 	s := &Service{
 		Cache:   dao.NewCacheDAO(g),
 		Quote:   quote.New(g),
@@ -48,6 +50,7 @@ func openDetail(t *testing.T) (*Service, *gorm.DB) {
 		Fx:      testFx,
 		Indices: idx,
 		IsIndex: func(code string) bool { return idx.GetIndexDef(code) != nil },
+		Cal:     cal,
 		Stocks:  dao.NewHoldingsDAO(g),
 	}
 	return s, g
@@ -63,8 +66,9 @@ func seedBars(t *testing.T, g *gorm.DB, code string, start string, closes []floa
 	if err != nil {
 		t.Fatalf("seedBars parse: %v", err)
 	}
+	cal := calendar.New(g)
 	for _, c := range closes {
-		for !isWeekday(d) {
+		for !cal.IsTradeDay(d.Format("2006-01-02")) {
 			d = d.AddDate(0, 0, 1)
 		}
 		day := d.Format("2006-01-02")
@@ -95,8 +99,9 @@ func seedValuationSeries(t *testing.T, g *gorm.DB, code, indicator, period, star
 	if err != nil {
 		t.Fatalf("seedSeries parse: %v", err)
 	}
+	cal := calendar.New(g)
 	for _, v := range values {
-		for !isWeekday(d) {
+		for !cal.IsTradeDay(d.Format("2006-01-02")) {
 			d = d.AddDate(0, 0, 1)
 		}
 		day := d.Format("2006-01-02")
@@ -663,7 +668,8 @@ func TestInstDefaultTag(t *testing.T) {
 }
 
 func TestMarketStatusStr(t *testing.T) {
-	ms := marketStatusStr()
+	s, _ := openDetail(t)
+	ms := s.marketStatusStr()
 	switch ms {
 	case "open", "pre_open", "not_trade_day":
 		// ok
@@ -818,6 +824,7 @@ func TestStockDetail_BackfillName_FromListFile(t *testing.T) {
 		Cache: dao.NewCacheDAO(g), Quote: quote.New(g), Live: valuation.NewLive(g, testFx),
 		Fx: testFx, Indices: indices.New(g, nil, nil),
 		IsIndex: func(c string) bool { return false },
+		Cal:     calendar.New(g),
 		Stocks:  dao.NewHoldingsDAO(g), DataDir: dir,
 	}
 	seedBars(t, g, "600519", "2024-01-01", []float64{100, 110})

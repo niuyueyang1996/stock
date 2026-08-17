@@ -25,7 +25,7 @@ const (
 
 // AIClient 通用接口（多态：OpenAICompatClient 真实实现 / MockClient 测试）
 type AIClient interface {
-	ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int) (map[string]any, error)
+	ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int, task ...string) (map[string]any, error)
 	ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error)
 }
 
@@ -134,7 +134,7 @@ func chatLogHost(baseURL string) string {
 	return baseURL
 }
 
-func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int) (map[string]any, error) {
+func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int, task ...string) (map[string]any, error) {
 	if maxTokens <= 0 {
 		maxTokens = MaxTokens
 	}
@@ -142,12 +142,16 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	if effortP == "" {
 		effortP = "high"
 	}
+	taskTag := ""
+	if len(task) > 0 && task[0] != "" {
+		taskTag = " task=" + task[0]
+	}
 	// AI 输入日志：调用方/模型/输入规模一目了然；卡住时「入」已打印、「出」未出现 = 卡在等待模型响应
 	start := time.Now()
-	log.Printf("[ai] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s",
-		chatLogHost(baseURL), model, len(system)+len(user), maxTokens, effortP)
+	log.Printf("[ai] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s%s",
+		chatLogHost(baseURL), model, len(system)+len(user), maxTokens, effortP, taskTag)
 	defer func() {
-		log.Printf("[ai] 出 host=%s model=%s 耗时=%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond))
+		log.Printf("[ai] 出 host=%s model=%s 耗时=%s%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), taskTag)
 	}()
 	payload := chatPayload{
 		Model: model, Temperature: 0.1, MaxTokens: maxTokens,
@@ -169,8 +173,8 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	}
 	parsed, parseErr := ParseJSONContent(content)
 	if parseErr == nil {
-		log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符",
-			chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content))
+		log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s",
+			chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content), taskTag)
 		return parsed, nil
 	}
 	if parsed, err := ParseJSONContent(repairJSON(content)); err == nil {

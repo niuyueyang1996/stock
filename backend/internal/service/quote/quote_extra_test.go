@@ -268,69 +268,71 @@ func TestRowToQuoteBoundaries(t *testing.T) {
 
 // TestResolveLiveTradeDate 工作日 09:15 边界回退 + 周末回退。
 func TestResolveLiveTradeDate(t *testing.T) {
+	s, _ := openQuote(t)
 	// 2026-08-12 周三
 	wed := time.Date(2026, 8, 12, 0, 0, 0, 0, time.Local)
 	// 周三 09:14 → 前交易日（周二）
-	if got := resolveLiveTradeDate(wed.Add(9*time.Hour + 14*time.Minute)); got != "2026-08-11" {
+	if got := s.Cal.ResolveLiveTradeDate(wed.Add(9*time.Hour + 14*time.Minute)).Format("2006-01-02"); got != "2026-08-11" {
 		t.Fatalf("周三09:14 应回退周二: got=%s", got)
 	}
 	// 周三 09:15 → 当日
-	if got := resolveLiveTradeDate(wed.Add(9*time.Hour + 15*time.Minute)); got != "2026-08-12" {
+	if got := s.Cal.ResolveLiveTradeDate(wed.Add(9*time.Hour + 15*time.Minute)).Format("2006-01-02"); got != "2026-08-12" {
 		t.Fatalf("周三09:15 应为当日: got=%s", got)
 	}
 	// 周三 23:59 → 当日
-	if got := resolveLiveTradeDate(wed.Add(23*time.Hour + 59*time.Minute)); got != "2026-08-12" {
+	if got := s.Cal.ResolveLiveTradeDate(wed.Add(23*time.Hour + 59*time.Minute)).Format("2006-01-02"); got != "2026-08-12" {
 		t.Fatalf("周三收盘 应为当日: got=%s", got)
 	}
 	// 周六 12:00 → 回退周五
 	sat := time.Date(2026, 8, 15, 12, 0, 0, 0, time.Local)
-	if got := resolveLiveTradeDate(sat); got != "2026-08-14" {
+	if got := s.Cal.ResolveLiveTradeDate(sat).Format("2006-01-02"); got != "2026-08-14" {
 		t.Fatalf("周六 应回退周五: got=%s", got)
 	}
 	// 周日 10:00 → 回退周五
 	sun := time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local)
-	if got := resolveLiveTradeDate(sun); got != "2026-08-14" {
+	if got := s.Cal.ResolveLiveTradeDate(sun).Format("2006-01-02"); got != "2026-08-14" {
 		t.Fatalf("周日 应回退周五: got=%s", got)
 	}
 	// 周一 08:00（09:15 前）→ 回退上周五
 	mon := time.Date(2026, 8, 17, 8, 0, 0, 0, time.Local)
-	if got := resolveLiveTradeDate(mon); got != "2026-08-14" {
+	if got := s.Cal.ResolveLiveTradeDate(mon).Format("2006-01-02"); got != "2026-08-14" {
 		t.Fatalf("周一盘前 应回退上周五: got=%s", got)
 	}
 	// 周一 09:16 → 当日
-	if got := resolveLiveTradeDate(mon.Add(1 * time.Hour).Add(16 * time.Minute)); got != "2026-08-17" {
+	if got := s.Cal.ResolveLiveTradeDate(mon.Add(1 * time.Hour).Add(16 * time.Minute)).Format("2006-01-02"); got != "2026-08-17" {
 		t.Fatalf("周一盘后 应为当日: got=%s", got)
 	}
 }
 
 // TestTradeDayHelpers 交易日/工作日近似判定。
 func TestTradeDayHelpers(t *testing.T) {
-	if !isTradeDayStr("2026-08-12") {
+	s, _ := openQuote(t)
+	if !s.Cal.IsTradeDay("2026-08-12") {
 		t.Fatal("周三应交易日")
 	}
-	if isTradeDayStr("2026-08-15") { // 周六
+	if s.Cal.IsTradeDay("2026-08-15") { // 周六
 		t.Fatal("周六非交易日")
 	}
-	if isTradeDayStr("not-a-date") {
+	if s.Cal.IsTradeDay("not-a-date") {
 		t.Fatal("非法日期非交易日")
 	}
-	if isTradeDayStr("2026-08-13 10:00:00") {
+	if s.Cal.IsTradeDay("2026-08-13 10:00:00") {
 		t.Fatal("带时间非交易日格式")
 	}
-	// lastTradeDateT 边界
+	// LastTradeDate 边界
 	mon := time.Date(2026, 8, 17, 0, 0, 0, 0, time.Local)
-	if got := lastTradeDateT(mon); got.Format("2006-01-02") != "2026-08-17" {
+	if got := s.Cal.LastTradeDate(mon); got.Format("2006-01-02") != "2026-08-17" {
 		t.Fatalf("周一 lastTradeDate 应自身: %v", got)
 	}
-	// 2026-08-16 周日 → lastTradeDate 回退周五
+	// 2026-08-16 周日 → LastTradeDate 回退周五
 	sun := time.Date(2026, 8, 16, 0, 0, 0, 0, time.Local)
-	lt := lastTradeDateT(sun)
+	lt := s.Cal.LastTradeDate(sun)
 	if lt.Weekday() != time.Friday || lt.Format("2006-01-02") != "2026-08-14" {
 		t.Fatalf("周日 lastTradeDate 回退到周五: %v", lt)
 	}
 	// 周五 → 自身
 	fri := time.Date(2026, 8, 14, 0, 0, 0, 0, time.Local)
-	if got := lastTradeDateT(fri); got.Format("2006-01-02") != "2026-08-14" {
+	if got := s.Cal.LastTradeDate(fri); got.Format("2006-01-02") != "2026-08-14" {
 		t.Fatalf("周五 lastTradeDate 应自身: %v", got)
 	}
 	// addDaysStr 边界

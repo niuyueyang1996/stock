@@ -62,6 +62,14 @@ function schedulePageReload(delay = 400) {
   }, delay);
 }
 
+/* ---- ws 假死检测（顶层：setupJobBar 内定义曾被 waitForJob 引用而不可见，导致
+ * "wsStale is not defined"——提到模块作用域共享）---- */
+let _wsLastMsgAt = 0;
+function wsStale() {
+  return window._ws && window._ws.readyState === 1 && _wsLastMsgAt > 0 &&
+    Date.now() - _wsLastMsgAt > 30000;
+}
+
 /** 可折叠 panel：标题常显，body 可收起；摘要写在标题旁。不删功能，只改展示密度。 */
 function _foldKey(id) {
   return 'fold:' + (location.pathname || '') + ':' + id;
@@ -629,11 +637,6 @@ function setupJobBar(nav) {
   //  2) ws 假死（连接在但 30s 无任何消息，如 Android WebView 半死连接）：
   //     主动关闭重连并转轮询，避免任务完成事件永久丢失 → 页面一直「正在加载中」
   // 另：waitForJob 在任务等待期间无条件轮询（见下），保证任务终态必达。
-  let _wsLastMsgAt = 0;
-  function wsStale() {
-    return window._ws && window._ws.readyState === 1 && _wsLastMsgAt > 0 &&
-      Date.now() - _wsLastMsgAt > 30000;
-  }
   function tick() {
     if (wsStale()) {
       // 假死：强制断开触发 onclose → 重连 + 转轮询
@@ -1434,11 +1437,6 @@ function wireAiHtmlButton(container, report) {
   if (b && report && report.html) b.onclick = () => openAiHtmlReport(report.html);
 }
 
-// AI 资金流分析：按钮 HTML（innerHTML 注入后由调用方用 runFundflowAi 绑定）
-function fundflowAiButtonHtml(label = 'AI 分析资金流') {
-  return `<button class="btn primary" data-fundflow-ai style="margin-bottom:8px">🤖 ${label}</button>`;
-}
-
 // 资金流资金×股价相关性 → 徽章/配色（红=坏 绿=好 灰=中性；divergence 兼容旧数据未知方向）
 const FUNDFLOW_CORR = {
   positive: ['同涨', '#2f9e44'], negative: ['同跌', '#e03131'],
@@ -1560,34 +1558,6 @@ async function openPromptEditor(kind, onConfirm) {
 }
 
 // 触发个股资金流 AI 分析并把结果渲染进 panel（先弹窗确认/编辑指令；skipEditor=true 一键跳过编辑直接用默认要求）
-async function runFundflowAi({ code, window, btn, panel, skipEditor, intensity, systemPrompt }) {
-  const doRun = async (systemPrompt, intensity) => {
-    btn.disabled = true;
-    panel.style.display = 'block';
-    panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🔄 刷新资金流数据…</div>';
-    try {
-      await refreshFlowBeforeAnalysis(code);
-      panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 AI 已提交，进度见顶部…</div>';
-      const body = { code: code || '', window: window || '15m', intensity };
-      if (systemPrompt) body.system_prompt = systemPrompt;
-      const job = await startBackgroundJob('/ai/fundflow-analysis', body, { toast: '资金流 AI 已开始' });
-      await waitForJob(job.job_id);
-      const d = await api('/ai/fundflow-report/' + encodeURIComponent(code) + '?window=' + encodeURIComponent(window || '15m'), { silent: true });
-      // GET /ai/fundflow-report 返回平铺落库结构（与 loadFlowPersisted 同源），直接用 renderFundflowPersistedPanel 即时渲染
-      renderFundflowPersistedPanel(panel, d);
-      // 通知页面：资金流数据刚刷新（refreshFlowBeforeAnalysis），重绘资金流图，无需手动刷新。
-      // 注意：本函数参数名 window 遮蔽了全局 window，必须用 globalThis 派发事件。
-      globalThis.dispatchEvent(new CustomEvent('app-flow-analyzed', { detail: { code, window } }));
-    } catch (e) {
-      panel.innerHTML = `<div class="empty" style="padding:10px;margin:0">分析失败：${esc(e.message)}</div>`;
-    } finally {
-      btn.disabled = false;
-    }
-  };
-  if (skipEditor) { await doRun(systemPrompt || null, intensity || 'normal'); return; }
-  openPromptEditor('fundflow', doRun);
-}
-
 // 资金面徽章：r = {correlation,summary,trade_date,window,source}；无结果 → '—'
 function fundflowCorrBadge(r) {
   if (!r || !r.correlation) return '<span class="muted">—</span>';
@@ -1612,11 +1582,12 @@ async function loadFlowReports(codes) {
 // scope='indices'|'portfolio'；scopeKey 精确匹配（可空→按 scope 取最近）；window 精确匹配（可空→跨窗最近）
 async function loadCoherence(scope, scopeKey, window) {
   try {
-    const params = new URLSearchParams({ scope });
-    if (scopeKey) params.set('scope_key', scopeKey);
+    const params = new URLSearchParams();
+    if (scope === 'indices') params.set('codes', scopeKey || '');
+    else params.set('tags', scopeKey || '');
     if (window) params.set('window', window);
-    const r = await api('/ai/fundflow-coherence?' + params.toString(), { silent: true });
-    return r || null;
+    const r = await api('/ai/analyze-portfolio?' + params.toString(), { silent: true });
+    return (r && r.flow) || null;
   } catch (e) {
     return null;
   }
@@ -1670,19 +1641,17 @@ async function runFundflowBatch({ tags, window, btn, panel, onDone, codes, weigh
     panel.style.display = 'block';
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🔄 准备资金流数据…</div>';
     try {
-      const body = { code: '', window: window || '15m', intensity };
-      if (systemPrompt) body.system_prompt = systemPrompt;
+      const body = { types: ['flow'], window: window || '15m', intensity };
+      if (systemPrompt) body.system_prompts = { flow: systemPrompt };
       if (codes && codes.length) {
         body.codes = codes.join(',');
-        if (weights && weights.length) body.weights = weights.join(',');
       } else {
-        body.tags = tags || null;
+        body.tags = tags || '';
         await refreshFlowBeforeAnalysis('');
       }
       panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量 AI 已提交，进度见顶部…</div>';
-      const job = await startBackgroundJob('/ai/fundflow-batch', body, { toast: '批量资金流 AI 已开始' });
+      const job = await startBackgroundJob('/ai/analyze-portfolio', body, { toast: '批量资金流 AI 已开始' });
       await waitForJob(job.job_id);
-      // 完成后由页面 onDone 重载持久化面板
       panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
       if (typeof onDone === 'function') onDone();
     } catch (e) {
@@ -1828,23 +1797,6 @@ function renderBatchListPanel(el, title, rows, badge, fragment, coherence) {
   wireAiHtmlButton(el, coh);   // 📄 按钮（整组合深入 html 非空时绑定）
 }
 
-// 读取最近一次整组合批量消息面/技术面报告（含整组合 HTML；F5 后 AI 扩展分析 tab 重建用）
-async function loadNewsCoherence(scope, scopeKey) {
-  try {
-    const params = new URLSearchParams({ scope: scope || 'portfolio' });
-    if (scopeKey) params.set('scope_key', scopeKey);
-    return (await api('/ai/news-coherence?' + params.toString(), { silent: true })) || null;
-  } catch (e) { return null; }
-}
-
-async function loadTechCoherence(scope, scopeKey) {
-  try {
-    const params = new URLSearchParams({ scope: scope || 'portfolio' });
-    if (scopeKey) params.set('scope_key', scopeKey);
-    return (await api('/ai/tech-coherence?' + params.toString(), { silent: true })) || null;
-  } catch (e) { return null; }
-}
-
 // 一次拉取多只最近落库消息面/技术面报告 map：{code:{stance|trend_short,summary,as_of,source}}
 async function loadNewsReports(codes) {
   if (!codes || !codes.length) return {};
@@ -1924,11 +1876,11 @@ async function runNewsBatch({ tags, btn, panel, onDone, codes, skipEditor, inten
     panel.style.display = 'block';
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量消息面 AI 已提交，进度见顶部…</div>';
     try {
-      const body = { intensity };
-      if (systemPrompt) body.system_prompt = systemPrompt;
+      const body = { types: ['news'], intensity };
+      if (systemPrompt) body.system_prompts = { news: systemPrompt };
       if (codes && codes.length) body.codes = codes.join(',');
-      else body.tags = tags || null;
-      const job = await startBackgroundJob('/ai/news-batch', body, { toast: '批量消息面 AI 已开始' });
+      else body.tags = tags || '';
+      const job = await startBackgroundJob('/ai/analyze-portfolio', body, { toast: '批量消息面 AI 已开始' });
       await waitForJob(job.job_id);
       panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
       if (typeof onDone === 'function') onDone();
@@ -1951,11 +1903,11 @@ async function runTechBatch({ tags, btn, panel, onDone, codes, skipEditor, inten
     panel.style.display = 'block';
     panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">🤖 批量技术面 AI 已提交，进度见顶部…</div>';
     try {
-      const body = { intensity };
-      if (systemPrompt) body.system_prompt = systemPrompt;
+      const body = { types: ['tech'], intensity };
+      if (systemPrompt) body.system_prompts = { tech: systemPrompt };
       if (codes && codes.length) body.codes = codes.join(',');
-      else body.tags = tags || null;
-      const job = await startBackgroundJob('/ai/tech-batch', body, { toast: '批量技术面 AI 已开始' });
+      else body.tags = tags || '';
+      const job = await startBackgroundJob('/ai/analyze-portfolio', body, { toast: '批量技术面 AI 已开始' });
       await waitForJob(job.job_id);
       panel.innerHTML = '<div class="empty" style="padding:10px;margin:0">✅ 批量分析完成，正在刷新…</div>';
       if (typeof onDone === 'function') onDone();

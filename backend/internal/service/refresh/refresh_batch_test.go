@@ -39,10 +39,10 @@ func openRefreshBatch(t *testing.T) (*Service, *holdings.Service, *gorm.DB) {
 	fm := finance.NewFinanceManager(nil, nil, nil)
 	s := New(g, dao.NewCacheDAO(g), h, mm, fm, nil, nil, nil, jobs.New())
 	s.Cal = calendar.New(g)
-	// 种子默认交易日历：所有日期都是交易日（测试用；个别测试可覆盖）
+	// 种子默认交易日历：仅工作日（Sat/Sun 不入 trade_calendar，与真实日历一致）
 	seedTradeCalendar(t, g, map[string]bool{
 		"2026-08-11": true, "2026-08-12": true, "2026-08-13": true,
-		"2026-08-14": true, "2026-08-15": true, "2026-08-16": true, "2026-08-17": true,
+		"2026-08-14": true, "2026-08-17": true,
 	})
 	return s, h, g
 }

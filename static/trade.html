@@ -432,7 +432,7 @@
         const amtCny = t.amount_cny != null ? t.amount_cny : t.amount;
         tr.innerHTML = `
           <td>${(t.trade_time || '').split('.')[0]}</td>
-          <td><a href="/static/stock.html?code=${t.code}">${t.name || t.code}</a>${isHk ? '<span class="muted" style="font-size:10px"> 港</span>' : ''}</td>
+          <td><a href="/static/stock.html?code=${esc(t.code)}">${esc(t.name || t.code)}</a>${isHk ? '<span class="muted" style="font-size:10px"> 港</span>' : ''}</td>
           <td class="${sideCls}">${sideLabel}</td>
           <td>${isAdj ? '—' : fmtNum(t.price) + (isHk ? '<span class="muted" style="font-size:10px"> 港币</span>' : '')}</td>
           <td>${isAdj ? '—' : fmtNum(t.quantity)}</td>
@@ -441,7 +441,7 @@
           <td class="muted">${t.note || (isAdj ? '成本调整' : '')}</td>
           <td>
             <button class="btn" onclick="editTrade(${t.id})">改</button>
-            <button class="btn danger" onclick="deleteTrade(${t.id},'${t.code}')">删</button>
+            <button class="btn danger" onclick="deleteTrade(${t.id},'${esc(t.code).replace(/'/g, "\\'")}')">删</button>
           </td>`;
         body.appendChild(tr);
       });

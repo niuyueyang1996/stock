@@ -24,13 +24,16 @@ func TestChatJSONLogs(t *testing.T) {
 	})}
 
 	out, err := c.ChatJSON(context.Background(), "https://api.deepseek.com", "sk-test",
-		"deepseek-chat", "系统提示", "用户输入内容", "high", 8192)
+		"deepseek-chat", "系统提示", "用户输入内容", "high", 8192, "诊股")
 	if err != nil || out["ok"] != true {
 		t.Fatalf("ChatJSON err=%v out=%v", err, out)
 	}
 	s := buf.String()
 	if !strings.Contains(s, "[ai] 入 host=api.deepseek.com model=deepseek-chat") {
 		t.Fatalf("缺入日志: %s", s)
+	}
+	if !strings.Contains(s, "task=诊股") {
+		t.Fatalf("缺 task 标签: %s", s)
 	}
 	if !strings.Contains(s, "[ai] 完成 host=api.deepseek.com model=deepseek-chat") {
 		t.Fatalf("缺完成日志: %s", s)

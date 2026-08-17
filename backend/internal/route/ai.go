@@ -4,15 +4,38 @@ package route
 // 对齐 app/api/ai.py。
 
 import (
+	"context"
+	"fmt"
+	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/jobs"
 )
+
+// analyzeTypeCN 分析类型 key → 中文名（进度条/日志展示用）
+func analyzeTypeCN(t string) string {
+	switch t {
+	case "diagnose":
+		return "诊股"
+	case "score":
+		return "组合打分"
+	case "news":
+		return "消息面"
+	case "tech":
+		return "技术面"
+	case "flow":
+		return "资金流"
+	default:
+		return t
+	}
+}
 
 func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 	aiSvc := s.AI
@@ -154,34 +177,291 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 		code := c.Param("code")
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetReport(code)})
 	})
-	// POST /api/stocks/:code/ai-report —— 触发个股 AI 诊股（异步任务，对齐 app/api/ai.py）：
-	// 未配置模型 400；body 可传 system_prompt/intensity；返回 job_id，任务回调 ai-report 落库。
-	api.POST("/stocks/:code/ai-report", func(c *gin.Context) {
-		code := c.Param("code")
+
+	// ---- 统一 AI 分析入口（前端「🤖 AI诊股」勾选后单调用） ----
+	// POST /api/ai/analyze —— 个股多类型 AI 分析一站式接口：body 传 types 数组（diagnose/news/tech/flow），
+	// flow 的资金流刷新串行执行（前置依赖），其余类型并发调用 AI，大幅缩短总耗时。
+	api.POST("/ai/analyze", func(c *gin.Context) {
 		if aiSvc.GetActiveModel() == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
 			return
 		}
 		var body struct {
-			SystemPrompt *string `json:"system_prompt"`
-			Intensity    string  `json:"intensity"`
+			Code         string            `json:"code"`
+			Types        []string          `json:"types"`
+			Intensity    string            `json:"intensity"`
+			SystemPrompt map[string]string `json:"system_prompts"`
+			Window       string            `json:"window"`
 		}
-		_ = c.ShouldBindJSON(&body)
-		intensity := "normal"
-		if body.Intensity != "" {
-			intensity = body.Intensity
+		if err := c.ShouldBindJSON(&body); err != nil || body.Code == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误：需传 code 与 types"})
+			return
 		}
-		var prompt string
-		if body.SystemPrompt != nil {
-			prompt = *body.SystemPrompt
+		if len(body.Types) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "types 不能为空"})
+			return
 		}
+		intensity := body.Intensity
+		if intensity == "" {
+			intensity = "normal"
+		}
+		if body.SystemPrompt == nil {
+			body.SystemPrompt = map[string]string{}
+		}
+		window := body.Window
+		if window == "" {
+			window = "15m"
+		}
+		code := body.Code
 		name := aiSvc.StockDisplayName(code)
-		jobID := s.Jobs.Start("ai.stock_report", "AI 诊股 "+name, func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeStock(code, prompt, intensity)
-			return err
+
+		// 异步执行：flow 前置刷新串行，其余类型并发
+		jobID := s.Jobs.Start("ai.analyze", "AI 综合分析 "+name, func(p *jobs.Progress) error {
+			p.SetTotal(len(body.Types))
+
+			// ---- 第一阶段：flow 的前置刷新（串行，是 flow 分析的依赖） ----
+			flowRefreshOK := false
+			flowSkipErr := ""
+			for _, t := range body.Types {
+				if t != "flow" || s.Refresh == nil {
+					continue
+				}
+				p.Step("刷新资金流数据")
+				result := s.Refresh.RefreshStock(context.Background(), code, false, []string{"flow", "price"})
+				if reason, _ := result["fundflow"].(map[string]any)["reason"].(string); reason == "no_ticks" {
+					flowSkipErr = "该股无资金流数据（源无返回），跳过资金流分析"
+				}
+				flowRefreshOK = flowSkipErr == ""
+				break
+			}
+
+			// ---- 第二阶段：并发分析所有类型 ----
+			results := map[string]any{}
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+
+			for _, t := range body.Types {
+				t := t
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					p.Step(fmt.Sprintf("分析 %s", analyzeTypeCN(t)))
+					var r any
+					var err error
+					switch t {
+					case "diagnose":
+						r, err = aiSvc.AnalyzeStock(code, body.SystemPrompt["diagnose"], intensity)
+					case "news":
+						r, err = aiSvc.AnalyzeNews(code, body.SystemPrompt["news"], intensity)
+					case "tech":
+						r, err = aiSvc.AnalyzeTechnical(code, body.SystemPrompt["tech"], intensity)
+					case "flow":
+						if flowSkipErr != "" {
+							mu.Lock()
+							results["flow"] = map[string]any{"error": flowSkipErr}
+							mu.Unlock()
+							p.CompleteStep(t)
+							return
+						}
+						if !flowRefreshOK {
+							p.CompleteStep(t)
+							return
+						}
+						r, err = aiSvc.AnalyzeFundflow(code, window, body.SystemPrompt["flow"], intensity)
+					default:
+						err = fmt.Errorf("未知分析类型: %s", t)
+					}
+					mu.Lock()
+					if err != nil {
+						log.Printf("[ai] analyze %s 失败 code=%s: %v", t, code, err)
+						results[t] = map[string]any{"error": err.Error()}
+					} else {
+						results[t] = r
+					}
+					mu.Unlock()
+					p.CompleteStep(t)
+				}()
+			}
+			wg.Wait()
+			return nil
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
+	})
+	// GET /api/ai/analyze/:code —— 读取个股全部 AI 分析结果（诊股/消息面/技术面/资金流），一次返回。
+	// 前端在 POST /ai/analyze 的 job 完成后调用此接口一次性获取全部结果，避免多次 GET。
+	api.GET("/ai/analyze/:code", func(c *gin.Context) {
+		code := c.Param("code")
+		out := map[string]any{"code": code}
+		if r := aiSvc.GetReport(code); r != nil {
+			out["diagnose"] = r
+		}
+		if r := aiSvc.GetStockNewsReport(code); r != nil {
+			out["news"] = r
+		}
+		if r := aiSvc.GetStockTechReport(code); r != nil {
+			out["tech"] = r
+		}
+		window := c.Query("window")
+		if r := aiSvc.GetStockFundflowReport(code, window); r != nil {
+			out["flow"] = r
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
+	})
+
+	// ---- 统一组合 AI 分析入口 ----
+	// POST /api/ai/analyze-portfolio —— 组合多类型 AI 分析一站式接口：types 可选 score/news/tech/flow，
+	// 后端并发执行，一次性返回全部结果。
+	api.POST("/ai/analyze-portfolio", func(c *gin.Context) {
+		if aiSvc.GetActiveModel() == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
+			return
+		}
+		var body struct {
+			Tags         string            `json:"tags"`
+			Codes        string            `json:"codes"`
+			Types        []string          `json:"types"`
+			Intensity    string            `json:"intensity"`
+			Window       string            `json:"window"`
+			SystemPrompt map[string]string `json:"system_prompts"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil || len(body.Types) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误：需传 types"})
+			return
+		}
+		intensity := body.Intensity
+		if intensity == "" {
+			intensity = "normal"
+		}
+		if body.SystemPrompt == nil {
+			body.SystemPrompt = map[string]string{}
+		}
+		window := body.Window
+		if window == "" {
+			window = "15m"
+		}
+		// tags / codes 解析（空 tags → nil，语义=全部持仓；勿用空切片，ComputePortfolio 会过滤成空）
+		var tags []string
+		for _, t := range strings.Split(body.Tags, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+		if len(tags) == 0 {
+			tags = nil
+		}
+		var codes []string
+		for _, c2 := range strings.Split(body.Codes, ",") {
+			if c2 = strings.TrimSpace(c2); c2 != "" {
+				codes = append(codes, c2)
+			}
+		}
+		// tags 与 codes 互斥
+		if len(tags) > 0 && len(codes) > 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "tags 与 codes 只能二选一"})
+			return
+		}
+		// 窗口校验（flow 需要15m及以上）
+		w := ai.NormFlowWindow(window)
+		if w == "1m" || w == "5m" {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "批量分析窗口过小，请选择 15 分钟及以上"})
+			return
+		}
+
+		// 组合分析任务标签：如「AI 组合分析 · 组合打分/消息面/技术面/资金流」
+		labelParts := make([]string, 0, len(body.Types))
+		for _, t := range body.Types {
+			labelParts = append(labelParts, analyzeTypeCN(t))
+		}
+		jobID := s.Jobs.Start("ai.analyze_portfolio", "AI 组合分析 · "+strings.Join(labelParts, "/"), func(p *jobs.Progress) error {
+			p.SetTotal(len(body.Types))
+			results := map[string]any{}
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+
+			for _, t := range body.Types {
+				t := t
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					p.Step(fmt.Sprintf("分析 %s", analyzeTypeCN(t)))
+					var r any
+					var err error
+					switch t {
+					case "score":
+						r, err = aiSvc.ScorePortfolio(tags, body.SystemPrompt["score"], intensity)
+					case "news":
+						r, err = aiSvc.AnalyzeBatchNews(tags, codes, body.SystemPrompt["news"], intensity)
+					case "tech":
+						r, err = aiSvc.AnalyzeBatchTechnical(tags, codes, body.SystemPrompt["tech"], intensity)
+					case "flow":
+						r, err = aiSvc.AnalyzeBatchFundflow(tags, codes, nil, window, body.SystemPrompt["flow"], intensity)
+					default:
+						err = fmt.Errorf("未知分析类型: %s", t)
+					}
+					mu.Lock()
+					if err != nil {
+						log.Printf("[ai] analyze-portfolio %s 失败: %v", t, err)
+						results[t] = map[string]any{"error": err.Error()}
+					} else {
+						results[t] = r
+					}
+					mu.Unlock()
+					p.CompleteStep(t)
+				}()
+			}
+			wg.Wait()
+			return nil
+		})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
+	})
+
+	// GET /api/ai/analyze-portfolio —— 读取组合全部 AI 分析结果（打分/消息面/技术面/资金流）。
+	// query: tags（持仓组合）或 codes（指数组合，逗号分隔）、window（资金流窗口，可选）。
+	api.GET("/ai/analyze-portfolio", func(c *gin.Context) {
+		tagsStr := c.Query("tags")
+		codesStr := c.Query("codes")
+		var tags []string
+		for _, t := range strings.Split(tagsStr, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tags = append(tags, t)
+			}
+		}
+		var codes []string
+		for _, c2 := range strings.Split(codesStr, ",") {
+			if c2 = strings.TrimSpace(c2); c2 != "" {
+				codes = append(codes, c2)
+			}
+		}
+		if len(tags) == 0 {
+			tags = nil
+		}
+		window := c.Query("window")
+		scope := "portfolio"
+		if len(codes) > 0 {
+			scope = "indices"
+		}
+		// scope_key：tags/codes 排序拼接，空=全部
+		var keys []string
+		if len(codes) > 0 {
+			keys = codes
+		} else if len(tags) > 0 {
+			keys = tags
+		}
+		scopeKey := "全部"
+		if len(keys) > 0 {
+			sorted := make([]string, len(keys))
+			copy(sorted, keys)
+			sort.Strings(sorted)
+			scopeKey = strings.Join(sorted, ",")
+		}
+		out := map[string]any{
+			"score":     aiSvc.GetPortfolioReport(tags),
+			"news":      aiSvc.GetNewsCoherence(scope, scopeKey),
+			"tech":      aiSvc.GetTechCoherence(scope, scopeKey),
+			"flow":      aiSvc.GetCoherenceReport(scope, scopeKey, window),
+			"configured": aiSvc.GetActiveModel() != nil,
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
 	})
 
 	setupAINewsTechRoutes(api, s, aiSvc)
@@ -213,54 +493,8 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 		}
 		return out
 	}
-	// 批量请求 tags/codes 互斥校验在调用处处理
-	batchBody := func(c *gin.Context) (string, []string, []string, string, string) {
-		var body struct {
-			Code         string  `json:"code"`
-			Tags         string  `json:"tags"`
-			Codes        string  `json:"codes"`
-			SystemPrompt *string `json:"system_prompt"`
-			Intensity    string  `json:"intensity"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		intensity := body.Intensity
-		if intensity == "" {
-			intensity = "normal"
-		}
-		var prompt string
-		if body.SystemPrompt != nil {
-			prompt = *body.SystemPrompt
-		}
-		return strings.TrimSpace(body.Code), splitCodes(body.Tags), splitCodes(body.Codes), prompt, intensity
-	}
-	requireModel := func(c *gin.Context) bool {
-		if aiSvc.GetActiveModel() == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
-			return false
-		}
-		return true
-	}
 
 	// ---- 消息面 ----
-	// POST /api/ai/news-analysis —— 个股消息面 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 system_prompt/intensity；
-	// 返回 job_id，结果落 ai_news_reports。
-	api.POST("/ai/news-analysis", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		code, _, _, prompt, intensity := batchBody(c)
-		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
-			return
-		}
-		name := aiSvc.StockDisplayName(code)
-		jobID := s.Jobs.Start("ai.news", "消息面 AI "+name, func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeNews(code, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
-	})
 	// GET /api/ai/news-report/:code —— 读取某股最近一条消息面报告（对齐 app/api/ai.py，as_of DESC 取最新）。
 	api.GET("/ai/news-report/:code", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetStockNewsReport(c.Param("code"))})
@@ -269,51 +503,8 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	api.GET("/ai/news-reports", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListNewsReports(splitCodes(c.Query("codes")))})
 	})
-	// GET /api/ai/news-coherence —— 组合级消息面整合报告（对齐 app/api/ai.py）：query scope（portfolio/indices）+ scope_key，F5 重建用。
-	api.GET("/ai/news-coherence", func(c *gin.Context) {
-		scope := c.DefaultQuery("scope", "portfolio")
-		scopeKey := c.Query("scope_key")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetNewsCoherence(scope, scopeKey)})
-	})
-	// POST /api/ai/news-batch —— 批量消息面 AI（异步，对齐 app/api/ai.py）：body tags（持仓组合）与 codes（指数组合）只能二选一，
-	// 同时传返回 400；逐只落库、单只失败记日志继续，整组合 HTML 覆盖落库。
-	api.POST("/ai/news-batch", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		_, tags, codes, prompt, intensity := batchBody(c)
-		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
-			return
-		}
-		jobID := s.Jobs.Start("ai.news_batch", "批量消息面 AI", func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeBatchNews(tags, codes, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
-	})
 
 	// ---- 技术面 ----
-	// POST /api/ai/tech-analysis —— 个股技术面 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 system_prompt/intensity；
-	// 结果落 ai_tech_reports。
-	api.POST("/ai/tech-analysis", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		code, _, _, prompt, intensity := batchBody(c)
-		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
-			return
-		}
-		name := aiSvc.StockDisplayName(code)
-		jobID := s.Jobs.Start("ai.tech", "技术面 AI "+name, func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeTechnical(code, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
-	})
 	// GET /api/ai/tech-report/:code —— 读取某股最近一条技术面报告（对齐 app/api/ai.py）。
 	api.GET("/ai/tech-report/:code", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetStockTechReport(c.Param("code"))})
@@ -322,128 +513,12 @@ func setupAINewsTechRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 	api.GET("/ai/tech-reports", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListTechReports(splitCodes(c.Query("codes")))})
 	})
-	// GET /api/ai/tech-coherence —— 组合级技术面整合报告（对齐 app/api/ai.py）：query scope + scope_key。
-	api.GET("/ai/tech-coherence", func(c *gin.Context) {
-		scope := c.DefaultQuery("scope", "portfolio")
-		scopeKey := c.Query("scope_key")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetTechCoherence(scope, scopeKey)})
-	})
-	// POST /api/ai/tech-batch —— 批量技术面 AI（异步，对齐 app/api/ai.py）：tags 与 codes 只能二选一，同时传返回 400。
-	api.POST("/ai/tech-batch", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		_, tags, codes, prompt, intensity := batchBody(c)
-		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
-			return
-		}
-		jobID := s.Jobs.Start("ai.tech_batch", "批量技术面 AI", func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeBatchTechnical(tags, codes, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
-	})
 
 	setupAIFundflowRoutes(api, s, aiSvc)
 }
 
-// setupAIFundflowRoutes 资金流 AI 路由（5 个端点，对齐 app/api/ai.py）
+// setupAIFundflowRoutes 资金流 AI 路由（只读端点，写入统一走 /ai/analyze-portfolio）
 func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service) {
-	// 批量请求体：code/window/tags/codes/weights/system_prompt/intensity
-	flowBody := func(c *gin.Context) (string, any, []string, []string, []float64, string, string) {
-		var body struct {
-			Code         string  `json:"code"`
-			Window       any     `json:"window"`
-			Tags         string  `json:"tags"`
-			Codes        string  `json:"codes"`
-			Weights      string  `json:"weights"`
-			SystemPrompt *string `json:"system_prompt"`
-			Intensity    string  `json:"intensity"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		intensity := body.Intensity
-		if intensity == "" {
-			intensity = "normal"
-		}
-		var prompt string
-		if body.SystemPrompt != nil {
-			prompt = *body.SystemPrompt
-		}
-		var tags, codes []string
-		for _, t := range strings.Split(body.Tags, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				tags = append(tags, t)
-			}
-		}
-		for _, c2 := range strings.Split(body.Codes, ",") {
-			if c2 = strings.TrimSpace(c2); c2 != "" {
-				codes = append(codes, c2)
-			}
-		}
-		var weights []float64
-		for _, w := range strings.Split(body.Weights, ",") {
-			if w = strings.TrimSpace(w); w != "" {
-				if f, err := strconv.ParseFloat(w, 64); err == nil {
-					weights = append(weights, f)
-				}
-			}
-		}
-		return strings.TrimSpace(body.Code), body.Window, tags, codes, weights, prompt, intensity
-	}
-	requireModel := func(c *gin.Context) bool {
-		if aiSvc.GetActiveModel() == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "未配置 AI 模型"})
-			return false
-		}
-		return true
-	}
-
-	// 个股资金流分析（异步任务）
-	// POST /api/ai/fundflow-analysis —— 个股资金流 AI 分析（异步，对齐 app/api/ai.py）：body 需 code，可传 window/
-	// system_prompt/intensity；结果落 ai_fundflow_reports。
-	api.POST("/ai/fundflow-analysis", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		code, window, _, _, _, prompt, intensity := flowBody(c)
-		if code == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "缺少 code"})
-			return
-		}
-		name := aiSvc.StockDisplayName(code)
-		jobID := s.Jobs.Start("ai.fundflow", "资金流 AI "+name, func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeFundflow(code, window, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
-	})
-	// 批量资金流分析（异步任务；窗口需 15m 及以上）
-	// POST /api/ai/fundflow-batch —— 批量资金流 AI（异步，对齐 app/api/ai.py）：tags 与 codes 只能二选一；
-	// 窗口须 15m 及以上（1m/5m 返回 400）。
-	api.POST("/ai/fundflow-batch", func(c *gin.Context) {
-		if !requireModel(c) {
-			return
-		}
-		_, window, tags, codes, weights, prompt, intensity := flowBody(c)
-		if len(codes) > 0 && len(tags) > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "codes（指数组合）与 tags（持仓组合）只能二选一"})
-			return
-		}
-		w := ai.NormFlowWindow(window)
-		if w == "1m" || w == "5m" {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "批量分析窗口过小，请选择 15 分钟及以上"})
-			return
-		}
-		jobID := s.Jobs.Start("ai.fundflow_batch", "批量资金流 AI", func(p *jobs.Progress) error {
-			p.Step("AI 分析中（耗时较长请稍候）")
-			_, err := aiSvc.AnalyzeBatchFundflow(tags, codes, weights, window, prompt, intensity)
-			return err
-		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true}})
-	})
 	// 读取个股最近资金流 AI 结果（window 可选，精确匹配）
 	// GET /api/ai/fundflow-report/:code —— 读取某股最近资金流分析（对齐 app/api/ai.py）：query window 可精确匹配某窗口。
 	api.GET("/ai/fundflow-report/:code", func(c *gin.Context) {
@@ -460,13 +535,5 @@ func setupAIFundflowRoutes(api *gin.RouterGroup, s *Services, aiSvc *ai.Service)
 			}
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.ListFundflowReports(codes)})
-	})
-	// 组合级资金相关性报告
-	// GET /api/ai/fundflow-coherence —— 组合级资金相关性报告（对齐 app/api/ai.py）：query scope（默认 indices）+ scope_key + window。
-	api.GET("/ai/fundflow-coherence", func(c *gin.Context) {
-		scope := c.DefaultQuery("scope", "indices")
-		scopeKey := c.Query("scope_key")
-		window := c.Query("window")
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": aiSvc.GetCoherenceReport(scope, scopeKey, window)})
 	})
 }

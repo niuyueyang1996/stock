@@ -70,7 +70,7 @@ func (d *CacheDAO) GetDailyPrices(code, start, end string) []DailyPrice {
 // PrevClose code 在 date 之前（含）最近一条收盘
 func (d *CacheDAO) PrevClose(code, date string) *float64 {
 	var r DailyPrice
-	if err := d.DB.Where("code = ? AND trade_date <= ? AND close IS NOT NULL", code, date).
+	if err := d.DB.Where("code = ? AND trade_date < ? AND close IS NOT NULL", code, date).
 		Order("trade_date DESC").First(&r).Error; err != nil {
 		return nil
 	}

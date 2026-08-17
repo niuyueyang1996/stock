@@ -5,6 +5,7 @@ package holdings
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -239,13 +240,13 @@ func strptr(s string) *string {
 	return &s
 }
 
-// round 四舍五入保留指定小数位数（基于 int64 截断，正值 0.5 进一）
+// round 四舍五入保留指定小数位数（math.Round 对负值同样远离零舍入）
 func round(v float64, digits int) float64 {
 	p := 1.0
 	for i := 0; i < digits; i++ {
 		p *= 10
 	}
-	return float64(int64(v*p+0.5)) / p
+	return math.Round(v*p) / p
 }
 
 // AdjustCost 成本/股数调整（POST /holdings/{code}/cost-adjust）。

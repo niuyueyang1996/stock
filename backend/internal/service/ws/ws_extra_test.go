@@ -51,6 +51,15 @@ func (c *connCollector) get(i int) *client {
 	return c.clients[i]
 }
 
+// waitForCollect 等待至少 n 个连接被收集（修复 Dial 成功但服务端 handler 未执行的竞态）。
+func (c *connCollector) waitForCollect(n int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for c.count() < n && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return c.count() >= n
+}
+
 // newCollectingServer 启动一个 httptest 服务器：每次升级后登记连接，
 // 但不运行读循环（不会自动 Unregister），把服务端 *client 收集进 cc，
 // 后续由测试显式触发 Broadcast 逐出或直接调用 write。
@@ -196,7 +205,7 @@ func TestBroadcastEvictsDeadClient(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if cc.count() != 1 || countClients(hub) != 1 {
+	if !cc.waitForCollect(1, 2*time.Second) || countClients(hub) != 1 {
 		t.Fatalf("登记后应有 1 个连接, 收集=%d hub=%d", cc.count(), countClients(hub))
 	}
 
@@ -225,7 +234,7 @@ func TestBroadcastKeepsAliveClient(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if cc.count() != 1 {
+	if !cc.waitForCollect(1, 2*time.Second) {
 		t.Fatalf("收集失败: %d", cc.count())
 	}
 	if err := cc.get(0).write(map[string]any{"type": "jobs", "data": fakeSnapshot()}); err != nil {
@@ -351,7 +360,7 @@ func TestClientWriteTimeout(t *testing.T) {
 	}
 	defer conn.Close()
 
-	if cc.count() != 1 {
+	if !cc.waitForCollect(1, 2*time.Second) {
 		t.Fatalf("收集失败: %d", cc.count())
 	}
 	cl := cc.get(0)

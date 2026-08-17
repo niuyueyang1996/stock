@@ -259,9 +259,8 @@ func (d *AIFundflowReportDAO) GetLatest(code, window string) *db.AIFundflowRepor
 		} else {
 			q = q.Where("window = ?", window)
 		}
-	} else {
-		q = q.Order("trade_date DESC, updated_at DESC")
 	}
+	q = q.Order("trade_date DESC, updated_at DESC")
 	if err := q.First(&r).Error; err != nil {
 		return nil
 	}

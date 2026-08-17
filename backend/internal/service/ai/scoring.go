@@ -125,7 +125,7 @@ func (s *Service) ExpandTagPrompt(tag, rawPref string) (map[string]any, error) {
 	}
 	user := "标签：" + tag + "\n用户原始偏好：" + rawPref + tagExpandSchemaText()
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		tagPrefSystemPrompt(), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		tagPrefSystemPrompt(), user, s.GetReasoningEffort(), s.GetMaxTokens(), "偏好补全")
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +357,7 @@ func (s *Service) ScorePortfolio(tags []string, systemPrompt, intensity string) 
 	ctx := s.BuildPortfolioContext(tags)
 	user := "组合聚合数据：\n" + ctxJSON(ctx) + "\n\n" + portfolioSchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		portfolioSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		portfolioSystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "组合打分")
 	if err != nil {
 		return nil, err
 	}
@@ -787,7 +787,7 @@ func (s *Service) ScoreDaily(scoreDate, systemPrompt, intensity string) (map[str
 	ctx := s.BuildDailyContext(scoreDate)
 	user := "当日交易数据：\n" + ctxJSON(ctx) + "\n\n" + dailySchemaText(intensity)
 	raw, err := s.Client.ChatJSON(requestCtx(), modelCfg.BaseURL, modelCfg.APIKey, modelCfg.Model,
-		dailySystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens())
+		dailySystemPrompt(intensity, systemPrompt), user, s.GetReasoningEffort(), s.GetMaxTokens(), "每日打分")
 	if err != nil {
 		return nil, err
 	}

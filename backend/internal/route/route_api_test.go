@@ -651,17 +651,20 @@ func TestAIReasoningRuntimePrompts(t *testing.T) {
 	}
 }
 
-// TestAIReportNoModel 验证 POST /api/stocks/:code/ai-report 无激活模型 → 400 {"detail":"未配置 AI 模型"}。
-func TestAIReportNoModel(t *testing.T) {
+// TestAIAnalyzeNoModel 验证 POST /api/ai/analyze 无激活模型 → 400 {"detail":"未配置 AI 模型"}。
+func TestAIAnalyzeNoModel(t *testing.T) {
 	r, _ := newTestRouter(t, t.TempDir())
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/stocks/600519/ai-report", nil))
+	body := strings.NewReader(`{"code":"600519","types":["diagnose"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/analyze", body)
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 	}
 	m := jsonBody(t, w)
-	if _, ok := m["detail"].(string); !ok {
-		t.Errorf("需 detail, got %v", m)
+	if d, _ := m["detail"].(string); d != "未配置 AI 模型" {
+		t.Errorf("detail=%v", m["detail"])
 	}
 }
 
@@ -679,33 +682,21 @@ func TestAIReportGet(t *testing.T) {
 	}
 }
 
-// TestAINewsTechFundflowNoModel 验证消息面/技术面/资金流 AI 的 POST 端点：
-// 未配置激活模型时统一返回 400 {"detail":"未配置 AI 模型"}（requireModel 短路）。
-func TestAINewsTechFundflowNoModel(t *testing.T) {
-	cases := []struct {
-		method, path, body string
-	}{
-		{http.MethodPost, "/api/ai/news-analysis", `{"code":"600519"}`},
-		{http.MethodPost, "/api/ai/news-batch", `{"tags":"红利"}`},
-		{http.MethodPost, "/api/ai/tech-analysis", `{"code":"600519"}`},
-		{http.MethodPost, "/api/ai/tech-batch", `{"tags":"红利"}`},
-		{http.MethodPost, "/api/ai/fundflow-analysis", `{"code":"600519"}`},
-		{http.MethodPost, "/api/ai/fundflow-batch", `{"codes":"000300","window":"15m"}`},
+// TestAIBatchNoModel 验证组合 AI 统一端点：
+// 未配置激活模型时返回 400 {"detail":"未配置 AI 模型"}。
+func TestAIBatchNoModel(t *testing.T) {
+	r, _ := newTestRouter(t, t.TempDir())
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/analyze-portfolio",
+		strings.NewReader(`{"tags":"红利","types":["score","news","tech","flow"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/ai/analyze-portfolio 期望 400, got %d body=%s", w.Code, w.Body.String())
 	}
-	for _, tc := range cases {
-		r, _ := newTestRouter(t, t.TempDir())
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("%s %s 期望 400, got %d body=%s", tc.method, tc.path, w.Code, w.Body.String())
-			continue
-		}
-		m := jsonBody(t, w)
-		if d, _ := m["detail"].(string); d != "未配置 AI 模型" {
-			t.Errorf("%s %s detail=%v", tc.method, tc.path, m["detail"])
-		}
+	m := jsonBody(t, w)
+	if d, _ := m["detail"].(string); d != "未配置 AI 模型" {
+		t.Errorf("detail=%v", m["detail"])
 	}
 }
 
@@ -714,13 +705,12 @@ func TestAINewsTechFundflowReads(t *testing.T) {
 	paths := []string{
 		"/api/ai/news-report/600519",
 		"/api/ai/news-reports?codes=600519",
-		"/api/ai/news-coherence?scope=portfolio&scope_key=k",
 		"/api/ai/tech-report/600519",
 		"/api/ai/tech-reports?codes=600519",
-		"/api/ai/tech-coherence?scope=indices&scope_key=k",
 		"/api/ai/fundflow-report/600519",
 		"/api/ai/fundflow-reports?codes=600519",
-		"/api/ai/fundflow-coherence?scope=indices&scope_key=k&window=15m",
+		"/api/ai/analyze-portfolio",
+		"/api/ai/analyze-portfolio?tags=红利,科技&window=15m",
 	}
 	for _, path := range paths {
 		r, _ := newTestRouter(t, t.TempDir())
@@ -785,18 +775,19 @@ func TestAIScoringPrefs(t *testing.T) {
 		t.Fatalf("prefs DELETE code=%d body=%s", w5.Code, w5.Body.String())
 	}
 
-	// GET portfolio（空 → report）
+	// GET 组合分析报告（空 → null）
 	w6 := httptest.NewRecorder()
-	r.ServeHTTP(w6, httptest.NewRequest(http.MethodGet, "/api/ai-scoring/portfolio", nil))
+	r.ServeHTTP(w6, httptest.NewRequest(http.MethodGet, "/api/ai/analyze-portfolio", nil))
 	if w6.Code != http.StatusOK {
 		t.Fatalf("portfolio GET code=%d body=%s", w6.Code, w6.Body.String())
 	}
 
-	// POST portfolio 无模型 → 400
+	// POST 组合分析无模型 → 400
 	w7 := httptest.NewRecorder()
-	r.ServeHTTP(w7, httptest.NewRequest(http.MethodPost, "/api/ai-scoring/portfolio", nil))
+	r.ServeHTTP(w7, httptest.NewRequest(http.MethodPost, "/api/ai/analyze-portfolio",
+		strings.NewReader(`{"types":["score"]}`)))
 	if w7.Code != http.StatusBadRequest {
-		t.Fatalf("portfolio POST code=%d body=%s", w7.Code, w7.Body.String())
+		t.Fatalf("analyze-portfolio POST code=%d body=%s", w7.Code, w7.Body.String())
 	}
 
 	// GET daily-reports

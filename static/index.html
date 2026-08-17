@@ -246,7 +246,7 @@
     // 单元格渲染（按列 key）
     function cellHtml(k, s) {
       switch (k) {
-        case 'code': return `<td><a href="/static/stock.html?code=${s.code}">${s.code}</a> ${s.name} <span class="tag-badge edittag" data-edittag="${s.code}" title="点击修改标签">${s.tag || ''}</span></td>`;
+        case 'code': return `<td><a href="/static/stock.html?code=${esc(s.code)}">${esc(s.code)}</a> ${esc(s.name)} <span class="tag-badge edittag" data-edittag="${esc(s.code)}" title="点击修改标签">${esc(s.tag || '')}</span></td>`;
         case 'price': return `<td>${fmtNum(s.price)}</td>`;
         case 'quantity': return `<td>${fmtNum(s.quantity)}</td>`;
         case 'avg_cost': return `<td>${fmtNum(s.avg_cost)}</td>`;
