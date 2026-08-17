@@ -1,0 +1,15 @@
+backend/internal/route/middleware.go
+  h_07352c0544a725 2,7-8,10,19,37-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ef385c79990c78e781fd260033505af1f05099b2",
+  "prompts": {},
+  "logical_commit_id": "ef385c79990c78e781fd260033505af1f05099b2",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
