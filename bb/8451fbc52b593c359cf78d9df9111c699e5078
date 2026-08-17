@@ -1,0 +1,20 @@
+backend/internal/service/ws/ws_extra_test.go
+  s_7ada5a810dfaa8::t_5b4393b7752882 54-62,208,237,363
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bb8451fbc52b593c359cf78d9df9111c699e5078",
+  "prompts": {},
+  "logical_commit_id": "bb8451fbc52b593c359cf78d9df9111c699e5078",
+  "sessions": {
+    "s_7ada5a810dfaa8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00e68-1975-7680-8d15-164112050f9f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
