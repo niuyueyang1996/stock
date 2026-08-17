@@ -1,0 +1,91 @@
+backend/internal/service/holdings/holdings.go
+  s_7ada5a810dfaa8::t_ac55278227d117 8,243,249
+backend/internal/route/middleware.go
+  h_07352c0544a725 2,7-8,10,18-19,21,33-52
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 453-454,457
+backend/internal/db/dao/dao_read_test.go
+  h_07352c0544a725 100-102,104-106
+backend/internal/service/portfolio/portfolio_passthrough_test.go
+  h_07352c0544a725 13,53,290,292,323,356,369,386,570
+backend/internal/service/ws/ws_extra_test.go
+  s_7ada5a810dfaa8::t_5b4393b7752882 54-62,208,237,363
+backend/internal/service/ai/report.go
+  h_07352c0544a725 172-173,210,216,218,220-225,230-232,575
+backend/internal/service/dividend/dividend.go
+  h_07352c0544a725 8,148-149
+backend/internal/service/jobs/jobs.go
+  h_07352c0544a725 194-195,197,452-461
+backend/internal/service/ai/scoring.go
+  h_07352c0544a725 128,360,790
+backend/internal/service/quote/quote_test.go
+  h_07352c0544a725 12,30
+static/index.html
+  h_07352c0544a725 249
+backend/internal/service/ai/client.go
+  h_07352c0544a725 28,137,145-148,151-152,154,176-177
+static/stock.html
+  h_07352c0544a725 543,548,558-559,561-585,587-589,654
+backend/internal/service/calendar/calendar_test.go
+  h_07352c0544a725 29-42,45-52,54-86,88-127,143,181-182,185,206-216,220,222-230,232-240,244,246-279,282-283,285,287-291,293-301,305,307-315,317-325,329-337,339-347,349-356,360,362-365,367-374,376,378-384,386-394,396-398,400-457
+backend/internal/service/quote/quote_extra_test.go
+  h_07352c0544a725 271,275,279,283,288,293,298,302,309-310,313,316,319,322,324,327,329,335
+backend/internal/service/ai/news_tech.go
+  h_07352c0544a725 206,234,385,448
+static/js/common.js
+  h_07352c0544a725 65-72,1585-1587,1589-1590,1644-1645,1649,1653,1879-1880,1882-1883,1906-1907,1909-1910
+backend/internal/service/detail/detail_test.go
+  h_07352c0544a725 12,45,53,69,71,102,104,671-672,827
+backend/internal/service/refresh/refresh_batch_test.go
+  h_07352c0544a725 42,45
+backend/internal/route/route_api_test.go
+  h_07352c0544a725 712-713,778,780
+  s_7ada5a810dfaa8::t_3a6bfb53f3b027 654-655,658-661,666-667,685-699,785,787-788,790
+backend/internal/service/quote/quote.go
+  h_07352c0544a725 7,92-93,98-99,140-141
+backend/internal/service/datamanage/datamanage.go
+  h_07352c0544a725 8,145,151
+backend/internal/db/dao/ai.go
+  h_07352c0544a725 263
+backend/internal/service/ai/auto_score_test.go
+  h_07352c0544a725 27
+backend/internal/route/ai.go
+  s_7ada5a810dfaa8::t_3f31c9c828f182 7-9,14,22-39,180-184,190-198,200-209,211-213,215,217-286,289-341,343-348,352-416,433-434,520
+  h_07352c0544a725 11,342,349-351,417-432,435-464
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 95,98-106,122,124-137,140-141,146,162,170-185,187,193-194,198-199,209,213,223-225,229-236,240-242,249-250,252-257,283,290-291,307-308,312-320,337,339,341-342,345,361,378,384,386,391,419,434-438,493,498,504-505,507-508,589,594,599-600,619,630,639,643-644,664,701,703-704,707-709,711-712,719-722,725
+backend/internal/service/ai/fundflow_types.go
+  h_07352c0544a725 1-112
+backend/internal/service/calendar/calendar.go
+  h_07352c0544a725 7,33-39,82,135-138,140
+static/trade.html
+  h_07352c0544a725 435,444
+backend/internal/service/ai/client_log_test.go
+  h_07352c0544a725 27,34-36
+backend/internal/db/dao/cache.go
+  h_07352c0544a725 73
+static/portfolio.html
+  h_07352c0544a725 147-150,261,265,390,394,397,406-407,409-433,703,706,746-752
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "300d8637fa1dcc4d3cf41479e3239692078aaccf",
+  "prompts": {},
+  "logical_commit_id": "300d8637fa1dcc4d3cf41479e3239692078aaccf",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  },
+  "sessions": {
+    "s_7ada5a810dfaa8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00e68-1975-7680-8d15-164112050f9f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
