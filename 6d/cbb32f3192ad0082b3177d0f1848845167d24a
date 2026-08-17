@@ -1,0 +1,19 @@
+backend/internal/route/ai.go
+  h_07352c0544a725 11,415-443
+backend/internal/route/route_api_test.go
+  h_07352c0544a725 712-713,778,780
+static/portfolio.html
+  h_07352c0544a725 261,265,420-424
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6dcbb32f3192ad0082b3177d0f1848845167d24a",
+  "prompts": {},
+  "logical_commit_id": "6dcbb32f3192ad0082b3177d0f1848845167d24a",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
