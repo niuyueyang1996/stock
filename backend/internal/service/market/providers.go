@@ -276,3 +276,43 @@ func isETFCode(code string) bool {
 	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
 		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
 }
+
+// ToSymbol 代码→行情符号（导出给 refresh 包对齐 Python to_symbol）
+func ToSymbol(code string) string { return toSymbol(code) }
+
+// SinaFundflowToDay 新浪日级资金流原始行 → FundflowDay（仅补历史缺口，无 bands）
+func SinaFundflowToDay(r raw.FundflowDayRow) *model.FundflowDay {
+	date := r.Opendate
+	if date == "" {
+		return nil
+	}
+	net := strF(r.Netamount)
+	r0 := strF(r.R0Net)
+	r1 := strF(r.R1Net)
+	r2 := strF(r.R2Net)
+	r3 := strF(r.R3Net)
+	b0 := strF(r.R0)
+	b1 := strF(r.R1)
+	b2 := strF(r.R2)
+	b3 := strF(r.R3)
+	buy := b0 + b1 + b2 + b3
+	sell := buy - net
+	total := buy + sell
+	main := r0 + r1
+	mainPct := 0.0
+	if total != 0 {
+		mainPct = main / total * 100
+	}
+	return &model.FundflowDay{
+		Date:          date,
+		Netamount:     round2(net),
+		MainNet:       round2(main),
+		SuperLargeNet: round2(r0),
+		LargeNet:      round2(r1),
+		MediumNet:     round2(r2),
+		SmallNet:      round2(r3),
+		MainNetPct:    round2(mainPct),
+		BuyAmount:     round2(buy),
+		SellAmount:    round2(sell),
+	}
+}

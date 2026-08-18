@@ -29,19 +29,21 @@ import (
 
 // 常量（对齐 refresh.py）
 const (
-	historyDays     = 760 // 日K历史窗口（约3年，全量/增量统一，对齐 Python FUNDFLOW_HISTORY_DAYS）
-	historyMinDays  = 60  // 稀疏判定下限
-	fundflowMinDays = 60  // 资金流历史窗口下限
-	intradayEndHour = 16
-	intradayEndMin  = 30
-	closeSyncHour   = 16
-	closeSyncMin    = 10
+	historyDays              = 760 // 日K历史窗口（约3年，全量/增量统一，对齐 Python FUNDFLOW_HISTORY_DAYS）
+	historyMinDays           = 60  // 稀疏判定下限
+	fundflowMinDays          = 60  // 资金流历史窗口下限
+	fundflowHistoryMinDays   = 45  // 日级资金流历史回填完成下限（贴近 AI 30日累计 + 前端45日展示缓冲）
+	intradayEndHour          = 16
+	intradayEndMin           = 30
+	closeSyncHour            = 16
+	closeSyncMin             = 10
 )
 
 // Service 刷新服务
 type Service struct {
 	DB        *gorm.DB
 	Tencent   *raw.Tencent
+	Sina      *raw.Sina
 	Cache     *dao.CacheDAO
 	Holdings  *holdings.Service
 	Market    *market.MarketManager
@@ -306,6 +308,8 @@ func (s *Service) syncStockFull(ctx context.Context, code string) map[string]any
 	out["kline"] = "synced"
 	out["financials"] = s.syncFinancials(ctx, code, true)
 	out["fundflow"] = s.syncFundflow(ctx, code, now)
+	// 日级历史回填（对齐 sync_fundflow_history：A股/ETF 新浪日级接口补缺口，不覆盖腾讯分笔当日）
+	out["fundflow_history"] = s.syncFundflowHistory(ctx, code, now)
 	return out
 }
 
@@ -660,6 +664,73 @@ func (s *Service) syncHKFundflow(ctx context.Context, code string) map[string]an
 		_ = s.Cache.UpsertFundflowMinute(code, day.Date, rows)
 	}
 	return map[string]any{"code": code, "fetched": fetched, "reason": "ok"}
+}
+
+// syncFundflowHistory A股/ETF 新浪日级五档资金流历史回填（增量，对齐 Python sync_fundflow_history）。
+// 目标窗口 = 新浪单次返回的最近约 300 个交易日；只补 daily_fundflow_cache 缺失日，
+// 不覆盖腾讯分笔派生的当日/已有实时值。缓存已覆盖最近交易日且窗口内 ≥30 天则跳过。
+func (s *Service) syncFundflowHistory(ctx context.Context, code string, now time.Time) map[string]any {
+	// 仅 A股/ETF 走新浪日级历史（指数无此源，港股走分时近5日窗口）
+	if s.IsIndex != nil && s.IsIndex(code) {
+		return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
+	}
+	if isHKCode5(code) {
+		return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
+	}
+	if s.Sina == nil {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
+	}
+
+	target := now
+	if s.Cal != nil {
+		target = s.Cal.ResolveLiveTradeDate(now)
+	}
+	targetDate := target.Format("2006-01-02")
+	windowStart := addDays(targetDate, -400)
+
+	n, mx := s.Cache.GetDailyFundflowCount(code, windowStart)
+	// 窗口样本充足即跳过（避免仅因“最新交易日未落库”反复触发历史接口请求）
+	if mx != "" && mx >= targetDate && n >= fundflowHistoryMinDays {
+		log.Printf("[资金流回填] %s 窗口内历史天数足够（max=%s, count=%d），跳过回填", code, mx, n)
+		return map[string]any{"code": code, "fetched": 0, "reason": "cached"}
+	}
+
+	rows := s.Sina.FundflowDailyHistory(ctx, market.ToSymbol(code), 500)
+	if len(rows) == 0 {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_data"}
+	}
+
+	have := map[string]bool{}
+	var existing []db.DailyFundflowCache
+	if err := s.Cache.DB.Where("code=?", code).Find(&existing).Error; err == nil {
+		for _, r := range existing {
+			have[r.TradeDate] = true
+		}
+	}
+
+	wrote := 0
+	for _, r := range rows {
+		date := r.Opendate
+		if date == "" {
+			continue
+		}
+		if windowStart != "" && date < windowStart {
+			continue
+		}
+		if have[date] {
+			continue
+		}
+		d := market.SinaFundflowToDay(r)
+		if d == nil {
+			continue
+		}
+		_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, date, d, nil))
+		wrote++
+	}
+	if wrote == 0 {
+		return map[string]any{"code": code, "fetched": 0, "reason": "cached"}
+	}
+	return map[string]any{"code": code, "fetched": wrote, "reason": "ok"}
 }
 
 // isHKCode5 港股五位代码判定

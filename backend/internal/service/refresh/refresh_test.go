@@ -1,6 +1,8 @@
 package refresh
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
@@ -110,5 +113,82 @@ func TestDBDailyFlowFromBands(t *testing.T) {
 	row2 := dbDailyFlowFrom("600900", "2026-08-13", day, nil)
 	if row2.P15 != nil || row2.P40 != nil {
 		t.Fatalf("nil bands 不应设置分档: %+v", row2)
+	}
+}
+
+func TestSyncFundflowHistory_Incremental(t *testing.T) {
+	s, g := openRefresh(t)
+	s.Sina = raw.NewSina()
+
+	// mock 新浪接口：返回 2 天历史日级资金流
+	mux := http.NewServeMux()
+	mux.HandleFunc("/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"opendate":"2026-08-13","netamount":"123","r0":"10","r1":"20","r2":"30","r3":"40","r0_net":"5","r1_net":"6","r2_net":"7","r3_net":"8"},{"opendate":"2026-08-14","netamount":"321","r0":"11","r1":"21","r2":"31","r3":"41","r0_net":"12","r1_net":"13","r2_net":"14","r3_net":"15"}]`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	s.Sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme = "http"
+		r.URL.Host = ts.Listener.Addr().String()
+		return http.DefaultTransport.RoundTrip(r)
+	})
+
+	// 预置 8-14 已有 → 只应回填 8-13
+	_ = g.Exec("INSERT INTO daily_fundflow_cache(code,trade_date,netamount) VALUES('600519','2026-08-14',999)").Error
+
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local)
+	res := s.syncFundflowHistory(t.Context(), "600519", now)
+	if res["reason"] != "ok" {
+		t.Fatalf("reason = %v", res["reason"])
+	}
+	if res["fetched"] != 1 {
+		t.Fatalf("应回填1天, got %v", res["fetched"])
+	}
+
+	var n int64
+	_ = g.Raw("SELECT COUNT(*) FROM daily_fundflow_cache WHERE code='600519'").Scan(&n)
+	if n != 2 {
+		t.Fatalf("总天数应为2, got %d", n)
+	}
+
+	// 再跑一次应命中 cached
+	res2 := s.syncFundflowHistory(t.Context(), "600519", now)
+	if res2["reason"] != "cached" {
+		t.Fatalf("二次回填应 cached, got %v", res2)
+	}
+}
+
+func TestSyncFundflowHistory_SufficientWindow(t *testing.T) {
+	s, g := openRefresh(t)
+	s.Sina = raw.NewSina()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	s.Sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme = "http"
+		r.URL.Host = ts.Listener.Addr().String()
+		return http.DefaultTransport.RoundTrip(r)
+	})
+
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local)
+	target := s.Cal.ResolveLiveTradeDate(now)
+	windowStart := target.AddDate(0, 0, -400)
+	// 灌入45天历史，覆盖函数内部400天窗口且最新日等于 target
+	base := windowStart
+	for i := 0; i < 45; i++ {
+		d := base.AddDate(0, 0, i).Format("2006-01-02")
+		_ = g.Exec("INSERT OR IGNORE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519", d, float64(i)).Error
+	}
+	_ = g.Exec("INSERT OR REPLACE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519", target.Format("2006-01-02"), 999).Error
+
+	res := s.syncFundflowHistory(t.Context(), "600519", now)
+	if res["reason"] != "cached" {
+		t.Fatalf("窗口充足应 cached, got %v", res)
 	}
 }

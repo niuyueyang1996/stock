@@ -120,6 +120,7 @@ func (s *Service) processStock(ctx context.Context, code string, full bool, item
 		}
 		if items[ItemFlow] {
 			entry["fundflow"] = s.syncFundflow(ctx, code, now)
+			entry["fundflow_history"] = s.syncFundflowHistory(ctx, code, now)
 		}
 		// 估值：依赖价格 → 全量拉百度序列 + 重算分位 + 落库当日估值（照 Python
 		// `if need_val: r2 = sync_valuation(code, now, price, force=True)`；
@@ -135,6 +136,7 @@ func (s *Service) processStock(ctx context.Context, code string, full bool, item
 		}
 		if items[ItemFlow] {
 			entry["fundflow"] = s.syncFundflow(ctx, code, now)
+			entry["fundflow_history"] = s.syncFundflowHistory(ctx, code, now)
 		}
 		// 动态估值：仅落库当日实时估值，不拉序列/不分位（照 Python sync_current_valuation）
 		if items[ItemValuation] {

@@ -214,6 +214,7 @@ func main() {
 	dataManageSvc := datamanage.New(gdb, holdSvc)
 	// 搜索辅助注入（quote service）
 	rfSvc.Tencent = tx
+	rfSvc.Sina = sina
 	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
