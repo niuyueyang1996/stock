@@ -43,6 +43,7 @@ import (
 	"stockanalyzer/internal/service/stockmeta"
 	"stockanalyzer/internal/service/valuation"
 	"stockanalyzer/internal/service/ws"
+	"stockanalyzer/internal/tz"
 )
 
 // serverLogFile 日志文件句柄（/api/logs 读尾部用；未落盘时为 nil）
@@ -57,6 +58,7 @@ func logFilePath() string {
 }
 
 func main() {
+	tz.UseAsLocal() // Android 静态包无 tzdata，默认 UTC；资金流超前过滤必须按北京时间
 	cfg := config.Load()
 
 	// 日志落盘（App 内经 GET /api/logs 查看；开发态同时输出 stdout）

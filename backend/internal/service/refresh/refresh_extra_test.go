@@ -359,6 +359,51 @@ func TestSyncFundflowStaleTicks(t *testing.T) {
 	}
 }
 
+// TestSyncFundflowUTCClockCutsAfternoon 复现 APK：进程时钟为 UTC 14:25 时（北京已 22:25），
+// 目标日仍是当天、超前过滤 nowHM=14:25，全市场分时被砍在 14:25；北京时间则保留到 15:00。
+func TestSyncFundflowUTCClockCutsAfternoon(t *testing.T) {
+	ticks := []raw.TickRow{
+		{Time: "10:30:00", Amount: 1000, Sign: 1, Price: 9.0},
+		{Time: "14:20:00", Amount: 1000, Sign: 1, Price: 9.1},
+		{Time: "14:50:00", Amount: 1000, Sign: -1, Price: 9.2},
+		{Time: "15:00:00", Amount: 1000, Sign: 1, Price: 9.3},
+	}
+	run := func(now time.Time) []string {
+		t.Helper()
+		s, _, _ := openRefreshBatch(t)
+		today := now.Format("2006-01-02")
+		closeV := 9.0
+		src := "tencent"
+		_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})
+		s.Market = market.NewMarketManager(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
+			return ticks, nil
+		}})
+		out := s.syncFundflow(context.Background(), "600519", now)
+		if out["reason"] != "ok" {
+			t.Fatalf("now=%s reason=%v", now, out["reason"])
+		}
+		rows := s.Cache.GetFundflowMinute("600519", today)
+		got := make([]string, 0, len(rows))
+		for _, r := range rows {
+			got = append(got, r.Ts)
+		}
+		return got
+	}
+
+	utcNow := time.Date(2026, 8, 18, 14, 25, 0, 0, time.UTC)
+	gotUTC := run(utcNow)
+	if len(gotUTC) != 2 || gotUTC[len(gotUTC)-1] != "14:20" {
+		t.Fatalf("UTC 14:25 应砍到 14:20（手机全市场同刻度）, got %v", gotUTC)
+	}
+
+	cst := time.FixedZone("CST", 8*3600)
+	cstNow := time.Date(2026, 8, 18, 22, 25, 0, 0, cst)
+	gotCST := run(cstNow)
+	if len(gotCST) != 4 || gotCST[len(gotCST)-1] != "15:00" {
+		t.Fatalf("北京 22:25 应保留到 15:00（电脑正常）, got %v", gotCST)
+	}
+}
+
 // TestTodayPrice 当日有收盘用当日，否则回退最近一条
 func TestTodayPrice(t *testing.T) {
 	s, _, g := openRefreshBatch(t)

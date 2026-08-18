@@ -54,6 +54,8 @@ object GoServer {
         pb.environment()["STOCK_APP_HOME"] = File(context.filesDir, "data").absolutePath
         pb.environment()["STOCK_PROJECT_ROOT"] = context.filesDir.absolutePath
         pb.environment()["STOCK_PORT"] = PORT.toString()
+        // POSIX CST-8 = UTC+8。APK 内 Go 无 tzdata，不设会落到 UTC，资金流按 14:25 砍午后分时。
+        pb.environment()["TZ"] = "CST-8"
         pb.redirectErrorStream(true)
         process = pb.start()
         // 守护日志线程，避免 stdout 管道阻塞。

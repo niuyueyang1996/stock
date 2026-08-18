@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	tickPageSize = 70  // 腾讯 detail 每页约 70 条（约 5 分钟成交）
-	tickMaxPage  = 200 // 全天约 35 页
-	tickBatch    = 40  // 首次并发翻一批
+	tickPageSize = 70   // 腾讯 detail 每页约 70 条
+	tickMaxPage  = 2000 // 安全上限。活跃股远超「35 页/全天」：200 页≈1.4 万笔，约在 14:19 写满后增量循环 p<200 直接不拉
+	tickBatch    = 40   // 首次并发翻一批
 )
 
 // TickRow 分笔行：(time HH:MM:SS, amount, sign, price)；sign +1买/-1卖/0中性
