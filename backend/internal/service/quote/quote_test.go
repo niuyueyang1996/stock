@@ -34,8 +34,11 @@ func openQuote(t *testing.T) (*Service, *dao.CacheDAO) {
 // TestGetStaleAndFresh 缓存行情：当日行已收盘 → 非 stale；仅历史行 → stale
 func TestGetStaleAndFresh(t *testing.T) {
 	s, d := openQuote(t)
-	today := time.Now().Format("2006-01-02")
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	// 用固定工作日 2026-08-17（周一）作为"今天"，避免周末/节假日 flaky
+	fixedNow := time.Date(2026, 8, 17, 16, 0, 0, 0, time.Local)
+	s.Now = func() time.Time { return fixedNow }
+	today := "2026-08-17"
+	yesterday := "2026-08-14" // 上一个交易日（周五）
 	c1, c2 := 10.0, 9.5
 	_ = d.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: yesterday, Close: &c1}})
 	_ = d.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &c2}})
@@ -54,6 +57,7 @@ func TestGetStaleAndFresh(t *testing.T) {
 
 	// 仅历史行 → stale
 	s2, _ := openQuote(t)
+	s2.Now = func() time.Time { return fixedNow }
 	_ = s2.DB.Exec("INSERT INTO daily_price_cache(code, trade_date, close, source) VALUES('000001', ?, ?, 'tencent')",
 		"2020-01-02", 5.0)
 	q2 := s2.Get("000001")
@@ -69,7 +73,9 @@ func TestGetStaleAndFresh(t *testing.T) {
 // TestGetMany 多股批量读取
 func TestGetMany(t *testing.T) {
 	s, d := openQuote(t)
-	today := time.Now().Format("2006-01-02")
+	fixedNow := time.Date(2026, 8, 17, 16, 0, 0, 0, time.Local)
+	s.Now = func() time.Time { return fixedNow }
+	today := "2026-08-17"
 	c := 8.8
 	_ = d.UpsertDailyPrices([]dao.DailyPrice{{Code: "601857", TradeDate: today, Close: &c}})
 	m := s.GetMany([]string{"601857", "000000"})

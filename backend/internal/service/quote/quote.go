@@ -25,6 +25,8 @@ type Service struct {
 	Cal *calendar.Service
 	// BeforeOpen 开盘判定（<09:15 未开盘；非交易日）；nil 视为已开盘
 	BeforeOpen func(now time.Time) bool
+	// Now 当前时间函数（测试注入固定时间点；nil = time.Now()）
+	Now func() time.Time
 	// DataDir 数据目录（搜索读全市场列表缓存 stock_list.json/etf_list.json/hk_stock_list.json）
 	DataDir string
 	// SyncPeriodKline 周/月K兜底同步（注入 refresh 实现；kline 端点周/月K无缓存时调用一次）
@@ -35,6 +37,14 @@ type Service struct {
 
 // New 构造缓存行情服务（仅注入 DB，无任何网络依赖）
 func New(g *gorm.DB) *Service { return &Service{DB: g} }
+
+// now 返回当前时间（优先 Now 回调，nil 时 fallback time.Now()）
+func (s *Service) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
 
 // CachedQuote 行情（对齐 Python _row_to_quote 字段）
 type CachedQuote struct {
@@ -57,7 +67,7 @@ type CachedQuote struct {
 
 // Get 读取某股缓存行情（零网络）
 func (s *Service) Get(code string) *CachedQuote {
-	now := time.Now()
+	now := s.now()
 	today := now.Format("2006-01-02")
 	var row *db.DailyPriceCache
 	var cur db.DailyPriceCache
@@ -149,7 +159,7 @@ func (s *Service) Kline(code, period string) (int, map[string]any, string) {
 	if period != "day" && period != "week" && period != "month" {
 		return 400, nil, "period 仅支持 day/week/month"
 	}
-	now := time.Now()
+	now := s.now()
 	eff := s.Cal.ResolveLiveTradeDate(now).Format("2006-01-02")
 	ms := s.Cal.MarketStatusStr(now)
 	bars := []klineBar{}

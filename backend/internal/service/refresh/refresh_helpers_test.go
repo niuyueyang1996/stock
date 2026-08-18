@@ -72,6 +72,8 @@ var (
 // TestSyncStockFull 一站式同步单股（同步所有项）
 func TestSyncStockFull(t *testing.T) {
 	s, _, g := openRefreshBatch(t)
+	// Cal=nil 跳过交易日/开盘前过滤，避免周末跑时 bar 被清掉
+	s.Cal = nil
 	now := time.Now()
 	today := now.Format("2006-01-02")
 	s.Market = market.NewMarketManager(&flexMarketSource{
