@@ -331,6 +331,17 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
+// JobSnapshot 线程安全地返回单个任务的关键字段快照（状态/错误/完成标记），供测试/外部轮询使用。
+func (m *Manager) JobSnapshot(jobID string) (status Status, err string, okVal *bool, found bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[jobID]
+	if !ok {
+		return "", "", nil, false
+	}
+	return j.Status, j.Error, j.OK, true
+}
+
 // CancelBatch 取消整批任务：给每种子任务标记取消请求并把批次状态置为 cancelled；批次不存在返回 false。
 func (m *Manager) CancelBatch(batchID string) bool {
 	m.mu.Lock()

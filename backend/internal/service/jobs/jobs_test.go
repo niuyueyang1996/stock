@@ -11,19 +11,15 @@ func waitStatus(t *testing.T, m *Manager, id string, want Status) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		m.mu.Lock()
-		j, ok := m.jobs[id]
-		m.mu.Unlock()
-		if ok && j.Status == want {
+		status, _, _, found := m.JobSnapshot(id)
+		if found && status == want {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	m.mu.Lock()
-	j, ok := m.jobs[id]
-	m.mu.Unlock()
-	if ok {
-		t.Fatalf("job %s status = %s, want %s (err=%s)", id, j.Status, want, j.Error)
+	status, err, _, found := m.JobSnapshot(id)
+	if found {
+		t.Fatalf("job %s status = %s, want %s (err=%s)", id, status, want, err)
 	}
 	t.Fatalf("job %s not found", id)
 }
