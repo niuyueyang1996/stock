@@ -1,0 +1,20 @@
+packaging/android/app/src/main/java/com/stockanalyzer/app/MainActivity.kt
+  s_b2869fccf4a95f::t_308cba76a1e36e 4,6,20,60-80,84-95,107-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a1945cc4a145b7b7e7827487070f79ad0b016385",
+  "prompts": {},
+  "logical_commit_id": "a1945cc4a145b7b7e7827487070f79ad0b016385",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
