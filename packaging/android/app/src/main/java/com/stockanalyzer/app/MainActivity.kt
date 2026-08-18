@@ -1,7 +1,9 @@
 package com.stockanalyzer.app
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -15,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private var fileChooserCallback: ValueCallback<Array<android.net.Uri>>? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,8 +57,40 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<android.net.Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                // 取消上一次未完成的选择
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = filePathCallback
+
+                val intent = fileChooserParams?.createIntent()
+                    ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "*/*"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false)
+                    }
+                @Suppress("DEPRECATION")
+                startActivityForResult(intent, FILE_CHOOSER_REQUEST)
+                return true
+            }
+        }
         webView.loadUrl(GoServer.BASE_URL)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            val result = if (resultCode == RESULT_OK && data != null) {
+                data.data?.let { arrayOf(it) }
+            } else null
+            fileChooserCallback?.onReceiveValue(result)
+            fileChooserCallback = null
+        }
     }
 
     override fun onBackPressed() {
@@ -67,8 +102,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         // 应用退出时停止本地 Go 服务
         GoServer.stop()
+    }
+
+    companion object {
+        private const val FILE_CHOOSER_REQUEST = 1001
     }
 }
