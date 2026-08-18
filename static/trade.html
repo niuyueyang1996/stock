@@ -31,10 +31,8 @@
       <div class="form-actions">
         <button class="btn primary" id="submitBtn" onclick="submitTrade()">提交</button>
         <button class="btn" id="cancelBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
-        <span style="position:relative;display:inline-block;vertical-align:middle">
-          <button type="button" class="btn" id="importBtn" tabindex="-1">📥 导入 Excel</button>
-          <input type="file" id="importFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="importExcel()" title="导入 Excel" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;font-size:32px;cursor:pointer">
-        </span>
+        <button type="button" class="btn" id="importBtn" onclick="startExcelImport()">📥 导入 Excel</button>
+        <input type="file" id="importFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="importExcel()" style="display:none">
         <button class="btn" id="adjustBtn" onclick="openCostAdjust()" title="直接调整持仓成本：补记漏记 / 分红除权摊薄">💰 调整成本</button>
         <button class="btn" id="aiScoreTodayBtn" onclick="aiScoreToday()" title="请求 AI 对今天录制的交易打分">🤖 AI 打分(今日)</button>
       </div>
@@ -210,7 +208,41 @@
       }
     }
 
-    // ============ Excel 导入（后台 job 扇出，与刷新同口径） ============
+    // ============ Excel 导入（安卓走原生桥，浏览器走隐藏 file input） ============
+    function startExcelImport() {
+      if (window.AndroidBridge) {
+        const btn = document.getElementById('importBtn');
+        if (btn) btn.disabled = true;
+        AndroidBridge.pickExcel();
+        return;
+      }
+      document.getElementById('importFile').click();
+    }
+
+    window.onAndroidExcelImported = async function (status, body) {
+      const btn = document.getElementById('importBtn');
+      try {
+        if (status < 0) return; // 用户取消
+        if (status === 0) throw new Error(body || '上传失败');
+        let json = {};
+        try { json = JSON.parse(body || '{}'); } catch (e) { throw new Error(body || '响应无法解析'); }
+        if (status !== 200) throw new Error(json.detail || json.msg || ('HTTP ' + status));
+        const data = json.data || json;
+        if (!data.job_id) throw new Error('未返回任务 ID');
+        toast('Excel 导入已开始，进度见顶部');
+        if (typeof window.kickJobBar === 'function') window.kickJobBar();
+        await waitForJob(data.job_id);
+        const skipped = data.skipped || 0;
+        const total = data.total || 0;
+        toast(`已导入 ${total} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''), 3500);
+        await loadPage();
+      } catch (e) {
+        toast('导入失败：' + e.message, 4000);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    };
+
     async function importExcel() {
       const input = document.getElementById('importFile');
       const file = input.files && input.files[0];

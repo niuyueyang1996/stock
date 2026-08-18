@@ -2,23 +2,38 @@ package com.stockanalyzer.app
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
-import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.util.Log
+import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * WebView 壳：加载 Go 后端提供的本地页面（http://127.0.0.1:8080）。
- * 退出时销毁后端进程；再次打开单实例复用（launchMode=singleTask）。
+ * WebView 壳：加载本地 Go 页面。Excel 导入不走 WebView file input（安卓经常点了没反应），
+ * 由 JS 桥调系统选文件，再由壳进程 POST 到 127.0.0.1。
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
-    private var fileChooserCallback: ValueCallback<Array<android.net.Uri>>? = null
+
+    private val pickExcel = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri == null) {
+            notifyJs(-1, "")
+            return@registerForActivityResult
+        }
+        Thread { uploadExcel(uri) }.start()
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,20 +47,18 @@ class MainActivity : AppCompatActivity() {
             allowFileAccess = false
             allowContentAccess = true
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            cacheMode = WebSettings.LOAD_DEFAULT
+            cacheMode = WebSettings.LOAD_NO_CACHE
         }
+        webView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
         webView.webViewClient = object : WebViewClient() {
-            // 保持应用内导航
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                 url ?: return false
                 if (url.startsWith(GoServer.BASE_URL)) {
                     return false
                 }
-                // 外部链接用系统浏览器打开
                 return true
             }
 
-            // 后端未就绪/加载失败时给出提示，避免白屏
             override fun onReceivedError(
                 view: WebView?,
                 request: android.webkit.WebResourceRequest?,
@@ -65,37 +78,80 @@ class MainActivity : AppCompatActivity() {
                 filePathCallback: ValueCallback<Array<android.net.Uri>>?,
                 fileChooserParams: FileChooserParams?
             ): Boolean {
-                fileChooserCallback?.onReceiveValue(null)
-                fileChooserCallback = filePathCallback
-
-                // OPEN_DOCUMENT + */*：系统文档 UI 必有；勿用 HTML accept 生成的 createIntent（.xlsx 扩展名常导致无 Activity）
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "*/*"
-                }
-                return try {
-                    @Suppress("DEPRECATION")
-                    startActivityForResult(Intent.createChooser(intent, "选择 Excel 文件"), FILE_CHOOSER_REQUEST)
-                    true
-                } catch (_: ActivityNotFoundException) {
-                    fileChooserCallback = null
-                    filePathCallback?.onReceiveValue(null)
-                    false
-                }
+                // 释放 WebView 回调，改走与按钮相同的原生选择器
+                filePathCallback?.onReceiveValue(null)
+                launchExcelPicker()
+                return true
             }
         }
         webView.loadUrl(GoServer.BASE_URL)
     }
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == FILE_CHOOSER_REQUEST) {
-            val result = if (resultCode == RESULT_OK && data != null) {
-                data.data?.let { arrayOf(it) }
-            } else null
-            fileChooserCallback?.onReceiveValue(result)
-            fileChooserCallback = null
+    inner class AndroidBridge {
+        @JavascriptInterface
+        fun pickExcel() {
+            runOnUiThread { launchExcelPicker() }
+        }
+    }
+
+    private fun launchExcelPicker() {
+        try {
+            Toast.makeText(this, "请选择 Excel 文件", Toast.LENGTH_SHORT).show()
+            pickExcel.launch("*/*")
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_LONG).show()
+            notifyJs(0, "没有可用的文件选择器")
+        }
+    }
+
+    private fun uploadExcel(uri: Uri) {
+        try {
+            val name = displayName(uri) ?: "holdings.xlsx"
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: throw IllegalStateException("无法读取文件")
+            val boundary = "----StockImport${System.currentTimeMillis()}"
+            val conn = (URL("${GoServer.BASE_URL}/api/holdings/import-excel").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 15_000
+                readTimeout = 60_000
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+            conn.outputStream.use { out ->
+                val safeName = name.replace("\"", "")
+                out.write("--$boundary\r\n".toByteArray())
+                out.write(
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"$safeName\"\r\n".toByteArray()
+                )
+                out.write("Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n".toByteArray())
+                out.write(bytes)
+                out.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.readText().orEmpty()
+            conn.disconnect()
+            notifyJs(code, body)
+        } catch (e: Exception) {
+            Log.e(TAG, "Excel 上传失败", e)
+            notifyJs(0, e.message ?: "上传失败")
+        }
+    }
+
+    private fun displayName(uri: Uri): String? {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) return c.getString(0)
+        }
+        return null
+    }
+
+    private fun notifyJs(status: Int, body: String) {
+        val payload = JSONObject.quote(body)
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.onAndroidExcelImported&&window.onAndroidExcelImported($status,$payload)",
+                null
+            )
         }
     }
 
@@ -108,11 +164,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        // 应用退出时停止本地 Go 服务
         GoServer.stop()
     }
 
     companion object {
-        private const val FILE_CHOOSER_REQUEST = 1001
+        private const val TAG = "MainActivity"
     }
 }
