@@ -1,0 +1,28 @@
+backend/cmd/server/main.go
+  s_b2869fccf4a95f::t_095b7e830784e6 217
+backend/internal/service/market/providers.go
+  s_b2869fccf4a95f::t_bef84cf2af7b40 279-318
+backend/internal/service/refresh/refresh.go
+  s_b2869fccf4a95f::t_b8f6a4730ff7d3 32-39,46,311-312,667-733
+backend/internal/service/refresh/refresh_batch.go
+  s_b2869fccf4a95f::t_f8a8bb6b63e26e 123,139
+backend/internal/service/refresh/refresh_test.go
+  s_b2869fccf4a95f::t_b19e5f1aa62fdf 4-5,14,116-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "245e51e729f76a6a990e34bd3c336f21307d0090",
+  "prompts": {},
+  "logical_commit_id": "245e51e729f76a6a990e34bd3c336f21307d0090",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
