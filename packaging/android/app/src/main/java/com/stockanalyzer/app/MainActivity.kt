@@ -2,6 +2,8 @@ package com.stockanalyzer.app
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -15,7 +17,9 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -91,6 +95,50 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun pickExcel() {
             runOnUiThread { launchExcelPicker() }
+        }
+
+        /** 把 AI HTML 报告写成临时文件，优先唤起微信发送；无微信则系统分享。 */
+        @JavascriptInterface
+        fun shareHtml(html: String?) {
+            if (html.isNullOrBlank()) {
+                runOnUiThread { Toast.makeText(this@MainActivity, "没有可分享的报告", Toast.LENGTH_SHORT).show() }
+                return
+            }
+            Thread {
+                try {
+                    val dir = File(cacheDir, "share").apply { mkdirs() }
+                    val file = File(dir, "AI报告.html")
+                    file.writeText(html, Charsets.UTF_8)
+                    val uri = FileProvider.getUriForFile(
+                        this@MainActivity,
+                        "$packageName.fileprovider",
+                        file,
+                    )
+                    runOnUiThread { launchShare(uri) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "分享报告失败", e)
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "分享失败: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    private fun launchShare(uri: Uri) {
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "*/*"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "AI 详细报告")
+            clipData = ClipData.newRawUri("", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        grantUriPermission("com.tencent.mm", uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val wechat = Intent(send).setPackage("com.tencent.mm")
+        try {
+            startActivity(wechat)
+        } catch (_: ActivityNotFoundException) {
+            startActivity(Intent.createChooser(send, "分享报告"))
         }
     }
 

@@ -1426,11 +1426,54 @@ function aiHtmlButton() {
 
 function openAiHtmlReport(html) {
   if (!html) return toast('该报告没有 HTML 版');
+  const wrapped = wrapAiReportForPdf(html);
   const w = window.open('', '_blank');
-  if (!w) return toast('浏览器拦截了弹窗，请允许本站弹窗', 3500);
-  w.document.open();
-  w.document.write(wrapAiReportForPdf(html));
-  w.document.close();
+  if (w) {
+    w.document.open();
+    w.document.write(wrapped);
+    w.document.close();
+    return;
+  }
+  // Android WebView 默认拦 window.open，用页内 iframe 展示完整 HTML 文档（含 head 样式）
+  openInPageFrame({ srcdoc: wrapped });
+}
+
+// 弹窗被拦时的全屏 iframe（src 打开同站页；srcdoc 展示完整 HTML 文档，避免 innerHTML 丢掉 head）
+function openInPageFrame(opts) {
+  const mask = document.createElement('div');
+  mask.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;display:flex;flex-direction:column;';
+  const bar = document.createElement('div');
+  bar.style.cssText = 'flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 16px;background:#1f2937;color:#fff;';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '关闭';
+  close.style.cssText = 'margin:0;padding:7px 14px;border:0;border-radius:6px;background:#2f6fed;color:#fff;font-size:13px;';
+  close.onclick = () => mask.remove();
+  bar.appendChild(close);
+  if (opts.srcdoc != null && window.AndroidBridge) {
+    const share = document.createElement('button');
+    share.type = 'button';
+    share.textContent = '分享到微信';
+    share.style.cssText = 'margin:0;padding:7px 14px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:13px;';
+    share.onclick = () => {
+      try { window.AndroidBridge.shareHtml(opts.srcdoc); }
+      catch (e) { toast('分享失败：' + (e && e.message ? e.message : e), 4000); }
+    };
+    bar.appendChild(share);
+  }
+  if (opts.title) {
+    const t = document.createElement('span');
+    t.style.cssText = 'font-size:12px;color:#c7d0db;';
+    t.textContent = opts.title;
+    bar.appendChild(t);
+  }
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'flex:1;width:100%;border:0;background:#fff;';
+  if (opts.srcdoc != null) iframe.srcdoc = opts.srcdoc;
+  else iframe.src = opts.src;
+  mask.appendChild(bar);
+  mask.appendChild(iframe);
+  document.body.appendChild(mask);
 }
 
 // 给 AI 报告套「导出 PDF」外壳：sticky 工具条 + 打印样式。
@@ -2162,7 +2205,10 @@ function setAsOfHint(container, meta) {
       'cursor:pointer;opacity:.5;box-shadow:0 2px 6px rgba(0,0,0,.35);';
     b.onmouseenter = () => { b.style.opacity = '1'; };
     b.onmouseleave = () => { b.style.opacity = '.5'; };
-    b.onclick = () => window.open('/static/logs.html', '_blank');
+    b.onclick = () => {
+      const w = window.open('/static/logs.html', '_blank');
+      if (!w) openInPageFrame({ src: '/static/logs.html', title: '后端日志' });
+    };
     document.body.appendChild(b);
   };
   if (document.readyState === 'loading') {
