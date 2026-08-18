@@ -944,12 +944,18 @@ function parseStockChoice(text) {
 // ============ AI 模型配置弹窗 ============
 let _aiEditingId = null;
 
-// DeepSeek 一键模板：用户只需填 API Key；模型名从接口列表取第一个（不写死，避免 deepseek-chat 下线）
+// DeepSeek / 小米 MiMo 一键模板：用户只需填 API Key；模型名从接口列表取第一个（不写死）
 const DEEPSEEK_PRESET = {
   name: 'DeepSeek',
   base_url: 'https://api.deepseek.com',
   docs_keys: 'https://platform.deepseek.com/api_keys',
   docs_guide: 'https://api-docs.deepseek.com/zh-cn/',
+};
+const XIAOMI_PRESET = {
+  name: '小米 MiMo',
+  base_url: 'https://api.xiaomimimo.com/v1',
+  docs_keys: 'https://platform.xiaomimimo.com/#/console/api-keys',
+  docs_guide: 'https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call',
 };
 
 async function openAiSettings() {
@@ -979,7 +985,7 @@ async function openAiSettings() {
       <div id="aiModelList" style="max-height:180px;overflow-y:auto;margin-bottom:12px"></div>
 
       <div class="ai-preset">
-        <div class="ai-preset-title">推荐：一键启用 DeepSeek</div>
+        <div class="ai-preset-title">一键启用 DeepSeek</div>
         <ol class="ai-preset-steps">
           <li>打开
             <a href="${DEEPSEEK_PRESET.docs_keys}" target="_blank" rel="noopener">DeepSeek 控制台</a>
@@ -997,6 +1003,28 @@ async function openAiSettings() {
             <input id="aiDsKey" type="password" placeholder="粘贴 sk- 开头的密钥" style="width:100%;box-sizing:border-box">
           </div>
           <button class="btn primary" id="aiDsEnable">一键启用 DeepSeek</button>
+        </div>
+      </div>
+
+      <div class="ai-preset" style="margin-top:10px">
+        <div class="ai-preset-title">一键启用 小米 MiMo</div>
+        <ol class="ai-preset-steps">
+          <li>打开
+            <a href="${XIAOMI_PRESET.docs_keys}" target="_blank" rel="noopener">小米 MiMo 控制台</a>
+            用小米账号登录，创建「API Key」
+          </li>
+          <li>把 Key 粘贴到下方，点「一键启用」（地址自动填好，模型取接口列表第一个）</li>
+        </ol>
+        <p class="muted" style="font-size:11px;margin:0 0 8px">
+          说明文档：<a href="${XIAOMI_PRESET.docs_guide}" target="_blank" rel="noopener">mimo.mi.com 首次调用 API</a>
+          · 按量计费；地址 ${XIAOMI_PRESET.base_url}
+        </p>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:220px">
+            <label class="muted" style="font-size:11px;display:block;margin-bottom:2px">API Key（只需填这一项）</label>
+            <input id="aiXmKey" type="password" placeholder="粘贴 sk- 开头的密钥" style="width:100%;box-sizing:border-box">
+          </div>
+          <button class="btn primary" id="aiXmEnable">一键启用 小米 MiMo</button>
         </div>
       </div>
 
@@ -1081,15 +1109,14 @@ async function openAiSettings() {
     catch (e) { toast('保存失败：' + e.message, 4000); }
   };
 
-  mask.querySelector('#aiDsEnable').onclick = async () => {
-    const apiKey = mask.querySelector('#aiDsKey').value.trim();
-    if (!apiKey) return toast('请先粘贴 DeepSeek 的 API Key');
-    const btn = mask.querySelector('#aiDsEnable');
+  const enablePreset = async (preset, keyInputId, btn) => {
+    const apiKey = mask.querySelector(keyInputId).value.trim();
+    if (!apiKey) return toast('请先粘贴 ' + preset.name + ' 的 API Key');
     btn.disabled = true;
     try {
       const avail = await api('/ai/models/available', {
         method: 'POST',
-        body: { base_url: DEEPSEEK_PRESET.base_url, api_key: apiKey },
+        body: { base_url: preset.base_url, api_key: apiKey },
       });
       const models = avail.models || [];
       if (!models.length) {
@@ -1100,15 +1127,15 @@ async function openAiSettings() {
       const row = await api('/ai/models', {
         method: 'POST',
         body: {
-          name: DEEPSEEK_PRESET.name,
-          base_url: DEEPSEEK_PRESET.base_url,
+          name: preset.name,
+          base_url: preset.base_url,
           api_key: apiKey,
           model,
         },
       });
       await api('/ai/models/' + row.id + '/activate', { method: 'POST' });
-      mask.querySelector('#aiDsKey').value = '';
-      toast('已启用 DeepSeek（' + model + '），可以开始 AI 分析了');
+      mask.querySelector(keyInputId).value = '';
+      toast('已启用 ' + preset.name + '（' + model + '），可以开始 AI 分析了');
       await loadAiModels(mask);
     } catch (e) {
       toast('启用失败：' + e.message, 4000);
@@ -1116,6 +1143,8 @@ async function openAiSettings() {
       btn.disabled = false;
     }
   };
+  mask.querySelector('#aiDsEnable').onclick = () => enablePreset(DEEPSEEK_PRESET, '#aiDsKey', mask.querySelector('#aiDsEnable'));
+  mask.querySelector('#aiXmEnable').onclick = () => enablePreset(XIAOMI_PRESET, '#aiXmKey', mask.querySelector('#aiXmEnable'));
 
   mask.querySelector('#aiNew').onclick = () => {
     _aiEditingId = null;
@@ -1168,7 +1197,7 @@ async function loadAiModels(mask) {
     const active = data.active;
     activeEl.innerHTML = active
       ? `当前使用：<strong>${active.name}</strong>（${active.model}）`
-      : '<span style="color:#e03131">还没启用 AI。推荐用上方 DeepSeek 一键启用，只需填密钥。</span>';
+      : '<span style="color:#e03131">还没启用 AI。上方 DeepSeek 或小米 MiMo 一键启用，只需填密钥。</span>';
     if (!data.models.length) {
       wrap.innerHTML = '<div class="muted" style="font-size:12px;padding:4px 0 8px">暂无已保存的模型。</div>';
       return;
@@ -1226,7 +1255,7 @@ function esc(s) {
 }
 
 function aiNotConfiguredHtml() {
-  return '<div class="empty" style="padding:16px;margin:0">还没配置 AI。点右上角「🤖 AI」，用 DeepSeek 一键启用即可（只需填密钥）。</div>';
+  return '<div class="empty" style="padding:16px;margin:0">还没配置 AI。点右上角「🤖 AI」，用 DeepSeek 或小米 MiMo 一键启用即可（只需填密钥）。</div>';
 }
 
 // ScoreCard 质量/动作/维度中文名（三处打分共用；grade=质量，action=操作建议）

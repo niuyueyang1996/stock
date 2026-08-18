@@ -198,8 +198,11 @@ func main() {
 	aiSvc.Jobs = jm
 	aiSvc.MarketClosed = func(now time.Time) bool { return calSvc.IsClosed(now) }
 
-	// 交易/标签变更 → AI 每日重打分（对齐 Python _trigger_ai_daily；失败仅日志不阻断）
-	holdings.OnTradeChanged = aiSvc.MaybeAutoScoreDaily
+	// 交易/标签变更只记日志，不自动打分（打分走页面按钮）
+	holdings.OnTradeChanged = func(date string) {
+		log.Printf("[持仓] 交易或标签变更 date=%s，不自动打分", date)
+	}
+
 	// 全局全量刷新预拉持仓新闻（AI 消息面分析缓存复用；用户要求进刷新链路）
 	rfSvc.EnsureNews = func(code string) {
 		aiSvc.EnsureStockNews(code, 30, 1200, true)
