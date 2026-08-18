@@ -899,7 +899,7 @@ func TestParseHoldingsExcelDirect(t *testing.T) {
 		t.Errorf("noPrice items=%v skipped=%v", items2, skipped2)
 	}
 
-	// 非 A 股/港股 5 位码 → skipped
+	// 港股 5 位码 → 正常导入（不再跳过）
 	hk := buildMinimalXlsx(t,
 		[]string{"代码", "名称", "持有数量", "单位成本"},
 		[][]string{{"00700", "腾讯控股", "100", "300"}})
@@ -907,7 +907,7 @@ func TestParseHoldingsExcelDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hk 解析失败: %v", err)
 	}
-	if len(items3) != 0 || len(skipped3) != 1 {
+	if len(items3) != 1 || len(skipped3) != 0 {
 		t.Errorf("hk items=%v skipped=%v", items3, skipped3)
 	}
 }

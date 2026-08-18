@@ -6,9 +6,11 @@ package route
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,22 +53,55 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "Excel 中没有可导入的 A 股持仓"})
 			return
 		}
-		jobID := s.Jobs.Start("holdings.import", fmt.Sprintf("导入持仓 %d 只", len(items)), func(p *jobs.Progress) error {
-			for _, it := range items {
-				code, _ := it["code"].(string)
-				name, _ := it["name"].(string)
-				price, _ := it["price"].(float64)
-				qty, _ := it["quantity"].(float64)
+		// 对齐 Python start_holdings_import：扇出 batch，每只股票独立子任务（写交易+同步数据），
+		// 收尾 job 重建组合序列。
+		children := make([]jobs.BatchChild, 0, len(items))
+		for _, it := range items {
+			code, _ := it["code"].(string)
+			name, _ := it["name"].(string)
+			children = append(children, jobs.BatchChild{
+				Kind:  "holdings.import.stock",
+				Label: code + " " + name,
+				Meta:  map[string]any{"code": code, "name": name, "price": it["price"], "quantity": it["quantity"]},
+			})
+		}
+		batchID := s.Jobs.EnqueueBatchWithMeta("holdings.import",
+			fmt.Sprintf("导入持仓 %d 只", len(items)), children,
+			func(child jobs.BatchChild, _ *jobs.Progress) error {
+				code, _ := child.Meta["code"].(string)
+				name, _ := child.Meta["name"].(string)
+				price, _ := child.Meta["price"].(float64)
+				qty, _ := child.Meta["quantity"].(float64)
+				// 写交易（side_effects=false，避免逐只重放，统一在收尾处理）
 				_, _, err := s.Holdings.RecordTrade(code, "buy", price, qty, 0,
-					time.Now().Format("2006-01-02T15:04:05"), "Excel 导入", &name, true)
+					time.Now().Format("2006-01-02T15:04:05"), "Excel 导入", &name, false)
 				if err != nil {
-					continue
+					log.Printf("[Excel导入] %s %s 写交易失败: %v", code, name, err)
+					return nil // 单股失败不阻断整批
 				}
+				// 同步该股行情/财务/资金流（对齐 Python _sync_stock_data）
+				if s.Refresh != nil {
+					s.Refresh.RefreshStock(context.Background(), code, true, nil)
+				}
+				// 打默认标签：港股/ETF/债/A股
+				tag := defaultTag(code, name)
+				if tag != "" {
+					s.Holdings.SetStockTag(code, tag, name)
+				}
+				log.Printf("[Excel导入] %s %s 导入+同步完成", code, name)
+				return nil
+			})
+		// 收尾 job：重建组合序列（对齐 Python stages_fn _rebuild_portfolio）
+		s.Jobs.Start("holdings.import.stages", "导入·收尾", func(_ *jobs.Progress) error {
+			log.Printf("[Excel导入] 收尾：重建组合序列")
+			if s.Portfolio != nil {
+				s.Portfolio.ComputePortfolio(nil)
 			}
+			log.Printf("[Excel导入] 收尾完成")
 			return nil
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
-			"job_id": jobID, "async": true, "skipped": len(skipped),
+			"job_id": batchID, "async": true, "total": len(items), "skipped": len(skipped),
 		}})
 	})
 }
@@ -248,8 +283,17 @@ func colIndex(ref string) int {
 	return idx - 1
 }
 
-// isAStockOrETF A 股（6 位数字）或场内 ETF（51/56/58/15/16 开头）
+// isAStockOrETF A 股（6 位数字）或场内 ETF（51/56/58/15/16 开头）或港股（5 位数字）
 func isAStockOrETF(code string) bool {
+	// 港股：5 位纯数字
+	if len(code) == 5 {
+		for _, ch := range code {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+		return true
+	}
 	if strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
 		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") {
 		return true
@@ -263,4 +307,22 @@ func isAStockOrETF(code string) bool {
 		}
 	}
 	return true
+}
+
+// defaultTag 根据代码和名称判定默认标签：港股/ETF/债/A股
+func defaultTag(code, name string) string {
+	// 5位纯数字 → 港股
+	if len(code) == 5 {
+		return "港股"
+	}
+	// 场内基金前缀
+	if strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
+		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") {
+		if strings.Contains(name, "债") {
+			return "债"
+		}
+		return "ETF"
+	}
+	// 6位数字 → A股
+	return "A股"
 }
