@@ -1,0 +1,22 @@
+backend/internal/service/jobs/jobs.go
+  s_f62763d3ad832a::t_2d9a409e6cc54f 334-344
+backend/internal/service/jobs/jobs_test.go
+  s_f62763d3ad832a::t_f233f6c5fb32ff 14-15,20-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4c2f879644c0881a70c397de3e26f1426183a1eb",
+  "prompts": {},
+  "logical_commit_id": "4c2f879644c0881a70c397de3e26f1426183a1eb",
+  "sessions": {
+    "s_f62763d3ad832a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b5172116-7162-44ef-b2bb-1c7e092eedbf",
+        "model": "mimo-v2.5"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
