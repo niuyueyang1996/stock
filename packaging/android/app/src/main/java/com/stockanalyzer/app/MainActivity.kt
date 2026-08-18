@@ -1,6 +1,7 @@
 package com.stockanalyzer.app
 
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.os.Bundle
 import android.webkit.ValueCallback
@@ -29,6 +30,7 @@ class MainActivity : AppCompatActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             allowFileAccess = false
+            allowContentAccess = true
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
         }
@@ -63,22 +65,23 @@ class MainActivity : AppCompatActivity() {
                 filePathCallback: ValueCallback<Array<android.net.Uri>>?,
                 fileChooserParams: FileChooserParams?
             ): Boolean {
-                // 取消上一次未完成的选择
                 fileChooserCallback?.onReceiveValue(null)
                 fileChooserCallback = filePathCallback
 
-                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                // OPEN_DOCUMENT + */*：系统文档 UI 必有；勿用 HTML accept 生成的 createIntent（.xlsx 扩展名常导致无 Activity）
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = "*/*"
-                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        "application/vnd.ms-excel",
-                        "text/csv"
-                    ))
                 }
-                @Suppress("DEPRECATION")
-                startActivityForResult(intent, FILE_CHOOSER_REQUEST)
-                return true
+                return try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(Intent.createChooser(intent, "选择 Excel 文件"), FILE_CHOOSER_REQUEST)
+                    true
+                } catch (_: ActivityNotFoundException) {
+                    fileChooserCallback = null
+                    filePathCallback?.onReceiveValue(null)
+                    false
+                }
             }
         }
         webView.loadUrl(GoServer.BASE_URL)
