@@ -1,0 +1,24 @@
+backend/internal/route/import_excel.go
+  s_b2869fccf4a95f::t_851293f9ab97f6 9,13,56-75,77,79-80,82-98,100,104,286,288-296,310-327
+backend/internal/route/route_api_test.go
+  s_b2869fccf4a95f::t_d8332a600d42eb 902,910
+static/trade.html
+  s_b2869fccf4a95f::t_36ddf9c126ea62 34-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "91358db94cbf594706bc3346316b38457fba6369",
+  "prompts": {},
+  "logical_commit_id": "91358db94cbf594706bc3346316b38457fba6369",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
