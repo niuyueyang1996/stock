@@ -1,0 +1,31 @@
+backend/internal/db/models.go
+  h_07352c0544a725 373-389
+backend/internal/db/schema.go
+  h_07352c0544a725 387,431-436
+backend/internal/service/ai/auto_score_test.go
+  h_07352c0544a725 24-25,32-34,36-119,308-353
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 444-535,537-571,573-584,587-598,600-605,608-619,621-628,630,634,647-648,650-651,658-659,661-665,667,670-672,677-695,697-698,701,704-711,713-745,789,811-819,821-834,836-838,850-865,870
+backend/internal/service/ai/fundflow_test.go
+  h_07352c0544a725 1-1200
+backend/internal/service/ai/fundflow_types.go
+  h_07352c0544a725 113-208
+backend/internal/service/ai/models.go
+  h_07352c0544a725 47-58
+backend/internal/service/ai/prompts_fundflow.go
+  h_07352c0544a725 3,5-46,48-75,88-89,92-113,118,126-127,131-132,142
+static/js/common.js
+  h_07352c0544a725 1514-1517,1525-1528,1530-1575,1580,1584-1588
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5ff1ef7d6ee4b050862b7be15a516656c027083a",
+  "prompts": {},
+  "logical_commit_id": "5ff1ef7d6ee4b050862b7be15a516656c027083a",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
