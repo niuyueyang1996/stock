@@ -1511,9 +1511,10 @@ function wireAiHtmlButton(container, report) {
 
 // 资金流资金×股价相关性 → 徽章/配色（红=坏 绿=好 灰=中性；divergence 兼容旧数据未知方向）
 const FUNDFLOW_CORR = {
-  positive: ['同涨', '#2f9e44'], negative: ['同跌', '#e03131'],
-  bottom_divergence: ['底背离', '#2b8a3e'], top_divergence: ['顶背离', '#c92a2a'],
-  divergence: ['背离', '#f08c00'], neutral: ['中性', '#8792a4'],
+  bullish: ['多头主导', '#2f9e44'],
+  bearish: ['空头主导', '#e03131'],
+  divergent: ['背离', '#f08c00'],
+  neutral: ['中性', '#8792a4'],
 };
 
 // 资金流窗口名 → 中文标签（分钟/天窗口；'day'/'week'/'month' 为后端归一标准名，不能用 parseInt 解析）
@@ -1521,27 +1522,70 @@ const FLOW_WIN_LABEL = { '1m': '1 分钟', '5m': '5 分钟', '15m': '15 分钟',
 
 // 渲染个股页最近落库资金流 AI 结果（标注来源 组合批量/个股分析 + 日期 + 窗口）
 function renderFundflowPersistedPanel(el, r) {
-  const a = r || {};
-  const src = a.source === 'batch' ? '组合批量分析' : a.source === 'single' ? '个股分析' : '';
-  const winLabel = (FLOW_WIN_LABEL[a.window] || a.window) + '窗口';
-  const divs = (a.divergence || []).filter((x) => x && typeof x === 'object')
-    .map((x) => `<li><b>${esc(x.ts || '')}</b>：${esc(x.detail || '')}</li>`).join('');
+  // 新结构：r = {code, trade_date, source, window, model_name, analysis: {...}}
+  const a = r.analysis || r;  // analysis 字段包含分析数据
+  const src = r.source === 'batch' ? '组合批量分析' : r.source === 'single' ? '个股分析' : '';
+  const winLabel = (FLOW_WIN_LABEL[r.window] || r.window) + '窗口';
   const alerts = (a.alerts || []).map((x) => `<li>${esc(x)}</li>`).join('');
-  const rows = [
-    ['💪 主力行为', a.main_force],
-    ['🕐 全天节奏', a.rhythm],
-  ].filter(([, v]) => v).map(([k, v]) =>
-    `<div style="margin:7px 0"><b style="font-size:12.5px">${k}</b><div style="font-size:13px;margin-top:2px">${esc(v)}</div></div>`).join('');
+
+  // 主力行为（新结构是对象）
+  const mf = a.main_force || {};
+  const mainForceHtml = mf.action
+    ? `<div style="margin:7px 0"><b style="font-size:12.5px">💪 主力行为</b>
+       <div style="font-size:13px;margin-top:2px">${esc(mf.action)}</div>
+       ${mf.absorption ? `<div style="font-size:12px;color:var(--muted,#868e96);margin-top:2px">承接力：${esc(mf.absorption)}</div>` : ''}
+       ${mf.bear_power ? `<div style="font-size:12px;color:var(--muted,#868e96)">空头力量：${esc(mf.bear_power)}</div>` : ''}
+       </div>`
+    : '';
+
+  // 整体趋势（新结构）
+  const t = a.trend || {};
+  const trendHtml = t.direction
+    ? `<div style="margin:7px 0"><b style="font-size:12.5px">📈 整体趋势</b>
+       <div style="font-size:13px;margin-top:2px">${esc(t.direction)} · ${esc(t.stage)} · 强度${esc(t.strength)}</div>
+       <div style="font-size:12px;color:var(--muted,#868e96)">${esc(t.cum_change)}</div>
+       </div>`
+    : '';
+
+  // 多空力量（新结构）
+  const sd = a.supply_demand || {};
+  const sdHtml = (sd.absorption || sd.active_buy || sd.exhaustion || sd.probe)
+    ? `<div style="margin:7px 0"><b style="font-size:12.5px">📊 多空力量</b>
+       <ul style="margin:4px 0 0 18px;font-size:13px">
+         ${sd.absorption ? `<li><b>承接力：</b>${esc(sd.absorption)}</li>` : ''}
+         ${sd.active_buy ? `<li><b>主动买入：</b>${esc(sd.active_buy)}</li>` : ''}
+         ${sd.exhaustion ? `<li><b>空头衰竭：</b>${esc(sd.exhaustion)}</li>` : ''}
+         ${sd.probe ? `<li><b>多头试探：</b>${esc(sd.probe)}</li>` : ''}
+       </ul></div>`
+    : '';
+
+  // 逐段分析（新结构）
+  const segments = a.segments || [];
+  const segmentsHtml = segments.length > 0
+    ? `<div style="margin:7px 0"><b style="font-size:12.5px">📋 逐段分析</b>
+       <ul style="margin:4px 0 0 18px;font-size:13px">
+         ${segments.map(s => `<li><b>${esc(s.period)}</b>：${esc(s.net_flow)} · 流速${esc(s.velocity)} · ${esc(s.behavior)} ${s.transition ? `(${esc(s.transition)})` : ''}</li>`).join('')}
+       </ul></div>`
+    : '';
+
+  // 节奏（保留）
+  const rhythmHtml = a.rhythm
+    ? `<div style="margin:7px 0"><b style="font-size:12.5px">🕐 资金节奏</b><div style="font-size:13px;margin-top:2px">${esc(a.rhythm)}</div></div>`
+    : '';
+
   el.innerHTML = `
     <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;background:#fff">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         ${fundflowCorrBadge(a)}
-        <span class="muted" style="font-size:12px">${src} · ${a.trade_date || ''} · ${winLabel}</span>
+        <span class="muted" style="font-size:12px">${src} · ${r.trade_date || ''} · ${winLabel}</span>
         ${a.html ? aiHtmlButton() : ''}
       </div>
       <div style="font-size:14px;font-weight:700;margin:8px 0 4px">${esc(a.summary || '')}</div>
-      ${rows}
-      ${divs ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:#f08c00">⚠️ 背离</b><ul style="margin:4px 0 0 18px;font-size:13px">${divs}</ul></div>` : ''}
+      ${mainForceHtml}
+      ${trendHtml}
+      ${rhythmHtml}
+      ${sdHtml}
+      ${segmentsHtml}
       ${alerts ? `<div style="margin:7px 0"><b style="font-size:12.5px;color:var(--red)">🔔 注意</b><ul style="margin:4px 0 0 18px;font-size:13px">${alerts}</ul></div>` : ''}
       ${a.conclusion ? `<div style="margin:8px 0 0;padding:8px 10px;border-radius:var(--radius-xs);background:var(--primary-weak);font-size:13px"><b>结论</b>：${esc(a.conclusion)}</div>` : ''}
     </div>`;

@@ -44,6 +44,18 @@ func daoStr(p *string) string {
 	return *p
 }
 
+// loadAnyMap 从 JSON 字符串反序列化为 map（用于 trend/supply_demand 等对象字段）
+func loadAnyMap(p *string) map[string]any {
+	if p == nil || *p == "" {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(*p), &m); err != nil {
+		return map[string]any{}
+	}
+	return m
+}
+
 // ListModels 全部模型配置（is_active 转 bool）
 func (s *Service) ListModels() []map[string]any {
 	ms := s.Models.List()

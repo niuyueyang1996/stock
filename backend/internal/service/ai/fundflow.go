@@ -441,52 +441,197 @@ func indexIntradaySeries(rows []db.IndexIntradayCache, windowMin int) []IndexInt
 	return out
 }
 
-// NormalizeFundflowAnalysis 规整资金流分析输出（对齐 _normalize_fundflow_analysis）
-func NormalizeFundflowAnalysis(data map[string]any) map[string]any {
-	if data == nil {
-		data = map[string]any{}
+// ParseFundflowAnalysis 从 AI 返回的 map 解析为结构化 FundflowAnalysis
+// 支持 map[string]any 输入（AI JSON 输出）和 struct 输入（已解析）
+func ParseFundflowAnalysis(data any) FundflowAnalysis {
+	// 如果已经是 struct，直接返回
+	if fa, ok := data.(FundflowAnalysis); ok {
+		return fa
 	}
-	corr := strings.ToLower(strv(data["correlation"]))
-	switch corr {
-	case "positive", "negative", "top_divergence", "bottom_divergence", "divergence", "neutral":
-	default:
-		corr = "neutral"
+	// 如果是 map，解析为 struct
+	m, ok := data.(map[string]any)
+	if !ok {
+		return FundflowAnalysis{}
 	}
-	divergence := []map[string]any{}
-	if raw, ok := data["divergence"].([]any); ok {
-		for _, d := range raw {
-			if dm, ok := d.(map[string]any); ok {
-				divergence = append(divergence, dm)
-			}
-		}
-	}
-	return map[string]any{
-		"summary": strv(data["summary"]), "correlation": corr, "divergence": divergence,
-		"main_force": strv(data["main_force"]), "rhythm": strv(data["rhythm"]),
-		"alerts": strList(data["alerts"]), "conclusion": strv(data["conclusion"]),
-		"html": strv(data["html"]),
+	return FundflowAnalysis{
+		Correlation: normalizeCorrelation(strv(m["correlation"])),
+		Summary:     strv(m["summary"]),
+		Rhythm:      strv(m["rhythm"]),
+		Conclusion:  strv(m["conclusion"]),
+		HTML:        strv(m["html"]),
+		Segments:    parseSegments(m["segments"]),
+		Trend:       parseTrend(m["trend"]),
+		MainForce:   parseMainForce(m["main_force"]),
+		SupplyDemand: parseSupplyDemand(m["supply_demand"]),
+		Alerts:      strList(m["alerts"]),
 	}
 }
 
-// NormalizeCoherence 规整组合相关性输出（对齐 _normalize_coherence）
-func NormalizeCoherence(data map[string]any) map[string]any {
-	if data == nil {
-		data = map[string]any{}
-	}
-	corr := strings.ToLower(strv(data["correlation"]))
-	switch corr {
-	case "positive", "negative", "top_divergence", "bottom_divergence", "neutral":
+// normalizeCorrelation 规范化 correlation 枚举值
+// 支持新标签：bullish/bearish/divergent/neutral
+// 兼容旧标签：positive/negative（自动转换）
+func normalizeCorrelation(s string) string {
+	s = strings.ToLower(s)
+	switch s {
+	case "bullish", "bearish", "divergent", "neutral":
+		return s
+	case "positive":
+		return "bullish"  // 旧标签兼容：positive → bullish
+	case "negative":
+		return "bearish"  // 旧标签兼容：negative → bearish
 	default:
-		corr = "neutral"
+		return "neutral"
 	}
-	return map[string]any{
-		"correlation": corr, "summary": strv(data["summary"]),
-		"points": strList(data["points"]), "conclusion": strv(data["conclusion"]),
-		"html": strv(data["html"]),
+}
+
+// parseSegments 从 any 解析 segments 数组
+func parseSegments(raw any) []FundflowSegment {
+	segments := []FundflowSegment{}
+	arr, ok := raw.([]any)
+	if !ok {
+		return segments
 	}
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		segments = append(segments, FundflowSegment{
+			Period:      strv(m["period"]),
+			PriceChange: strv(m["price_change"]),
+			NetFlow:     strv(m["net_flow"]),
+			Velocity:    strv(m["velocity"]),
+			Behavior:    strv(m["behavior"]),
+			Transition:  strv(m["transition"]),
+		})
+	}
+	return segments
+}
+
+// parseTrend 从 any 解析 trend 对象
+func parseTrend(raw any) FundflowTrend {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return FundflowTrend{}
+	}
+	return FundflowTrend{
+		Direction: strv(m["direction"]),
+		CumChange: strv(m["cum_change"]),
+		Stage:     strv(m["stage"]),
+		Strength:  strv(m["strength"]),
+	}
+}
+
+// parseMainForce 从 any 解析 main_force 对象（支持字符串兼容）
+func parseMainForce(raw any) FundflowMainForce {
+	switch v := raw.(type) {
+	case map[string]any:
+		return FundflowMainForce{
+			Action:     strv(v["action"]),
+			Absorption: strv(v["absorption"]),
+			BearPower:  strv(v["bear_power"]),
+		}
+	case string:
+		return FundflowMainForce{Action: v}
+	default:
+		return FundflowMainForce{}
+	}
+}
+
+// parseSupplyDemand 从 any 解析 supply_demand 对象
+func parseSupplyDemand(raw any) FundflowSupplyDemand {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return FundflowSupplyDemand{}
+	}
+	return FundflowSupplyDemand{
+		Absorption: strv(m["absorption"]),
+		ActiveBuy:  strv(m["active_buy"]),
+		Exhaustion: strv(m["exhaustion"]),
+		Probe:      strv(m["probe"]),
+	}
+}
+
+// ParseFundflowBatchAnalysis 从 AI 返回的 map 解析为结构化 FundflowBatchAnalysis
+// 参数 data：AI 返回的 map[string]any，包含 stocks 数组和 coherence 对象
+// 返回：解析后的 FundflowBatchAnalysis，解析失败返回空结构
+// 使用场景：AnalyzeBatchFundflow 调用 AI 后解析结果
+func ParseFundflowBatchAnalysis(data any) FundflowBatchAnalysis {
+	m, ok := data.(map[string]any)
+	if !ok {
+		log.Printf("[fundflow] ParseFundflowBatchAnalysis: 输入类型错误 %T", data)
+		return FundflowBatchAnalysis{}
+	}
+	// 解析 stocks 数组
+	stocks := []FundflowBatchStockAnalysis{}
+	if rawStocks, ok := m["stocks"].([]any); ok {
+		for _, iv := range rawStocks {
+			it, ok := iv.(map[string]any)
+			if !ok {
+				continue
+			}
+			stocks = append(stocks, FundflowBatchStockAnalysis{
+				Code:         strv(it["code"]),
+				Correlation:  normalizeCorrelation(strv(it["correlation"])),
+				Summary:      strv(it["summary"]),
+				Rhythm:       strv(it["rhythm"]),
+				Segments:     parseSegments(it["segments"]),
+				Trend:        parseTrend(it["trend"]),
+				MainForce:    parseMainForce(it["main_force"]),
+				SupplyDemand: parseSupplyDemand(it["supply_demand"]),
+				Conclusion:   strv(it["conclusion"]),
+				Alerts:       strList(it["alerts"]),
+			})
+		}
+	}
+	// 解析 coherence 对象
+	coherence := FundflowCoherence{}
+	if cohRaw, ok := m["coherence"].(map[string]any); ok {
+		coherence = FundflowCoherence{
+			Correlation:  normalizeCorrelation(strv(cohRaw["correlation"])),
+			Summary:      strv(cohRaw["summary"]),
+			Rhythm:       strv(cohRaw["rhythm"]),
+			Trend:        parseTrend(cohRaw["trend"]),
+			SupplyDemand: parseSupplyDemand(cohRaw["supply_demand"]),
+			Points:       strList(cohRaw["points"]),
+			Conclusion:   strv(cohRaw["conclusion"]),
+		}
+	}
+	log.Printf("[fundflow] ParseFundflowBatchAnalysis: stocks=%d coherence=%v", len(stocks), coherence.Correlation != "")
+	return FundflowBatchAnalysis{
+		Stocks:    stocks,
+		Coherence: coherence,
+		HTML:      strv(m["html"]),
+	}
+}
+
+// fundflowReportSummary 资金流分析结果摘要（用于日志）
+func fundflowReportSummary(a FundflowAnalysis) string {
+	parts := []string{}
+	if a.Correlation != "" {
+		parts = append(parts, "corr="+a.Correlation)
+	}
+	if a.Summary != "" {
+		summary := a.Summary
+		if len(summary) > 20 {
+			summary = summary[:20] + "..."
+		}
+		parts = append(parts, "summary="+summary)
+	}
+	if len(a.Segments) > 0 {
+		parts = append(parts, fmt.Sprintf("segments=%d", len(a.Segments)))
+	}
+	if a.Trend.Stage != "" {
+		parts = append(parts, "stage="+a.Trend.Stage)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "ok")
+	}
+	return strings.Join(parts, " ")
 }
 
 // AnalyzeFundflow 个股 AI 资金流实时分析，落库 source='single'（按 code+window 覆盖，不同 window 各存一份）
+// 返回结构化 FundflowAnalysis，类型安全
 func (s *Service) AnalyzeFundflow(code string, window any, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.requireModel()
 	ctx := s.BuildFundflowContext(code, window, true)
@@ -499,42 +644,104 @@ func (s *Service) AnalyzeFundflow(code string, window any, systemPrompt, intensi
 	if err != nil {
 		return nil, err
 	}
-	analysis := NormalizeFundflowAnalysis(raw)
+	// 使用 ParseFundflowAnalysis 解析为结构化数据
+	analysis := ParseFundflowAnalysis(raw)
 	modelTag := modelTagOf(modelCfg)
-	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, ctx.Date, ctx.Window, aiReportSummary(analysis))
-	_ = s.UpsertFundflowReport(code, ctx.Date, "single", ctx.Window, analysis, modelTag)
+	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, ctx.Date, ctx.Window, fundflowReportSummary(analysis))
+	_ = s.UpsertFundflowAnalysis(code, ctx.Date, "single", ctx.Window, analysis, modelTag)
 	return map[string]any{
 		"mode": ctx.Mode, "code": code, "name": s.StockDisplayName(code),
 		"window": ctx.Window, "date": ctx.Date, "points_count": len(ctx.Points), "analysis": analysis,
 	}, nil
 }
 
-// UpsertFundflowReport 单股资金流 AI 结果写入 ai_fundflow_reports
+// UpsertFundflowReport 单股资金流 AI 结果写入 ai_fundflow_reports（兼容旧接口）
+// 新代码请使用 UpsertFundflowAnalysis
 func (s *Service) UpsertFundflowReport(code, tradeDate, source, window string, analysis map[string]any, modelName string) error {
-	divergence, _ := json.Marshal(analysis["divergence"])
+	// 序列化数组/对象字段
+	segments, _ := json.Marshal(analysis["segments"])
+	trend, _ := json.Marshal(analysis["trend"])
+	mainForce, _ := json.Marshal(analysis["main_force"])
+	supplyDemand, _ := json.Marshal(analysis["supply_demand"])
 	alerts, _ := json.Marshal(analysis["alerts"])
-	divS, alertS := string(divergence), string(alerts)
+	segS, trendS, mfS, sdS, alertS := string(segments), string(trend), string(mainForce), string(supplyDemand), string(alerts)
 	rec := db.AIFundflowReport{Code: code, TradeDate: tradeDate, Source: source, Window: window,
 		Correlation: strPtr(strv(analysis["correlation"])), Summary: strPtr(strv(analysis["summary"])),
-		MainForce: strPtr(strv(analysis["main_force"])), Rhythm: strPtr(strv(analysis["rhythm"])),
-		Divergence: &divS, Alerts: &alertS, Conclusion: strPtr(strv(analysis["conclusion"])),
+		Segments: &segS, Trend: &trendS,
+		MainForce: &mfS, Rhythm: strPtr(strv(analysis["rhythm"])),
+		SupplyDemand: &sdS, Alerts: &alertS, Conclusion: strPtr(strv(analysis["conclusion"])),
 		HTML: strPtr(strv(analysis["html"])), ModelName: strPtr(modelName)}
 	return s.FlowR.Upsert(&rec)
 }
 
+// UpsertFundflowAnalysis 单股资金流 AI 分析结果写入 ai_fundflow_reports（结构化版本）
+// 接受 FundflowAnalysis struct，类型安全
+func (s *Service) UpsertFundflowAnalysis(code, tradeDate, source, window string, analysis FundflowAnalysis, modelName string) error {
+	// 序列化数组/对象字段
+	segments, _ := json.Marshal(analysis.Segments)
+	trend, _ := json.Marshal(analysis.Trend)
+	mainForce, _ := json.Marshal(analysis.MainForce)
+	supplyDemand, _ := json.Marshal(analysis.SupplyDemand)
+	alerts, _ := json.Marshal(analysis.Alerts)
+	segS, trendS, mfS, sdS, alertS := string(segments), string(trend), string(mainForce), string(supplyDemand), string(alerts)
+	rec := db.AIFundflowReport{Code: code, TradeDate: tradeDate, Source: source, Window: window,
+		Correlation: strPtr(analysis.Correlation), Summary: strPtr(analysis.Summary),
+		Segments: &segS, Trend: &trendS,
+		MainForce: &mfS, Rhythm: strPtr(analysis.Rhythm),
+		SupplyDemand: &sdS, Alerts: &alertS, Conclusion: strPtr(analysis.Conclusion),
+		HTML: strPtr(analysis.HTML), ModelName: strPtr(modelName)}
+	return s.FlowR.Upsert(&rec)
+}
+
 // GetStockFundflowReport 该股最近落库资金流结果（window 指定时只在该时间窗内精确匹配；缺省跨窗取最近）
-func (s *Service) GetStockFundflowReport(code, window string) map[string]any {
+// 返回 FundflowReportResponse struct，类型安全且兼容前端 JSON 结构
+func (s *Service) GetStockFundflowReport(code, window string) *FundflowReportResponse {
 	r := s.FlowR.GetLatest(code, NormFlowWindow(window))
 	if r == nil {
+		log.Printf("[fundflow] GetStockFundflowReport: code=%s window=%s not found", code, window)
 		return nil
 	}
-	return map[string]any{
-		"code": r.Code, "trade_date": r.TradeDate, "source": r.Source, "window": r.Window,
-		"correlation": daoStr(r.Correlation), "summary": daoStr(r.Summary),
-		"main_force": daoStr(r.MainForce), "rhythm": daoStr(r.Rhythm),
-		"divergence": loadAnyList(r.Divergence), "alerts": loadAnyList(r.Alerts),
-		"conclusion": daoStr(r.Conclusion), "html": daoStr(r.HTML),
-		"model_name": daoStr(r.ModelName),
+	// 解析各字段
+	segments := []FundflowSegment{}
+	if r.Segments != nil {
+		json.Unmarshal([]byte(*r.Segments), &segments)
+	}
+	trend := FundflowTrend{}
+	if r.Trend != nil {
+		json.Unmarshal([]byte(*r.Trend), &trend)
+	}
+	mainForce := FundflowMainForce{}
+	if r.MainForce != nil {
+		json.Unmarshal([]byte(*r.MainForce), &mainForce)
+	}
+	supplyDemand := FundflowSupplyDemand{}
+	if r.SupplyDemand != nil {
+		json.Unmarshal([]byte(*r.SupplyDemand), &supplyDemand)
+	}
+	alerts := []string{}
+	if r.Alerts != nil {
+		json.Unmarshal([]byte(*r.Alerts), &alerts)
+	}
+
+	log.Printf("[fundflow] GetStockFundflowReport: code=%s window=%s source=%s segments=%d", code, window, r.Source, len(segments))
+	return &FundflowReportResponse{
+		Code:      r.Code,
+		TradeDate: r.TradeDate,
+		Source:    r.Source,
+		Window:    r.Window,
+		ModelName: daoStr(r.ModelName),
+		Analysis: FundflowAnalysis{
+			Correlation:  daoStr(r.Correlation),
+			Summary:      daoStr(r.Summary),
+			Segments:     segments,
+			Trend:        trend,
+			MainForce:    mainForce,
+			Rhythm:       daoStr(r.Rhythm),
+			SupplyDemand: supplyDemand,
+			Alerts:       alerts,
+			Conclusion:   daoStr(r.Conclusion),
+			HTML:         daoStr(r.HTML),
+		},
 	}
 }
 
@@ -579,6 +786,7 @@ func (s *Service) GetCoherenceReport(scope, scopeKey, window string) map[string]
 }
 
 // AnalyzeBatchFundflow 组合批量资金 AI：所有有资金流数据的标的一次发给 AI，逐只精简落库 + 组合 coherence 落库
+// 返回结构化数据
 func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, window any, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.requireModel()
 	w := NormFlowWindow(window)
@@ -600,32 +808,34 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 		nameMap[st.Code] = st.Name
 	}
 	modelTag := modelTagOf(modelCfg)
-	reports := []map[string]any{}
-	if rawStocks, ok := raw["stocks"].([]any); ok {
-		for _, iv := range rawStocks {
-			it, _ := iv.(map[string]any)
-			if it == nil {
-				continue
-			}
-			code := strings.TrimSpace(strv(it["code"]))
-			if code == "" {
-				continue
-			}
-			if _, ok := nameMap[code]; !ok {
-				continue
-			}
-			analysis := NormalizeFundflowAnalysis(it)
-			log.Printf("[ai] 落库 资金流 code=%s window=%s source=batch %s", code, w, aiReportSummary(analysis))
-			_ = s.UpsertFundflowReport(code, ctx.Date, "batch", w, analysis, modelTag)
-			reports = append(reports, map[string]any{
-				"code": code, "name": nameMap[code],
-				"correlation": analysis["correlation"], "summary": analysis["summary"], "source": "batch",
-			})
+
+	// 使用 ParseFundflowBatchAnalysis 解析为结构化数据
+	batchAnalysis := ParseFundflowBatchAnalysis(raw)
+
+	// 逐只落库
+	for _, stockAnalysis := range batchAnalysis.Stocks {
+		code := strings.TrimSpace(stockAnalysis.Code)
+		if code == "" {
+			continue
 		}
+		if _, ok := nameMap[code]; !ok {
+			continue
+		}
+		// 转换为单股分析结构
+		analysis := FundflowAnalysis{
+			Correlation:  stockAnalysis.Correlation,
+			Summary:      stockAnalysis.Summary,
+			MainForce:    stockAnalysis.MainForce,
+			SupplyDemand: stockAnalysis.SupplyDemand,
+			Conclusion:   stockAnalysis.Conclusion,
+			Alerts:       stockAnalysis.Alerts,
+		}
+		log.Printf("[ai] 落库 资金流 code=%s window=%s source=batch %s", code, w, fundflowReportSummary(analysis))
+		_ = s.UpsertFundflowAnalysis(code, ctx.Date, "batch", w, analysis, modelTag)
 	}
-	cohRaw, _ := raw["coherence"].(map[string]any)
-	coherence := NormalizeCoherence(cohRaw)
-	batchHTML := strv(raw["html"])
+
+	// 组合 coherence 落库
+	batchHTML := batchAnalysis.HTML
 	scope := "portfolio"
 	if ctx.Mode == "indices" {
 		scope = "indices"
@@ -637,13 +847,27 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 		scopeKey = strings.Join(sortedCopy(tags), ",")
 	}
 	_ = s.FlowCoh.Upsert(scope, scopeKey, ctx.Date, w,
-		strv(coherence["correlation"]), strv(coherence["summary"]),
-		jsonList(coherence["points"]), strv(coherence["conclusion"]), batchHTML, modelTag)
+		batchAnalysis.Coherence.Correlation, batchAnalysis.Coherence.Summary,
+		jsonList(batchAnalysis.Coherence.Points), batchAnalysis.Coherence.Conclusion, batchHTML, modelTag)
+
+	// 构建返回结果
+	reports := []map[string]any{}
+	for _, stockAnalysis := range batchAnalysis.Stocks {
+		code := strings.TrimSpace(stockAnalysis.Code)
+		if code == "" {
+			continue
+		}
+		reports = append(reports, map[string]any{
+			"code": code, "name": nameMap[code],
+			"correlation": stockAnalysis.Correlation, "summary": stockAnalysis.Summary, "source": "batch",
+		})
+	}
+
 	return map[string]any{
 		"mode": ctx.Mode, "window": w, "date": ctx.Date,
 		"covered": ctx.Covered, "total": ctx.Total,
 		"stocks_count": len(reports), "reports": reports,
-		"coherence": coherence, "html": batchHTML,
+		"coherence": batchAnalysis.Coherence, "html": batchHTML,
 	}, nil
 }
 

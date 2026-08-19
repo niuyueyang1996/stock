@@ -370,21 +370,23 @@ func (AIDailyReport) TableName() string { return "ai_daily_reports" }
 
 // AIFundflowReport ai_fundflow_reports
 type AIFundflowReport struct {
-	Code        string  `gorm:"column:code;primaryKey"`
-	TradeDate   string  `gorm:"column:trade_date;primaryKey"`
-	Source      string  `gorm:"column:source;primaryKey"`
-	Window      string  `gorm:"column:window;primaryKey"`
-	Correlation *string `gorm:"column:correlation"`
-	Summary     *string `gorm:"column:summary"`
-	MainForce   *string `gorm:"column:main_force"`
-	Rhythm      *string `gorm:"column:rhythm"`
-	Divergence  *string `gorm:"column:divergence"`
-	Alerts      *string `gorm:"column:alerts"`
-	Conclusion  *string `gorm:"column:conclusion"`
-	HTML        *string `gorm:"column:html"`
-	ModelName   *string `gorm:"column:model_name"`
-	CreatedAt   *string `gorm:"column:created_at"`
-	UpdatedAt   *string `gorm:"column:updated_at"`
+	Code         string  `gorm:"column:code;primaryKey"`
+	TradeDate    string  `gorm:"column:trade_date;primaryKey"`
+	Source       string  `gorm:"column:source;primaryKey"`
+	Window       string  `gorm:"column:window;primaryKey"`
+	Correlation  *string `gorm:"column:correlation"`
+	Summary      *string `gorm:"column:summary"`
+	Segments     *string `gorm:"column:segments"`
+	Trend        *string `gorm:"column:trend"`
+	MainForce    *string `gorm:"column:main_force"`
+	Rhythm       *string `gorm:"column:rhythm"`
+	SupplyDemand *string `gorm:"column:supply_demand"`
+	Alerts       *string `gorm:"column:alerts"`
+	Conclusion   *string `gorm:"column:conclusion"`
+	HTML         *string `gorm:"column:html"`
+	ModelName    *string `gorm:"column:model_name"`
+	CreatedAt    *string `gorm:"column:created_at"`
+	UpdatedAt    *string `gorm:"column:updated_at"`
 }
 
 func (AIFundflowReport) TableName() string { return "ai_fundflow_reports" }

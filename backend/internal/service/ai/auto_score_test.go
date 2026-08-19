@@ -21,14 +21,102 @@ type errFake struct{}
 func (*errFake) Error() string { return "人为 AI 失败" }
 
 type mockClient struct {
-	chatErr error
+	chatErr    error
+	chatResult map[string]any // 可控返回值（优先级高于默认值）
 }
 
 func (m *mockClient) ChatJSON(ctx context.Context, baseURL, apiKey, model, system, user, effort string, maxTokens int, task ...string) (map[string]any, error) {
 	if m.chatErr != nil {
 		return nil, m.chatErr
 	}
+	if m.chatResult != nil {
+		return m.chatResult, nil
+	}
 	return map[string]any{"score": 75.0, "grade": "B"}, nil
+}
+
+// setFundflowResult 设置 mockClient 返回资金流分析结果
+func (m *mockClient) setFundflowResult() {
+	m.chatResult = map[string]any{
+		"correlation": "bullish",
+		"summary":     "早盘放量流入",
+		"segments": []any{
+			map[string]any{
+				"period":      "09:30-10:00",
+				"net_flow":    "+1000万",
+				"velocity":    "高",
+				"behavior":    "放量流入",
+				"transition":  "起始段",
+			},
+		},
+		"trend": map[string]any{
+			"direction": "净流入",
+			"stage":     "拉升期",
+			"strength":  "强",
+		},
+		"main_force": map[string]any{
+			"action": "拉升",
+		},
+		"supply_demand": map[string]any{
+			"absorption": "强",
+			"active_buy": "强",
+			"exhaustion": "未出现",
+			"probe":      "未出现",
+		},
+		"rhythm":     "早盘高流速流入",
+		"alerts":     []any{"注意高位风险"},
+		"conclusion": "整体强势，可持有",
+	}
+}
+
+// setBatchFundflowResult 设置 mockClient 返回批量资金流分析结果
+func (m *mockClient) setBatchFundflowResult() {
+	m.chatResult = map[string]any{
+		"stocks": []any{
+			map[string]any{
+				"code":        "600519",
+				"correlation": "bullish",
+				"summary":     "早盘流入",
+				"rhythm":      "早盘高流速",
+				"segments": []any{
+					map[string]any{
+						"period":     "09:30-10:00",
+						"net_flow":   "+1000万",
+						"velocity":   "高",
+						"behavior":   "放量流入",
+						"transition": "起始段",
+					},
+				},
+				"trend": map[string]any{
+					"direction": "净流入",
+					"stage":     "拉升期",
+					"strength":  "强",
+				},
+				"main_force": map[string]any{
+					"action": "拉升",
+				},
+				"supply_demand": map[string]any{
+					"absorption": "强",
+				},
+				"conclusion": "可持有",
+			},
+		},
+		"coherence": map[string]any{
+			"correlation": "bullish",
+			"summary":     "组合整体流入",
+			"rhythm":      "早盘强势",
+			"trend": map[string]any{
+				"direction": "净流入",
+				"stage":     "拉升期",
+				"strength":  "强",
+			},
+			"supply_demand": map[string]any{
+				"absorption": "强",
+			},
+			"points":     []any{"科技股领涨"},
+			"conclusion": "组合向好",
+		},
+	}
 }
 
 func (m *mockClient) ListModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
@@ -217,5 +305,51 @@ func TestMaybeAutoScoreDaily_WithTradeAndNoReport(t *testing.T) {
 	// 当日保持「未评分」：打分失败后 ai_daily_reports 无该日记录
 	if r := a.s.Daily.Get("2026-01-02"); r != nil {
 		t.Fatalf("打分失败后当日不应有报告残留: %+v", r)
+	}
+}
+
+// openFundflowTest 创建带真实 DB + 桩依赖的 AI 服务（fundflow 专用）
+type fundflowSvc struct {
+	s      *Service
+	g      *gorm.DB
+	client *mockClient
+}
+
+func openFundflowTest(t *testing.T) *fundflowSvc {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	g, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		sqlDB, _ := g.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	})
+	client := &mockClient{}
+	cfgDAO := dao.NewConfigDAO(g)
+	cacheDAO := dao.NewCacheDAO(g)
+	modelsDAO := dao.NewAIModelDAO(g)
+	reportDAO := dao.NewAIReportDAO(g)
+	tagPrefDAO := dao.NewTagPrefDAO(g)
+	s := New(g, client, cfgDAO, cacheDAO, modelsDAO, reportDAO, tagPrefDAO,
+		&quoteStub{}, &liveStub{}, &pfStub{}, &fxStub{})
+	// 资金流 DAO（main 装配注入；New 不注入）
+	s.FlowR = dao.NewAIFundflowReportDAO(g)
+	s.FlowCoh = dao.NewAIFundflowCoherenceDAO(g)
+	return &fundflowSvc{s: s, g: g, client: client}
+}
+
+// addModel 插入并激活一个 AI 模型
+func (f *fundflowSvc) addModel(t *testing.T) {
+	t.Helper()
+	m, err := f.s.Models.Save("test-model", "https://api.test.com", "test-key", "test-model", 0)
+	if err != nil {
+		t.Fatalf("addModel Save: %v", err)
+	}
+	if _, err := f.s.Models.Activate(m.ID); err != nil {
+		t.Fatalf("addModel Activate: %v", err)
 	}
 }
