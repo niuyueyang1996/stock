@@ -393,19 +393,22 @@ func (AIFundflowReport) TableName() string { return "ai_fundflow_reports" }
 
 // AIFundflowCoherenceReport ai_fundflow_coherence_reports
 type AIFundflowCoherenceReport struct {
-	ID          int64   `gorm:"column:id;primaryKey"`
-	Scope       string  `gorm:"column:scope"`
-	ScopeKey    string  `gorm:"column:scope_key"`
-	TradeDate   string  `gorm:"column:trade_date"`
-	Window      string  `gorm:"column:window"`
-	Correlation *string `gorm:"column:correlation"`
-	Summary     *string `gorm:"column:summary"`
-	Points      *string `gorm:"column:points"`
-	Conclusion  *string `gorm:"column:conclusion"`
-	HTML        *string `gorm:"column:html"`
-	ModelName   *string `gorm:"column:model_name"`
-	CreatedAt   *string `gorm:"column:created_at"`
-	UpdatedAt   *string `gorm:"column:updated_at"`
+	ID           int64   `gorm:"column:id;primaryKey"`
+	Scope        string  `gorm:"column:scope"`
+	ScopeKey     string  `gorm:"column:scope_key"`
+	TradeDate    string  `gorm:"column:trade_date"`
+	Window       string  `gorm:"column:window"`
+	Correlation  *string `gorm:"column:correlation"`
+	Summary      *string `gorm:"column:summary"`
+	Rhythm       *string `gorm:"column:rhythm"`
+	Trend        *string `gorm:"column:trend"`
+	SupplyDemand *string `gorm:"column:supply_demand"`
+	Points       *string `gorm:"column:points"`
+	Conclusion   *string `gorm:"column:conclusion"`
+	HTML         *string `gorm:"column:html"`
+	ModelName    *string `gorm:"column:model_name"`
+	CreatedAt    *string `gorm:"column:created_at"`
+	UpdatedAt    *string `gorm:"column:updated_at"`
 }
 
 func (AIFundflowCoherenceReport) TableName() string { return "ai_fundflow_coherence_reports" }

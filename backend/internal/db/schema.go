@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS stock_refresh_meta (
 const SchemaVersionKey = "db_schema_version"
 
 // CurrentVersion 与 Python _CURRENT_VERSION 对齐
-const CurrentVersion = 10
+const CurrentVersion = 11
 
 // migrateColumns 各版本迁移的列补充（幂等：已存在则跳过），与 Python _MIGRATE_COLUMNS 对齐
 var migrateColumns = map[int][]string{
@@ -434,6 +434,12 @@ var migrateColumns = map[int][]string{
 		"ALTER TABLE ai_fundflow_reports ADD COLUMN segments TEXT",
 		"ALTER TABLE ai_fundflow_reports ADD COLUMN trend TEXT",
 		"ALTER TABLE ai_fundflow_reports ADD COLUMN supply_demand TEXT",
+	},
+	11: {
+		// 组合整体资金流分析新增字段（节奏+趋势+多空）
+		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN rhythm TEXT",
+		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN trend TEXT",
+		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN supply_demand TEXT",
 	},
 }
 

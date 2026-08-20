@@ -83,6 +83,8 @@ type FundflowStockCtx struct {
 	DayMainNet *float64   `json:"day_main_net,omitempty"` // 当日主力净流入
 	Bands      *BandValues `json:"bands,omitempty"`      // 五档金额区间
 	TotalNet   *float64   `json:"total_net,omitempty"`  // 窗口内累计净流入
+	PrevClose  *float64   `json:"prev_close,omitempty"` // 昨日收盘价（价格基准）
+	Open       *float64   `json:"open,omitempty"`       // 今日开盘价（价格基准）
 	Points     []any      `json:"points"`               // IntradayPoint | DailyFlowPoint | IndexPricePoint
 }
 
@@ -96,6 +98,8 @@ type FundflowStockMember struct {
 	WeightPct   float64 `json:"weight_pct"`
 	Price       any     `json:"price,omitempty"`       // 实时价
 	PctChg      any     `json:"pct_chg,omitempty"`     // 涨跌幅
+	PrevClose   any     `json:"prev_close,omitempty"`  // 昨收
+	Open        any     `json:"open,omitempty"`       // 今开
 	DayNet      any     `json:"day_net,omitempty"`     // 当日全单净流入
 	DayMainNet  any     `json:"day_main_net,omitempty"` // 当日主力净流入
 	Points      []any   `json:"points"`                // 与 FundflowStockCtx.Points 同构

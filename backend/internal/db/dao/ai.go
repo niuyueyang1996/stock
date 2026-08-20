@@ -276,12 +276,17 @@ func NewAIFundflowCoherenceDAO(g *gorm.DB) *AIFundflowCoherenceDAO {
 
 // Upsert 按 (scope, scope_key, trade_date, window) 唯一键 upsert
 func (d *AIFundflowCoherenceDAO) Upsert(scope, scopeKey, tradeDate, window, correlation, summary, points, conclusion, html, modelName string) error {
+	return d.UpsertWithTrend(scope, scopeKey, tradeDate, window, correlation, summary, "", "", "", points, conclusion, html, modelName)
+}
+
+// UpsertWithTrend 支持 rhythm/trend/supply_demand 的完整 upsert
+func (d *AIFundflowCoherenceDAO) UpsertWithTrend(scope, scopeKey, tradeDate, window, correlation, summary, rhythm, trend, supplyDemand, points, conclusion, html, modelName string) error {
 	now := nowISO()
 	rec := db.AIFundflowCoherenceReport{Scope: scope, ScopeKey: scopeKey, TradeDate: tradeDate, Window: window,
-		Correlation: &correlation, Summary: &summary, Points: &points, Conclusion: &conclusion, HTML: &html, ModelName: &modelName, UpdatedAt: &now}
+		Correlation: &correlation, Summary: &summary, Rhythm: &rhythm, Trend: &trend, SupplyDemand: &supplyDemand, Points: &points, Conclusion: &conclusion, HTML: &html, ModelName: &modelName, UpdatedAt: &now}
 	return d.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "scope"}, {Name: "scope_key"}, {Name: "trade_date"}, {Name: "window"}},
-		DoUpdates: clause.AssignmentColumns([]string{"correlation", "summary", "points", "conclusion", "html", "model_name", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"correlation", "summary", "rhythm", "trend", "supply_demand", "points", "conclusion", "html", "model_name", "updated_at"}),
 	}).Create(&rec).Error
 }
 

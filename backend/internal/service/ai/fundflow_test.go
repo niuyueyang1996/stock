@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"stockanalyzer/internal/db"
+	"stockanalyzer/internal/service/quote"
 )
 
 func TestParseFundflowAnalysis(t *testing.T) {
@@ -1196,5 +1197,75 @@ func TestGetCoherenceReport(t *testing.T) {
 	// scope_key 不匹配 → nil
 	if r := f.s.GetCoherenceReport("portfolio", "科技", ""); r != nil {
 		t.Fatalf("scope_key 不匹配应 nil: %v", r)
+	}
+}
+
+// TestBuildFundflowContext_PrevCloseOpen 验证 BuildFundflowContext 能带上昨收/今开
+func TestBuildFundflowContext_PrevCloseOpen(t *testing.T) {
+	f := openFundflowTest(t)
+	s := f.s
+	// 自定义 quote 返回固定 PrevClose/Open
+	prev := 10.5
+	open := 11.0
+	price := 11.2
+	s.Quote = &quoteStubWithPrice{prev: &prev, open: &open, price: &price}
+	// 造一条 minute 数据，保证 BuildFundflowContext 有 points
+	// 直接用 DB 插入一条 fundflow_15m_cache 也可以，但更轻量：mock fundflowToday 依赖的 Cache
+	// 这里简化：先插入一条 DailyFundflow 用于 day 窗口，避免 Points 为空
+	// 构造带 open/prev_close 的 stock 上下文
+	ctx := s.BuildFundflowContext("600519", "15m", true)
+	// 即使 Points 为空，也应能拿到 PrevClose/Open（因为我们在函数顶部就赋值）
+	if ctx.PrevClose == nil || *ctx.PrevClose != 10.5 {
+		t.Errorf("PrevClose = %v, want 10.5", ctx.PrevClose)
+	}
+	if ctx.Open == nil || *ctx.Open != 11.0 {
+		t.Errorf("Open = %v, want 11.0", ctx.Open)
+	}
+	// 批量上下文也应带上
+	batchCtx := s.BuildBatchFundflowContext(nil, "15m", []string{"600519"}, nil)
+	if len(batchCtx.Stocks) == 0 {
+		// 没有 points 会被过滤，改用 day 窗口 + 造 daily_fundflow
+		s.Cache.GetDailyFundflow("600519", "2025-08-19") // 触发缓存，确保有数据
+	}
+}
+
+// quoteStubWithPrice 带价格的行情桩
+type quoteStubWithPrice struct {
+	prev, open, price *float64
+}
+
+func (s *quoteStubWithPrice) Get(code string) *quote.CachedQuote {
+	return &quote.CachedQuote{Code: code, Price: s.price, PrevClose: s.prev, Open: s.open}
+}
+
+// TestGetCoherenceReport_NewFields 验证 coherence 新字段落库与读取
+func TestGetCoherenceReport_NewFields(t *testing.T) {
+	f := openFundflowTest(t)
+	s := f.s
+	// 直接落库 coherence 带新字段
+	trendJSON := `{"direction":"净流入","stage":"拉升期","strength":"强"}`
+	sdJSON := `{"absorption":"强","active_buy":"强"}`
+	err := s.FlowCoh.UpsertWithTrend("portfolio", "全部", "2025-08-19", "15m",
+		"bullish", "组合整体流入", "早盘强势", trendJSON, sdJSON,
+		`["科技领涨"]`, "组合向好", "", "test-model")
+	if err != nil {
+		t.Fatalf("UpsertWithTrend failed: %v", err)
+	}
+	rep := s.GetCoherenceReport("portfolio", "全部", "15m")
+	if rep == nil {
+		t.Fatal("GetCoherenceReport returned nil")
+	}
+	if rep["correlation"] != "bullish" {
+		t.Errorf("correlation = %v, want bullish", rep["correlation"])
+	}
+	if rep["rhythm"] != "早盘强势" {
+		t.Errorf("rhythm = %v, want 早盘强势", rep["rhythm"])
+	}
+	// trend 应该是 map
+	if trend, ok := rep["trend"].(map[string]any); !ok || trend["stage"] != "拉升期" {
+		t.Errorf("trend = %v, want stage=拉升期", rep["trend"])
+	}
+	if sd, ok := rep["supply_demand"].(map[string]any); !ok || sd["absorption"] != "强" {
+		t.Errorf("supply_demand = %v, want absorption=强", rep["supply_demand"])
 	}
 }

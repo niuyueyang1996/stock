@@ -211,6 +211,17 @@ func (s *Service) BuildFundflowContext(code string, window any, withPrice bool) 
 	isDay := w == "day" || w == "week" || w == "month"
 	today := s.fundflowToday(code)
 	out := &FundflowStockCtx{Mode: "stock", Window: w, Date: today, Points: []any{}}
+	// 价格基准：昨收/今开（供AI判断高开低开与价格位置）
+	if q := s.Quote.Get(code); q != nil {
+		if q.PrevClose != nil && *q.PrevClose != 0 {
+			v := *q.PrevClose
+			out.PrevClose = &v
+		}
+		if q.Open != nil && *q.Open != 0 {
+			v := *q.Open
+			out.Open = &v
+		}
+	}
 
 	// 指数：量价分时（分时 mkline）或日级量价（日K volume×scale 派生成交额；简化直接用 amount 列）
 	if s.IsIndex(code) {
@@ -731,7 +742,7 @@ func (s *Service) GetStockFundflowReport(code, window string) *FundflowReportRes
 		Window:    r.Window,
 		ModelName: daoStr(r.ModelName),
 		Analysis: FundflowAnalysis{
-			Correlation:  daoStr(r.Correlation),
+			Correlation:  normalizeCorrelation(daoStr(r.Correlation)),
 			Summary:      daoStr(r.Summary),
 			Segments:     segments,
 			Trend:        trend,
@@ -754,7 +765,7 @@ func (s *Service) ListFundflowReports(codes []string) map[string]any {
 	for _, code := range codes {
 		if r := s.FlowR.GetLatest(code, ""); r != nil {
 			out[code] = map[string]any{
-				"correlation": daoStr(r.Correlation), "summary": daoStr(r.Summary),
+				"correlation": normalizeCorrelation(daoStr(r.Correlation)), "summary": daoStr(r.Summary),
 				"trade_date": r.TradeDate, "window": r.Window, "source": r.Source,
 			}
 		}
@@ -779,7 +790,8 @@ func (s *Service) GetCoherenceReport(scope, scopeKey, window string) map[string]
 	}
 	return map[string]any{
 		"scope": r.Scope, "scope_key": r.ScopeKey, "trade_date": r.TradeDate, "window": r.Window,
-		"correlation": daoStr(r.Correlation), "summary": daoStr(r.Summary),
+		"correlation": normalizeCorrelation(daoStr(r.Correlation)), "summary": daoStr(r.Summary),
+		"rhythm": daoStr(r.Rhythm), "trend": loadAnyMap(r.Trend), "supply_demand": loadAnyMap(r.SupplyDemand),
 		"points": points, "conclusion": daoStr(r.Conclusion),
 		"html": daoStr(r.HTML), "model_name": daoStr(r.ModelName),
 	}
@@ -818,10 +830,13 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 		if _, ok := nameMap[code]; !ok {
 			continue
 		}
-		// 转换为单股分析结构
+		// 转换为单股分析结构（保留完整字段）
 		analysis := FundflowAnalysis{
 			Correlation:  stockAnalysis.Correlation,
 			Summary:      stockAnalysis.Summary,
+			Rhythm:       stockAnalysis.Rhythm,
+			Segments:     stockAnalysis.Segments,
+			Trend:        stockAnalysis.Trend,
 			MainForce:    stockAnalysis.MainForce,
 			SupplyDemand: stockAnalysis.SupplyDemand,
 			Conclusion:   stockAnalysis.Conclusion,
@@ -831,7 +846,7 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 		_ = s.UpsertFundflowAnalysis(code, ctx.Date, "batch", w, analysis, modelTag)
 	}
 
-	// 组合 coherence 落库
+	// 组合 coherence 落库（含 rhythm/trend/supply_demand）
 	batchHTML := batchAnalysis.HTML
 	scope := "portfolio"
 	if ctx.Mode == "indices" {
@@ -843,8 +858,11 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 	} else if len(tags) > 0 {
 		scopeKey = strings.Join(sortedCopy(tags), ",")
 	}
-	_ = s.FlowCoh.Upsert(scope, scopeKey, ctx.Date, w,
+	trendJSON, _ := json.Marshal(batchAnalysis.Coherence.Trend)
+	sdJSON, _ := json.Marshal(batchAnalysis.Coherence.SupplyDemand)
+	_ = s.FlowCoh.UpsertWithTrend(scope, scopeKey, ctx.Date, w,
 		batchAnalysis.Coherence.Correlation, batchAnalysis.Coherence.Summary,
+		batchAnalysis.Coherence.Rhythm, string(trendJSON), string(sdJSON),
 		jsonList(batchAnalysis.Coherence.Points), batchAnalysis.Coherence.Conclusion, batchHTML, modelTag)
 
 	// 构建返回结果
@@ -934,14 +952,20 @@ func (s *Service) BuildBatchFundflowContext(tags []string, w string, codes []str
 		if len(ctx.Points) == 0 && ctx.DayNet == nil {
 			continue
 		}
-		var price, pctChg any
+		var price, pctChg, prevClose, openVal any
 		if q := s.Quote.Get(m.code); q != nil {
 			price = q.Price
 			pctChg = q.PctChg
 		}
+		if ctx.PrevClose != nil {
+			prevClose = *ctx.PrevClose
+		}
+		if ctx.Open != nil {
+			openVal = *ctx.Open
+		}
 		out.Stocks = append(out.Stocks, FundflowStockMember{
 			Code: m.code, Name: m.name, Tag: m.tag, WeightPct: m.weight,
-			Price: price, PctChg: pctChg,
+			Price: price, PctChg: pctChg, PrevClose: prevClose, Open: openVal,
 			DayNet: ctx.DayNet, DayMainNet: ctx.DayMainNet, Points: ctx.Points,
 		})
 	}

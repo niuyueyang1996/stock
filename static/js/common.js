@@ -1719,6 +1719,13 @@ function renderFundflowBatchPanel(el, d) {
     ? (() => {
         const [label, color] = FUNDFLOW_CORR[coh.correlation] || FUNDFLOW_CORR.neutral;
         const points = (coh.points || []).map((x) => `<li style="margin:2px 0">${esc(x)}</li>`).join('');
+        // 新增：组合整体 rhythm/trend/supply_demand
+        const t = coh.trend || {};
+        const trendLine = t.direction ? `<div style="font-size:12px;color:var(--muted,#868e96);margin-top:4px">趋势：${esc(t.direction)} · ${esc(t.stage||'')}${t.strength?' · 强度'+esc(t.strength):''}${t.cum_change?' · '+esc(t.cum_change):''}</div>` : '';
+        const rhythmLine = coh.rhythm ? `<div style="font-size:12px;color:var(--muted,#868e96);margin-top:2px">节奏：${esc(coh.rhythm)}</div>` : '';
+        const sd = coh.supply_demand || {};
+        const hasSd = sd.absorption || sd.active_buy || sd.exhaustion || sd.probe;
+        const sdHtml = hasSd ? `<div style="font-size:12px;margin-top:4px"><b>多空：</b>${[sd.absorption&&`承接${esc(sd.absorption)}`, sd.active_buy&&`主动买${esc(sd.active_buy)}`, sd.exhaustion&&`衰竭${esc(sd.exhaustion)}`, sd.probe&&`试探${esc(sd.probe)}`].filter(Boolean).join(' · ')}</div>` : '';
         return `
         <div style="background:rgba(37,99,235,.04);border:1px solid #b9cdff;border-radius:8px;padding:8px 10px;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;flex-wrap:wrap">
@@ -1726,6 +1733,9 @@ function renderFundflowBatchPanel(el, d) {
             <span class="badge" style="color:#fff;background:${color}">${label}</span>
             ${coh.summary ? `<span style="flex:1;font-size:12px;font-weight:400;color:var(--muted,#868e96);min-width:160px">${esc(coh.summary)}</span>` : ''}
           </div>
+          ${rhythmLine}
+          ${trendLine}
+          ${sdHtml}
           ${points ? `<ul style="margin:6px 0 0 18px;font-size:12px">${points}</ul>` : ''}
           ${coh.conclusion ? `<div style="font-size:12px;margin-top:6px">${esc(coh.conclusion)}</div>` : ''}
         </div>`;
