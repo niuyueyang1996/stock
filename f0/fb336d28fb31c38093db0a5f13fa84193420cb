@@ -1,0 +1,29 @@
+.gitignore
+  h_07352c0544a725 25
+backend/internal/db/dao/ai.go
+  h_07352c0544a725 279-283,286,289
+backend/internal/db/models.go
+  h_07352c0544a725 396-411
+backend/internal/db/schema.go
+  h_07352c0544a725 387,437-442
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 214-224,745,768,793-794,833,837-839,849,861-863,865,955,959-964,968
+backend/internal/service/ai/fundflow_test.go
+  h_07352c0544a725 8,1200-1269
+backend/internal/service/ai/fundflow_types.go
+  h_07352c0544a725 86-87,101-102
+static/js/common.js
+  h_07352c0544a725 1722-1728,1736-1738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f0fb336d28fb31c38093db0a5f13fa84193420cb",
+  "prompts": {},
+  "logical_commit_id": "f0fb336d28fb31c38093db0a5f13fa84193420cb",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
