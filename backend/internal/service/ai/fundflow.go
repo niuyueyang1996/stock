@@ -790,9 +790,6 @@ func (s *Service) GetCoherenceReport(scope, scopeKey, window string) map[string]
 func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, window any, systemPrompt, intensity string) (map[string]any, error) {
 	modelCfg := s.requireModel()
 	w := NormFlowWindow(window)
-	if w == "1m" || w == "5m" {
-		return nil, fmt.Errorf("批量分析窗口过小，请选择 15 分钟及以上")
-	}
 	ctx := s.BuildBatchFundflowContext(tags, w, codes, weights)
 	if len(ctx.Stocks) == 0 {
 		return nil, fmt.Errorf("该组合暂无有资金流数据的标的，请先全量刷新")
