@@ -1,0 +1,44 @@
+backend/.gitignore
+  s_a5d71ed37c3dab::t_f8aed7da44c96d 6-7
+backend/go.mod
+  s_a5d71ed37c3dab::t_0a781823e2dd3c 25-26,33,41-42,45
+backend/go.sum
+  s_a5d71ed37c3dab::t_776a3eadd4d330 39-40,45-46,59-60,81-84,100-101
+backend/internal/route/router.go
+  s_8427d485cd6756::t_249b97080072e9 466-475,477,481-482
+backend/cmd/mcp/main.go
+  s_a5d71ed37c3dab::t_09648840b4aba8 1-591
+backend/cmd/server/main.go
+  s_a5d71ed37c3dab::t_4e674ace03f648 130
+backend/internal/service/finance/finance_extra_test.go
+  s_a5d71ed37c3dab::t_ad0d418454e9f2 450,471-473,476,484,534-536,538,546-548,614
+backend/internal/service/finance/provider_sina.go
+  s_a5d71ed37c3dab::t_a5e2eeb134e931 3-4,10,16,21,29-33,103-104,106-170,172,174,176,178,204,210-217,274-278,302-310
+backend/internal/service/refresh/sync_global.go
+  s_a5d71ed37c3dab::t_951fbe453f840b 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a8d96f7f24c55df68be0df4f99ad757a72c84476",
+  "prompts": {},
+  "logical_commit_id": "a8d96f7f24c55df68be0df4f99ad757a72c84476",
+  "sessions": {
+    "s_8427d485cd6756": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1eced2c2-fb0e-4ddf-9596-825ecad3a756",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_a5d71ed37c3dab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77ea8e28-0449-46c6-a227-1e6badc5718f",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
