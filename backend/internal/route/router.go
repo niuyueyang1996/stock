@@ -463,15 +463,23 @@ func Setup(r *gin.Engine, s *Services) {
 	// PUT /api/stocks/:code/expected-payout —— 设置预期支付率：body 需 payout（必填）。
 	api.PUT("/stocks/:code/expected-payout", func(c *gin.Context) {
 		code := c.Param("code")
-		var body struct {
-			Payout *float64 `json:"payout"`
+		var raw map[string]any
+		_ = c.ShouldBindJSON(&raw)
+		var payout *float64
+		for _, k := range []string{"payout", "payout_rate"} {
+			if v, ok := raw[k]; ok && v != nil {
+				if fv, ok := v.(float64); ok {
+					payout = &fv
+					break
+				}
+			}
 		}
-		if err := c.ShouldBindJSON(&body); err != nil || body.Payout == nil {
+		if payout == nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "payout 必填"})
 			return
 		}
-		s.StockMeta.SetExpectedPayout(code, *body.Payout)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": *body.Payout}})
+		s.StockMeta.SetExpectedPayout(code, *payout)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": *payout}})
 	})
 
 	// ---- trades ----

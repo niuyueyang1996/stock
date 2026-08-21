@@ -447,6 +447,7 @@ func TestAshareFinanceFinancialsEndToEnd(t *testing.T) {
 	sina := raw.NewSina()
 	tx := raw.NewTencent()
 	cn := raw.NewCNInfo()
+	em := raw.NewEM()
 
 	// 新浪财务摘要（gjzb）
 	sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
@@ -467,14 +468,12 @@ func TestAshareFinanceFinancialsEndToEnd(t *testing.T) {
 		fields[45] = "1.5e4"   // 总市值 15000 亿 → 股数 = 15000e8/1500 = 10 亿
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("v_sh600519=\"\"" + strings.Join(fields, "~") + "\";")), Header: http.Header{}}, nil
 	})
-	// 巨潮分红：每 10 股派 30 元 → 每股 3 元
-	cn.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
-		return jsonHandler(t, mustJSON(t, map[string]any{"records": []map[string]any{
-			{"F006D": "2026-05-10", "F044V": "年度分红", "F012N": 30.0, "F010N": 0.0, "F011N": 0.0},
-		}}))(r)
+	// 东财分红：每 10 股派 30 元 → 每股 3 元（按 REPORT 年=2025 累加）
+	em.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+		return jsonHandler(t, `{"result":{"data":[{"REPORT_DATE":"2025-12-31 00:00:00","PRETAX_BONUS_RMB":30.0,"EX_DIVIDEND_DATE":"2026-06-22 00:00:00"}]}}`)(r)
 	})
 
-	a := NewAshareFinance(sina, tx, cn)
+	a := NewAshareFinanceWithEM(sina, tx, cn, em)
 	f, err := a.Financials(context.Background(), "600519", ptrF(0.91))
 	if err != nil {
 		t.Fatalf("A股财务: %v", err)
@@ -482,7 +481,7 @@ func TestAshareFinanceFinancialsEndToEnd(t *testing.T) {
 	if f == nil {
 		t.Fatal("Financials nil")
 	}
-	if f.ReportDate != "20260630" {
+	if f.ReportDate != "20251231" {
 		t.Fatalf("ReportDate=%q", f.ReportDate)
 	}
 	// 去年年报净利（20251231 期归母净利）
@@ -532,13 +531,11 @@ func TestAshareFinanceHKCodeNotSupported(t *testing.T) {
 }
 
 func TestAshareDividendPerShare(t *testing.T) {
-	cn := raw.NewCNInfo()
-	cn.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
-		return jsonHandler(t, mustJSON(t, map[string]any{"records": []map[string]any{
-			{"F006D": "2026-05-10", "F044V": "年度分红", "F012N": 25.0},
-		}}))(r)
+	em := raw.NewEM()
+	em.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+		return jsonHandler(t, `{"result":{"data":[{"REPORT_DATE":"2025-12-31 00:00:00","PRETAX_BONUS_RMB":25.0,"EX_DIVIDEND_DATE":"2026-06-22 00:00:00"}]}}`)(r)
 	})
-	a := NewAshareFinance(raw.NewSina(), raw.NewTencent(), cn)
+	a := NewAshareFinanceWithEM(raw.NewSina(), raw.NewTencent(), raw.NewCNInfo(), em)
 	v, err := a.DividendPerShare(context.Background(), "600519")
 	if err != nil || v == nil || *v != round2(2.5) {
 		t.Fatalf("Dv=%v err=%v want 2.5", v, err)
@@ -546,9 +543,9 @@ func TestAshareDividendPerShare(t *testing.T) {
 }
 
 func TestAshareDividendPerShareNoDiv(t *testing.T) {
-	cn := raw.NewCNInfo()
-	cn.AttachTestTransport(jsonHandler(t, mustJSON(t, map[string]any{"records": nil})))
-	a := NewAshareFinance(raw.NewSina(), raw.NewTencent(), cn)
+	em := raw.NewEM()
+	em.AttachTestTransport(jsonHandler(t, `{"result":{"data":[]}}`))
+	a := NewAshareFinanceWithEM(raw.NewSina(), raw.NewTencent(), raw.NewCNInfo(), em)
 	if _, err := a.DividendPerShare(context.Background(), "600519"); !errors.Is(err, ErrNotSupported) {
 		t.Fatalf("无分红应 ErrNotSupported，got %v", err)
 	}
@@ -614,7 +611,7 @@ func TestNormalizeAshareMissingFields(t *testing.T) {
 	if f == nil {
 		t.Fatal("缺失字段也不该返回 nil")
 	}
-	if f.ReportDate != "20260630" {
+	if f.ReportDate != "20251231" {
 		t.Fatalf("ReportDate=%q", f.ReportDate)
 	}
 	// 无腾讯股本，用净利/EPS 兜底总股本（用去年年报 90/1.5）

@@ -1,27 +1,34 @@
 package finance
 
-// A 股财务：新浪财务摘要（gjzb）+ 腾讯实时总股本 + 巨潮分红（人民币口径无需折算）。
-// 对齐 app/data/normalizers.py normalize_ashare_financials / ashares.py。
+// A 股财务：新浪财务摘要（gjzb）+ 腾讯实时总股本 + 东财 RPT_SHAREBONUS_DET 分红。
+// 分红口径为东财 REPORT_DATE 年份累加/10 的静态财年；巨潮逻辑已注释保留，需启用时解开。
 
 import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/model"
 )
 
-// AshareFinance A 股财务源（新浪主源）。内部组合多 raw：新浪摘要 + 腾讯行情(总股本) + 巨潮(分红)。
+// AshareFinance A 股财务源（新浪主源）。内部组合多 raw：新浪摘要 + 腾讯行情(总股本) + 东财分红。
 type AshareFinance struct {
 	sina *raw.Sina
 	tx   *raw.Tencent
 	cn   *raw.CNInfo
+	em   *raw.EM
 }
 
 // NewAshareFinance 构造 A 股财务源（新浪主源 + 腾讯股本 + 巨潮分红）
 func NewAshareFinance(s *raw.Sina, t *raw.Tencent, c *raw.CNInfo) *AshareFinance {
 	return &AshareFinance{sina: s, tx: t, cn: c}
+}
+
+// NewAshareFinanceWithEM 构造 A 股财务源（新浪主源 + 腾讯股本 + 东财分红）
+func NewAshareFinanceWithEM(s *raw.Sina, t *raw.Tencent, c *raw.CNInfo, em *raw.EM) *AshareFinance {
+	return &AshareFinance{sina: s, tx: t, cn: c, em: em}
 }
 
 // Name 源标识
@@ -93,32 +100,82 @@ func (a *AshareFinance) totalShares(ctx context.Context, code string) *float64 {
 	return nil
 }
 
-// dividendInfo 最近财年每股总股息 + 报告期（巨潮分红，含中期+末期）
+// dividendInfo 最近财年每股总股息 + 报告期（东财 RPT_SHAREBONUS_DET，按 REPORT_DATE 年份累加/10 的静态财年）
+// 可用财年 2025 → 该年 REPORT 年=2025 的所有 PRETAX_BONUS_RMB 之和/10；东财不可用返回 nil。
 func (a *AshareFinance) dividendInfo(ctx context.Context, code string) (*float64, *string) {
-	rows := a.cn.Dividend(ctx, code)
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	// 找最近「年报」类型（F001V 报告期含 '年报'）；巨潮按时间倒序
-	var lastAnn *raw.DividendRow
-	for i := range rows {
-		if strings.Contains(rows[i].DivType, "年度") {
-			lastAnn = &rows[i]
-			break
+	if a.em != nil {
+		rows := a.em.DividendDetail(ctx, code)
+		if len(rows) > 0 {
+			avail := availableFiscalYear(time.Now())
+			sum := 0.0
+			found := false
+			for _, r := range rows {
+				if len(r.ReportDate) < 4 || r.PretaxBonusRMB == nil || *r.PretaxBonusRMB == 0 {
+					continue
+				}
+				fy := r.ReportDate[:4]
+				if fy != avail {
+					continue
+				}
+				sum += *r.PretaxBonusRMB
+				found = true
+			}
+			if found && sum > 0 {
+				v := round2(sum / 10)
+				report := avail + "1231"
+				return &v, &report
+			}
+			byFY := map[string]float64{}
+			latest := ""
+			for _, r := range rows {
+				if len(r.ReportDate) < 4 || r.PretaxBonusRMB == nil || *r.PretaxBonusRMB == 0 {
+					continue
+				}
+				// 跳过当年的占位行 2026-06-30 BONUS=0.80 EX=""（未除权，不计入可用财年前财年）
+				if len(r.ExDividendDate) == 0 && r.ReportDate[:4] == fmt.Sprintf("%04d", time.Now().Year()) {
+					continue
+				}
+				fy := r.ReportDate[:4]
+				byFY[fy] += *r.PretaxBonusRMB
+				if fy > latest {
+					latest = fy
+				}
+			}
+			if latest != "" && byFY[latest] > 0 {
+				v := round2(byFY[latest] / 10)
+				report := latest + "1231"
+				return &v, &report
+			}
 		}
 	}
-	if lastAnn == nil || lastAnn.Cash == nil {
-		return nil, nil
-	}
-	// 简化：最近年度分红的每股派息（每 10 股派 X 元 → /10）。
-	// Python 按同财年所有派息求和；巨潮记录已按年聚合时此处取单条即可。
-	v := round2(*lastAnn.Cash / 10)
-	report := ""
-	_ = report
-	return &v, nil
+	return nil, nil
+	// 巨潮 fallback（已注释，需启用时解开，按公告财年归集）：
+	// rows := a.cn.Dividend(ctx, code)
+	// fiscalYear := func(r raw.DividendRow) string {
+	//   if len(r.AnnounceDate) < 7 { return "" }
+	//   y:=r.AnnounceDate[:4]; m:=r.AnnounceDate[5:7]
+	//   if strings.Contains(r.DivType,"年度") && m <= "07" { y = formatYear(mustYear(y)-1) }
+	//   return y
+	// }
+	// yearCash:=map[string]float64{}; 按 fiscalYear 累加 Cash，取 latestFiscal
 }
 
-// Financials 拉取 A 股标准财务（人民币口径）：财务摘要矩阵 + 实时总股本 + 巨潮分红
+func mustYear(s string) int { n, _ := parseYear(s); return n }
+
+func parseYear(s string) (int, error) { return atoiYear(s) }
+func atoiYear(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("bad year")
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
+}
+func formatYear(n int) string { return fmt.Sprintf("%04d", n) }
+
+// Financials 拉取 A 股标准财务（人民币口径）：财务摘要矩阵 + 实时总股本 + 东财分红
 func (a *AshareFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
 	if isHKCode(code) {
 		return nil, ErrNotSupported
@@ -144,22 +201,25 @@ func (a *AshareFinance) DividendPerShare(ctx context.Context, code string) (*flo
 }
 
 // normalizeAshareFinancials 新浪财务摘要矩阵 → Financials（人民币口径）
+// 静态财年：2026-08-31 时取可用财年=2025（lastAnnual=20251231），以该年分红累加/全年EPS算支付率
 func normalizeAshareFinancials(m *sinaMatrix, totalShares *float64, dvPerShare *float64, dvReport *string) *model.Financials {
 	if m == nil || len(m.periods) == 0 {
 		return nil
 	}
 	latest := m.periods[0]
-	var lastAnnual string
-	for _, p := range m.periods {
-		if strings.HasSuffix(p, "1231") {
-			lastAnnual = p
-			break
+	availFY := availableFiscalYear(time.Now())
+	lastAnnual := availFY + "1231"
+	if m.cell("归母净利润", lastAnnual) == nil && m.cell("基本每股收益", lastAnnual) == nil {
+		for _, p := range m.periods {
+			if strings.HasSuffix(p, "1231") && m.cell("归母净利润", p) != nil {
+				lastAnnual = p
+				break
+			}
 		}
 	}
 
 	netProfit := m.cell("归母净利润", lastAnnual)
 	eps := m.cell("基本每股收益", lastAnnual)
-	// 总股本兜底：净利 ÷ EPS 推算
 	if totalShares == nil && netProfit != nil && eps != nil && *eps > 0 {
 		v := round2(*netProfit / *eps)
 		totalShares = &v
@@ -211,11 +271,11 @@ func normalizeAshareFinancials(m *sinaMatrix, totalShares *float64, dvPerShare *
 	}
 
 	return &model.Financials{
-		ReportDate:        latest,
-		Roe:               m.cell("净资产收益率(ROE)", latest),
-		Roa:               m.cell("总资产报酬率(ROA)", latest),
-		RevenueYoy:        m.cell("营业总收入增长率", latest),
-		ProfitYoy:         m.cell("归属母公司净利润增长率", latest),
+		ReportDate:        lastAnnual,
+		Roe:               m.cell("净资产收益率(ROE)", lastAnnual),
+		Roa:               m.cell("总资产报酬率(ROA)", lastAnnual),
+		RevenueYoy:        m.cell("营业总收入增长率", lastAnnual),
+		ProfitYoy:         m.cell("归属母公司净利润增长率", lastAnnual),
 		NetProfit:         netProfit,
 		NetAssets:         netAssets,
 		LastYearNetAssets: lastYearNetAssets,
@@ -239,6 +299,15 @@ func round2p(v *float64) *float64 {
 	}
 	out := round2(*v)
 	return &out
+}
+
+// availableFiscalYear 静态财年的可用财年：2026-08-31 => 2025；1-4月年报未出时 => 2024
+func availableFiscalYear(now time.Time) string {
+	y := now.Year()
+	if now.Month() < 5 {
+		y--
+	}
+	return fmt.Sprintf("%04d", y-1)
 }
 
 // toSymbol 代码→行情符号

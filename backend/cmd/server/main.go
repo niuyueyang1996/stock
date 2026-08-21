@@ -127,7 +127,7 @@ func main() {
 	// 数据子包（多态降级链）
 	fm := finance.NewFinanceManager(
 		func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) },
-		[]finance.FinanceSource{finance.NewAshareFinance(sina, tx, cn)},
+		[]finance.FinanceSource{finance.NewAshareFinanceWithEM(sina, tx, cn, em)},
 		[]finance.FinanceSource{finance.NewEMHKFinance(em)},
 	)
 	mm := market.NewMarketManager(
