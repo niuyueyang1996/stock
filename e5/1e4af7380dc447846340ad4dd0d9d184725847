@@ -1,0 +1,20 @@
+backend/internal/service/finance/manager.go
+  s_b2869fccf4a95f::t_0c6ba550114c71 10,73,87,108,118
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e51e4af7380dc447846340ad4dd0d9d184725847",
+  "prompts": {},
+  "logical_commit_id": "e51e4af7380dc447846340ad4dd0d9d184725847",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
