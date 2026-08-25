@@ -1,0 +1,20 @@
+backend/cmd/mcp/main.go
+  s_b2869fccf4a95f::t_4c1708da4d8c8d 21,137-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "31a91401578e1f1724b38dc9767cdb916ef4e995",
+  "prompts": {},
+  "logical_commit_id": "31a91401578e1f1724b38dc9767cdb916ef4e995",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
