@@ -33,46 +33,55 @@ func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	thscode := toThscode(code)
-	if thscode == "" {
+	candidates := thscodeCandidates(code)
+	if len(candidates) == 0 {
 		return nil, ErrNotSupported
 	}
-	m, err := p.Raw.RealTime(ctx, thscode)
-	if err != nil {
-		if ifind.IsNotSupported(err) {
-			return nil, ErrNotSupported
+	var lastErr error
+	for _, thscode := range candidates {
+		m, err := p.Raw.RealTime(ctx, thscode)
+		if err != nil {
+			if ifind.IsNotSupported(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
 		}
-		return nil, err
+		q := &model.Quote{Code: code}
+		if v, ok := m["latest"]; ok {
+			q.Price = parseFloat(v)
+		}
+		if v, ok := m["open"]; ok {
+			q.Open = parseFloat(v)
+		}
+		if v, ok := m["high"]; ok {
+			q.High = parseFloat(v)
+		}
+		if v, ok := m["low"]; ok {
+			q.Low = parseFloat(v)
+		}
+		if v, ok := m["preClose"]; ok {
+			q.PrevClose = parseFloat(v)
+		}
+		if v, ok := m["volume"]; ok {
+			q.Volume = parseFloat(v)
+		}
+		if v, ok := m["amount"]; ok {
+			q.Amount = parseFloat(v)
+		}
+		if q.Price == 0 && q.Open == 0 {
+			lastErr = ErrNotSupported
+			continue
+		}
+		if q.PrevClose != 0 {
+			q.PctChg = (q.Price - q.PrevClose) / q.PrevClose * 100
+		}
+		return q, nil
 	}
-	q := &model.Quote{Code: code}
-	if v, ok := m["latest"]; ok {
-		q.Price = parseFloat(v)
-	}
-	if v, ok := m["open"]; ok {
-		q.Open = parseFloat(v)
-	}
-	if v, ok := m["high"]; ok {
-		q.High = parseFloat(v)
-	}
-	if v, ok := m["low"]; ok {
-		q.Low = parseFloat(v)
-	}
-	if v, ok := m["preClose"]; ok {
-		q.PrevClose = parseFloat(v)
-	}
-	if v, ok := m["volume"]; ok {
-		q.Volume = parseFloat(v)
-	}
-	if v, ok := m["amount"]; ok {
-		q.Amount = parseFloat(v)
-	}
-	if q.Price == 0 && q.Open == 0 {
+	if lastErr != nil && ifind.IsNotSupported(lastErr) {
 		return nil, ErrNotSupported
 	}
-	if q.PrevClose != 0 {
-		q.PctChg = (q.Price - q.PrevClose) / q.PrevClose * 100
-	}
-	return q, nil
+	return nil, ErrNotSupported
 }
 
 func (p *IFIndTech) Kline(ctx context.Context, symbol, period, start, end string, count int) ([][]string, error) {
@@ -121,17 +130,33 @@ func (p *IFIndTech) FundflowDailyHistory(ctx context.Context, symbol string, cou
 }
 
 func toThscode(code string) string {
-	code = strings.TrimSpace(code)
-	if len(code) == 5 {
-		return code + ".HK"
-	}
-	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") || strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") || strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
-		return code + ".SH"
-	}
-	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") || strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") || strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") || strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
-		return code + ".SZ"
+	cands := thscodeCandidates(code)
+	if len(cands) > 0 {
+		return cands[0]
 	}
 	return ""
+}
+
+func thscodeCandidates(code string) []string {
+	code = strings.TrimSpace(code)
+	if len(code) == 5 {
+		return []string{code + ".HK"}
+	}
+	// 北交所 43/82/83/87/92 → .BJ
+	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") || strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
+		return []string{code + ".BJ"}
+	}
+	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") || strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") || strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
+		return []string{code + ".SH"}
+	}
+	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") || strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
+		// 000001 重码：SH指数 vs SZ平安银行，优先按股票，失败再试指数
+		if code == "000001" {
+			return []string{"000001.SZ", "000001.SH"}
+		}
+		return []string{code + ".SZ"}
+	}
+	return nil
 }
 
 func parseFloat(s string) float64 {
