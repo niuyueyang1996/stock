@@ -28,15 +28,6 @@ type IFIndTech struct {
 func (p *IFIndTech) Name() string { return "ifind" }
 
 func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error) {
-	if p.Raw == nil {
-		return nil, ErrNotSupported
-	}
-	ths, err := p.Raw.BareToThs(ctx, code)
-	if err != nil || ths == "" {
-		return nil, ErrNotSupported
-	}
-	// 实时行情暂通过基础 ifind.Client 能力接入；未配 token 时自动 ErrNotSupported 降级
-	// 首期保持与现有 Quote 口径一致，real_time 的详细归一化在 raw/ifind 侧完成
 	return nil, ErrNotSupported
 }
 

@@ -34,16 +34,6 @@ func TestMaskToken(t *testing.T) {
 	}
 }
 
-func TestThscodeCache(t *testing.T) {
-	thscodeCache.set("600519", "600519.SH")
-	if v, ok := thscodeCache.get("600519"); !ok || v != "600519.SH" {
-		t.Fatalf("cache: %v %v", v, ok)
-	}
-	if _, ok := thscodeCache.get("missing"); ok {
-		t.Fatal("missing should miss")
-	}
-}
-
 func TestIsNotSupported(t *testing.T) {
 	if !IsNotSupported(errNotSupportedSentinel) {
 		t.Fatal("sentinel should IsNotSupported")
