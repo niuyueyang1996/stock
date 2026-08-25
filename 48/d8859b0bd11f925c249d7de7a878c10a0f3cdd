@@ -1,0 +1,22 @@
+backend/internal/service/quote/quote.go
+  s_b2869fccf4a95f::t_0f498c1c534f94 16-17,264-275
+static/js/common.js
+  s_b2869fccf4a95f::t_ebd17cd89a7e57 935-936,938,953,955-959
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "48d8859b0bd11f925c249d7de7a878c10a0f3cdd",
+  "prompts": {},
+  "logical_commit_id": "48d8859b0bd11f925c249d7de7a878c10a0f3cdd",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
