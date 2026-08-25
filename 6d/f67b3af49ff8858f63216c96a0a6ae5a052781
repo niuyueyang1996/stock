@@ -1,0 +1,20 @@
+backend/internal/route/middleware.go
+  s_b2869fccf4a95f::t_67f86e5fe0d1fc 8,38,46,66-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6df67b3af49ff8858f63216c96a0a6ae5a052781",
+  "prompts": {},
+  "logical_commit_id": "6df67b3af49ff8858f63216c96a0a6ae5a052781",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
