@@ -25,14 +25,7 @@ type IFIndInfra struct{ Raw *ifind.Client }
 func (p *IFIndInfra) Name() string { return "ifind" }
 
 func (p *IFIndInfra) GetThscode(ctx context.Context, codes []string, mode string) ([]string, error) {
-	if p.Raw == nil {
-		return nil, ErrNotSupported
-	}
-	ths, err := p.Raw.GetThscode(ctx, codes, mode)
-	if err != nil && ifind.IsNotSupported(err) {
-		return nil, ErrNotSupported
-	}
-	return ths, err
+	return nil, ErrNotSupported
 }
 
 func (p *IFIndInfra) TradeDates(ctx context.Context, marketcode, startdate, enddate string, functionpara map[string]any) ([]string, error) {
