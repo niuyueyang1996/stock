@@ -161,6 +161,8 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	aiSvc.Daily = dao.NewAIDailyReportDAO(gdb)
 	aiSvc.Jobs = jm
 	aiSvc.MarketClosed = func(now time.Time) bool { return calSvc.IsClosed(now) }
+	aiSvc.LoadProtocols()
+	aiSvc.WarmActiveProtocol()
 	holdings.OnTradeChanged = func(date string) { log.Printf("[mcp][持仓] 交易或标签变更 date=%s", date) }
 	rfSvc.EnsureNews = func(code string) { aiSvc.EnsureStockNews(code, 30, 1200, true) }
 	detailSvc := &detail.Service{

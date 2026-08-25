@@ -111,10 +111,46 @@ func (s *Service) probeAndCacheProtocol(baseURL, apiKey, model string) {
 	}
 	if c, ok := s.Client.(*OpenAICompatClient); ok {
 		proto := c.DetectProtocol(requestCtx(), baseURL, apiKey, model)
-		// 持久化到 config 便于重启后直接使用
-		key := "ai_protocol:" + strings.TrimSpace(baseURL) + "|" + strings.TrimSpace(model)
+		key := "ai_protocol:" + protocolKey(baseURL, model)
 		_ = s.Config.Set(key, proto)
 	}
+}
+
+// LoadProtocols 启动时从 config 回填内存缓存，避免每次重启都探测
+func (s *Service) LoadProtocols() {
+	if s.Config == nil || s.Config.DB == nil {
+		return
+	}
+	var rows []db.Config
+	s.Config.DB.Where("key LIKE ?", "ai_protocol:%").Find(&rows)
+	for _, r := range rows {
+		v := strings.TrimSpace(r.Value)
+		if v != "chat" && v != "response" {
+			continue
+		}
+		k := strings.TrimPrefix(r.Key, "ai_protocol:")
+		if k != "" {
+			protocolCache.Store(k, v)
+		}
+	}
+}
+
+// WarmActiveProtocol 若当前激活模型尚未有协议记录，异步探测一次
+func (s *Service) WarmActiveProtocol() {
+	m := s.Models.GetActive()
+	if m == nil {
+		return
+	}
+	key := protocolKey(m.BaseURL, m.Model)
+	if _, ok := protocolCache.Load(key); ok {
+		return
+	}
+	// 尝试从 config 回填
+	if v := strings.TrimSpace(s.Config.Get("ai_protocol:" + key)); v == "chat" || v == "response" {
+		protocolCache.Store(key, v)
+		return
+	}
+	go s.probeAndCacheProtocol(m.BaseURL, m.APIKey, m.Model)
 }
 
 // ListAvailableModels 调提供商 /v1/models 列出可用模型名

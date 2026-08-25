@@ -206,6 +206,8 @@ func main() {
 	aiSvc.Daily = dao.NewAIDailyReportDAO(gdb)
 	aiSvc.Jobs = jm
 	aiSvc.MarketClosed = func(now time.Time) bool { return calSvc.IsClosed(now) }
+	aiSvc.LoadProtocols()
+	aiSvc.WarmActiveProtocol()
 
 	// 交易/标签变更只记日志，不自动打分（打分走页面按钮）
 	holdings.OnTradeChanged = func(date string) {
