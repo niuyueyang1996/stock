@@ -1,0 +1,20 @@
+backend/internal/service/valuation/live.go
+  s_966b10c4c0c5f4::t_da13d9dc7e6657 15,40,49,58,67,645,647-651
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "848e0bc4d8b57b9a0c224df655073bd933261f09",
+  "prompts": {},
+  "logical_commit_id": "848e0bc4d8b57b9a0c224df655073bd933261f09",
+  "sessions": {
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
