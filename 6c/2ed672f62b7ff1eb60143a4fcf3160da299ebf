@@ -1,0 +1,20 @@
+backend/internal/service/tech/provider_ifind.go
+  s_b2869fccf4a95f::t_d0e4e20a2b543a 37-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6c2ed672f62b7ff1eb60143a4fcf3160da299ebf",
+  "prompts": {},
+  "logical_commit_id": "6c2ed672f62b7ff1eb60143a4fcf3160da299ebf",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
