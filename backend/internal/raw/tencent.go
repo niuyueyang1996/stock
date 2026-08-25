@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/url"
 	"sort"
 	"strconv"
@@ -174,7 +175,9 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 	if len(rowsByPage) == 0 {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		return t.snapshot[key]
+		snap := t.snapshot[key]
+		log.Printf("[tencent] 分笔 %s 网络 0页 快照 %d笔", code, len(snap))
+		return snap
 	}
 
 	lastPage := 0
@@ -204,19 +207,24 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 	if len(merged) == 0 {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		return t.snapshot[key]
+		snap := t.snapshot[key]
+		log.Printf("[tencent] 分笔 %s 网络 0页 快照 %d笔 游标 page=%d", code, len(snap), startPage)
+		return snap
 	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	// 防同股并发：已有线程把游标推进到本次末页之后 → 本次结果已被合并
 	if cur, ok := t.cursor[key]; ok && cur.page >= lastPage+1 {
-		return t.snapshot[key]
+		snap := t.snapshot[key]
+		log.Printf("[tencent] 分笔 %s 网络 0页(并发已合并) 快照 %d笔", code, len(snap))
+		return snap
 	}
 	snap := t.snapshot[key]
 	snap = append(snap, merged...)
 	t.snapshot[key] = snap
 	t.cursor[key] = tickCursor{page: lastPage + 1, ts: snap[len(snap)-1].Time}
+	log.Printf("[tencent] 分笔 %s 网络 %d页 快照 %d笔 游标 page=%d->%d", code, len(rowsByPage), len(snap), startPage, lastPage+1)
 	return snap
 }
 
