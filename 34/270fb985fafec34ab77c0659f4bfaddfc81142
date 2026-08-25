@@ -1,0 +1,20 @@
+backend/internal/service/refresh/refresh.go
+  s_966b10c4c0c5f4::t_7c274cb078893f 21,88,90,103,109,178,197,202,218,220,235,237,240,248,273,279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "34270fb985fafec34ab77c0659f4bfaddfc81142",
+  "prompts": {},
+  "logical_commit_id": "34270fb985fafec34ab77c0659f4bfaddfc81142",
+  "sessions": {
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
