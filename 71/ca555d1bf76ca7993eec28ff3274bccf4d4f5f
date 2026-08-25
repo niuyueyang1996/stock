@@ -1,0 +1,20 @@
+backend/internal/service/detail/detail.go
+  s_966b10c4c0c5f4::t_4c0df884f110b4 15-16,48-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "71ca555d1bf76ca7993eec28ff3274bccf4d4f5f",
+  "prompts": {},
+  "logical_commit_id": "71ca555d1bf76ca7993eec28ff3274bccf4d4f5f",
+  "sessions": {
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
