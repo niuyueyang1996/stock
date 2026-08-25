@@ -409,6 +409,30 @@ func (c *Client) HighFrequency(ctx context.Context, thscode, starttime, endtime 
 	return out, nil
 }
 
+func (c *Client) RealTime(ctx context.Context, thscode string) (map[string]string, error) {
+	if c.refreshToken == "" {
+		return nil, mapIFindError(0, "ifind refresh_token 未配置")
+	}
+	form := map[string]any{
+		"codes":      thscode,
+		"indicators": strings.Join(TechRealTimeIndicators, ","),
+	}
+	raw, err := c.postJSON(ctx, realTimePath, form)
+	if err != nil {
+		return nil, err
+	}
+	var tables []struct {
+		Table map[string]string `json:"table"`
+	}
+	if err := json.Unmarshal(raw, &tables); err != nil {
+		return nil, err
+	}
+	if len(tables) == 0 || len(tables[0].Table) == 0 {
+		return nil, mapIFindError(-4001, "no data")
+	}
+	return tables[0].Table, nil
+}
+
 // mapIFindError 将 iFinD errorcode 映射为可被 Manager 识别的错误（-4001/-4100 → ErrNotSupported 其余透传）
 func mapIFindError(code int, msg string) error {
 	switch code {
