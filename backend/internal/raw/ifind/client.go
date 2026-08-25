@@ -253,7 +253,22 @@ type ReportItem struct {
 	Seq         string `json:"seq"`
 }
 
-func (c *Client) BasicData(ctx context.Context, codes []string, indicators []string) (map[string]map[string]string, error) {
+// FundamentalData 基础数据 11 指标结构化
+type FundamentalData struct {
+	NetProfit     string `json:"归母净利润"`
+	NetAssets     string `json:"归母净资产"`
+	Revenue       string `json:"营业总收入"`
+	ROE           string `json:"净资产收益率(ROE)"`
+	ROA           string `json:"总资产报酬率(ROA)"`
+	BVPS          string `json:"每股净资产"`
+	BVPSNew       string `json:"每股净资产_最新股数"`
+	TotalEquity   string `json:"股东权益合计(净资产)"`
+	RevenueGrowth string `json:"营业总收入增长率"`
+	ProfitGrowth  string `json:"归属母公司净利润增长率"`
+	EPS           string `json:"基本每股收益"`
+}
+
+func (c *Client) BasicData(ctx context.Context, codes []string, indicators []string) (map[string]*FundamentalData, error) {
 	if c.refreshToken == "" {
 		return nil, mapIFindError(0, "ifind refresh_token \u672a\u914d\u7f6e")
 	}
@@ -268,15 +283,16 @@ func (c *Client) BasicData(ctx context.Context, codes []string, indicators []str
 		return nil, err
 	}
 	var tables []struct {
-		Table   map[string]string `json:"table"`
+		Table   FundamentalData `json:"table"`
 		Thscode string            `json:"thscode"`
 	}
 	if err := json.Unmarshal(raw, &tables); err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]string{}
+	out := map[string]*FundamentalData{}
 	for _, t := range tables {
-		out[t.Thscode] = t.Table
+		v := t.Table
+		out[t.Thscode] = &v
 	}
 	if len(out) == 0 {
 		return nil, mapIFindError(-4001, "no data")
@@ -284,7 +300,7 @@ func (c *Client) BasicData(ctx context.Context, codes []string, indicators []str
 	return out, nil
 }
 
-func (c *Client) DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]map[string]string, error) {
+func (c *Client) DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]*FundamentalData, error) {
 	if c.refreshToken == "" {
 		return nil, mapIFindError(0, "ifind refresh_token \u672a\u914d\u7f6e")
 	}
@@ -298,15 +314,16 @@ func (c *Client) DateSequence(ctx context.Context, codes []string, indicators []
 		return nil, err
 	}
 	var tables []struct {
-		Table   map[string]string `json:"table"`
+		Table   FundamentalData `json:"table"`
 		Thscode string            `json:"thscode"`
 	}
 	if err := json.Unmarshal(raw, &tables); err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]string{}
+	out := map[string]*FundamentalData{}
 	for _, t := range tables {
-		out[t.Thscode] = t.Table
+		v := t.Table
+		out[t.Thscode] = &v
 	}
 	if len(out) == 0 {
 		return nil, mapIFindError(-4001, "no data")
@@ -409,7 +426,23 @@ func (c *Client) HighFrequency(ctx context.Context, thscode, starttime, endtime 
 	return out, nil
 }
 
-func (c *Client) RealTime(ctx context.Context, thscode string) (map[string]string, error) {
+// RealTimeData 实时行情结构化（12 指标，对齐 TechRealTimeIndicators）
+type RealTimeData struct {
+	TradeDate    string `json:"tradeDate"`
+	TradeTime    string `json:"tradeTime"`
+	PreClose     string `json:"preClose"`
+	Open         string `json:"open"`
+	High         string `json:"high"`
+	Low          string `json:"low"`
+	Latest       string `json:"latest"`
+	AvgPrice     string `json:"avgPrice"`
+	PB           string `json:"pb"`
+	PETTM        string `json:"pe_ttm"`
+	TotalShares  string `json:"totalShares"`
+	TotalCapital string `json:"totalCapital"`
+}
+
+func (c *Client) RealTime(ctx context.Context, thscode string) (*RealTimeData, error) {
 	if c.refreshToken == "" {
 		return nil, mapIFindError(0, "ifind refresh_token 未配置")
 	}
@@ -422,15 +455,15 @@ func (c *Client) RealTime(ctx context.Context, thscode string) (map[string]strin
 		return nil, err
 	}
 	var tables []struct {
-		Table map[string]string `json:"table"`
+		Table RealTimeData `json:"table"`
 	}
 	if err := json.Unmarshal(raw, &tables); err != nil {
 		return nil, err
 	}
-	if len(tables) == 0 || len(tables[0].Table) == 0 {
+	if len(tables) == 0 || tables[0].Table.Latest == "" && tables[0].Table.Open == "" {
 		return nil, mapIFindError(-4001, "no data")
 	}
-	return tables[0].Table, nil
+	return &tables[0].Table, nil
 }
 
 // mapIFindError 将 iFinD errorcode 映射为可被 Manager 识别的错误（-4001/-4100 → ErrNotSupported 其余透传）

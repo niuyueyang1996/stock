@@ -24,7 +24,8 @@ type HighFreqSource interface {
 
 // IFIndTech iFinD 技术面 Provider（同一 *ifind.Client 实现多小接口）
 type IFIndTech struct {
-	Raw *ifind.Client
+	Raw     *ifind.Client
+	IsIndex func(string) bool
 }
 
 func (p *IFIndTech) Name() string { return "ifind" }
@@ -33,55 +34,32 @@ func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	candidates := thscodeCandidates(code)
-	if len(candidates) == 0 {
+	thscode := toThscodeForQuote(code, p.IsIndex)
+	if thscode == "" {
 		return nil, ErrNotSupported
 	}
-	var lastErr error
-	for _, thscode := range candidates {
-		m, err := p.Raw.RealTime(ctx, thscode)
-		if err != nil {
-			if ifind.IsNotSupported(err) {
-				lastErr = err
-				continue
-			}
-			return nil, err
+	m, err := p.Raw.RealTime(ctx, thscode)
+	if err != nil {
+		if ifind.IsNotSupported(err) {
+			return nil, ErrNotSupported
 		}
-		q := &model.Quote{Code: code}
-		if v, ok := m["latest"]; ok {
-			q.Price = parseFloat(v)
-		}
-		if v, ok := m["open"]; ok {
-			q.Open = parseFloat(v)
-		}
-		if v, ok := m["high"]; ok {
-			q.High = parseFloat(v)
-		}
-		if v, ok := m["low"]; ok {
-			q.Low = parseFloat(v)
-		}
-		if v, ok := m["preClose"]; ok {
-			q.PrevClose = parseFloat(v)
-		}
-		if v, ok := m["volume"]; ok {
-			q.Volume = parseFloat(v)
-		}
-		if v, ok := m["amount"]; ok {
-			q.Amount = parseFloat(v)
-		}
-		if q.Price == 0 && q.Open == 0 {
-			lastErr = ErrNotSupported
-			continue
-		}
-		if q.PrevClose != 0 {
-			q.PctChg = (q.Price - q.PrevClose) / q.PrevClose * 100
-		}
-		return q, nil
+		return nil, err
 	}
-	if lastErr != nil && ifind.IsNotSupported(lastErr) {
+	q := &model.Quote{Code: code}
+	q.Price = parseFloat(m.Latest)
+	q.Open = parseFloat(m.Open)
+	q.High = parseFloat(m.High)
+	q.Low = parseFloat(m.Low)
+	q.PrevClose = parseFloat(m.PreClose)
+	q.Volume = parseFloat(m.TotalShares)
+	q.Amount = parseFloat(m.TotalCapital)
+	if q.Price == 0 && q.Open == 0 {
 		return nil, ErrNotSupported
 	}
-	return nil, ErrNotSupported
+	if q.PrevClose != 0 {
+		q.PctChg = (q.Price - q.PrevClose) / q.PrevClose * 100
+	}
+	return q, nil
 }
 
 func (p *IFIndTech) Kline(ctx context.Context, symbol, period, start, end string, count int) ([][]string, error) {
@@ -137,6 +115,25 @@ func toThscode(code string) string {
 	return ""
 }
 
+func toThscodeForQuote(code string, isIndex func(string) bool) string {
+	code = strings.TrimSpace(code)
+	if isIndex != nil && isIndex(code) {
+		// 指数：000001.SH 等，按上证/深证区分
+		if code == "000001" {
+			return "000001.SH"
+		}
+		if strings.HasPrefix(code, "39") || strings.HasPrefix(code, "00") && len(code) == 6 {
+			// 深证指数 399001 等
+			return code + ".SZ"
+		}
+		// 默认指数按 SH
+		if len(code) == 6 {
+			return code + ".SH"
+		}
+	}
+	return toThscode(code)
+}
+
 func thscodeCandidates(code string) []string {
 	code = strings.TrimSpace(code)
 	if len(code) == 5 {
@@ -150,10 +147,6 @@ func thscodeCandidates(code string) []string {
 		return []string{code + ".SH"}
 	}
 	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") || strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
-		// 000001 重码：SH指数 vs SZ平安银行，优先按股票，失败再试指数
-		if code == "000001" {
-			return []string{"000001.SZ", "000001.SH"}
-		}
 		return []string{code + ".SZ"}
 	}
 	return nil

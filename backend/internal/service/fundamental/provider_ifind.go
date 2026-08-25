@@ -9,13 +9,13 @@ import (
 // BasicDataSource 基础数据（白名单 indicators）
 type BasicDataSource interface {
 	Name() string
-	BasicData(ctx context.Context, codes []string, indicators []string) (map[string]map[string]string, error)
+	BasicData(ctx context.Context, codes []string, indicators []string) (map[string]*ifind.FundamentalData, error)
 }
 
 // DateSequenceSource 日期序列
 type DateSequenceSource interface {
 	Name() string
-	DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]map[string]string, error)
+	DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]*ifind.FundamentalData, error)
 }
 
 // IFIndFundamental iFinD 基本面 Provider（基础数据/日期序列/公告）
@@ -27,7 +27,7 @@ func (p *IFIndFundamental) LatestDividend(ctx context.Context, code string) (*La
 	return nil, ErrNotSupported
 }
 
-func (p *IFIndFundamental) BasicData(ctx context.Context, codes []string, indicators []string) (map[string]map[string]string, error) {
+func (p *IFIndFundamental) BasicData(ctx context.Context, codes []string, indicators []string) (map[string]*ifind.FundamentalData, error) {
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}
@@ -38,7 +38,7 @@ func (p *IFIndFundamental) BasicData(ctx context.Context, codes []string, indica
 	return m, err
 }
 
-func (p *IFIndFundamental) DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]map[string]string, error) {
+func (p *IFIndFundamental) DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]*ifind.FundamentalData, error) {
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}

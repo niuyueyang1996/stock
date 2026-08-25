@@ -128,19 +128,20 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
+	isIndex := func(code string) bool {
+		var n int64
+		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
+		return n > 0
+	}
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
-	techMgr := service.TechManager(rc)
+	techMgr := service.TechManager(rc, isIndex)
 	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, fm, vm, liveSvc, fxSvc, jm)
 	rfSvc.Baidu = bd
 	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
 	liveSvc.SetDao(cacheDAO)
-	rfSvc.IsIndex = func(code string) bool {
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
-		return n > 0
-	}
+	rfSvc.IsIndex = isIndex
 	holdings.SetIndexChecker(rfSvc.IsIndex)
 	idxSvc := indices.New(gdb, tx, lg)
 	idxSvc.Cache = cacheDAO

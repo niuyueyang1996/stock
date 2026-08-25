@@ -26,9 +26,9 @@ type RawClients struct {
 
 // TechManager 构造技术面域 Manager（行情/分时/资金流/K线）
 // chain 顺序即降级优先级；同花顺插首位，未配置时内部返回 ErrNotSupported 自动降级
-func TechManager(rc *RawClients) *tech.Manager {
+func TechManager(rc *RawClients, isIndex func(string) bool) *tech.Manager {
 	return tech.New(
-		&tech.IFIndTech{Raw: rc.IFind},
+		&tech.IFIndTech{Raw: rc.IFind, IsIndex: isIndex},
 		tech.NewTencentTech(rc.Tencent),
 		tech.NewEMTech(rc.EM),
 		tech.NewSinaTech(rc.Sina),

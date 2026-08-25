@@ -166,7 +166,12 @@ func main() {
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
-	techMgr := service.TechManager(rc)
+	isIndex := func(code string) bool {
+		var n int64
+		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
+		return n > 0
+	}
+	techMgr := service.TechManager(rc, isIndex)
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
 
@@ -175,11 +180,7 @@ func main() {
 	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
 	liveSvc.SetDao(cacheDAO)
-	rfSvc.IsIndex = func(code string) bool {
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
-		return n > 0
-	}
+	rfSvc.IsIndex = isIndex
 	holdings.SetIndexChecker(rfSvc.IsIndex)
 
 	// 指数服务
