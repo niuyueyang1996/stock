@@ -813,7 +813,6 @@ func TestAIScoringPrefs(t *testing.T) {
 	}
 }
 
-
 // buildMinimalXlsx 构造内存中的最小 xlsx（zip+XML，与 parseHoldingsExcel 期望的结构一致）：
 // workbook.xml + sheets/sheet1.xml，行内字符串单元格用 t=str。
 func buildMinimalXlsx(t *testing.T, header []string, rows [][]string) []byte {

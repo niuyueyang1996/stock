@@ -3,6 +3,7 @@
 //   - A股/ETF 本地缓存新鲜（mtime < 1 天）、港股 < 7 天 → 直接跳过不发网络
 //   - A股 = 东财 push2delay（沪深京）；ETF = push2delay ∪ 天天基金日行情（补债券 ETF）；
 //     港股 = 新浪 getHKStockData（代码+新浪名）→ 腾讯 qt.gtimg.cn 中文名覆盖（50/批）
+//
 // 搜索 / 名称回填只读这些缓存（GET 零网络），列表只能由本服务填充。
 package marketlists
 
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/infra"
 )
 
 // 列表缓存文件名（quote.Search 同款读取约定）与新鲜度（天）
@@ -33,30 +35,41 @@ const (
 type Service struct {
 	// DataDir 数据目录（写列表 JSON 处）
 	DataDir string
-	// Em 东财客户端（A股/ETF 列表 + 天天基金日行情）
+	// Em 东财客户端（A股/ETF 列表 + 天天基金日行情）—— 已收口 infra.Manager 时可为空
 	Em *raw.EM
 	// Sina 新浪客户端（港股代码列表）
 	Sina *raw.Sina
 	// Tencent 腾讯客户端（港股中文名覆盖）
 	Tencent *raw.Tencent
+	// Infra 基础能力 Manager（chain 降级：Em→Sina→Tencent），非空时优先走 Manager
+	Infra *infra.Manager
 }
 
 // Download 幂等下载三个列表：缓存新鲜直接跳过；三个列表并发下载，单个失败不影响其他。
 func (s *Service) Download(ctx context.Context) error {
-	if s.DataDir == "" || s.Em == nil {
-		return fmt.Errorf("marketlists: DataDir/Em 未装配")
+	if s.DataDir == "" {
+		return fmt.Errorf("marketlists: DataDir 未装配")
+	}
+	if s.Infra == nil && s.Em == nil {
+		return fmt.Errorf("marketlists: Infra/Em 未装配")
 	}
 	if err := os.MkdirAll(s.DataDir, 0o755); err != nil {
 		return err
 	}
 	type task struct {
-		file  string
-		days  int
-		load  func(ctx context.Context) ([]map[string]any, error)
+		file string
+		days int
+		load func(ctx context.Context) ([]map[string]any, error)
 	}
 	tasks := []task{
 		{fileAshare, freshDaysAshareETF, func(ctx context.Context) ([]map[string]any, error) {
-			codes, err := s.Em.ListAshare(ctx)
+			var codes []raw.MarketCode
+			var err error
+			if s.Infra != nil {
+				codes, err = s.Infra.ListAshare(ctx)
+			} else {
+				codes, err = s.Em.ListAshare(ctx)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -110,13 +123,27 @@ func (s *Service) loadETF(ctx context.Context) ([]map[string]any, error) {
 		}
 	}
 	var errs []string
-	if spot, err := s.Em.ListETF(ctx); err != nil {
-		errs = append(errs, "spot: "+err.Error())
+	var spot []raw.MarketCode
+	var spotErr error
+	if s.Infra != nil {
+		spot, spotErr = s.Infra.ListETF(ctx)
+	} else {
+		spot, spotErr = s.Em.ListETF(ctx)
+	}
+	if spotErr != nil {
+		errs = append(errs, "spot: "+spotErr.Error())
 	} else {
 		add(spot)
 	}
-	if daily, err := s.Em.FundETFDaily(ctx); err != nil {
-		errs = append(errs, "daily: "+err.Error())
+	var daily []raw.MarketCode
+	var dailyErr error
+	if s.Infra != nil {
+		daily, dailyErr = s.Infra.FundETFDaily(ctx)
+	} else {
+		daily, dailyErr = s.Em.FundETFDaily(ctx)
+	}
+	if dailyErr != nil {
+		errs = append(errs, "daily: "+dailyErr.Error())
 	} else {
 		add(daily)
 	}
@@ -124,8 +151,6 @@ func (s *Service) loadETF(ctx context.Context) ([]map[string]any, error) {
 		return nil, fmt.Errorf("ETF 两源均失败: %v", errs)
 	}
 	if len(errs) > 0 {
-		// 单源失败另一源兜底：仍返回部分并集，但必须留痕，否则不完整的
-		// ETF 列表（缺债券 ETF 或货币 ETF）会静默落盘并被当作新鲜缓存一整天。
 		log.Printf("marketlists: ETF 两源仅一源成功，列表可能不完整: %v", errs)
 	}
 	return toRows(merged, "etf"), nil
@@ -133,15 +158,35 @@ func (s *Service) loadETF(ctx context.Context) ([]map[string]any, error) {
 
 // loadHK 新浪代码+名 → 腾讯中文名覆盖（对齐 Python _load_hk_stock_list + _fetch_hk_names）。
 func (s *Service) loadHK(ctx context.Context) ([]map[string]any, error) {
-	if s.Sina == nil {
-		return nil, fmt.Errorf("Sina 未装配")
+	var codes []raw.MarketCode
+	var err error
+	if s.Infra != nil {
+		codes, err = s.Infra.ListHK(ctx)
+	} else {
+		if s.Sina == nil {
+			return nil, fmt.Errorf("Sina 未装配")
+		}
+		codes, err = s.Sina.ListHK(ctx)
 	}
-	codes, err := s.Sina.ListHK(ctx)
 	if err != nil {
 		return nil, err
 	}
 	rows := toRows(codes, "hk")
-	if s.Tencent != nil {
+	if s.Infra != nil {
+		if names, nerr := s.Infra.HKNames(ctx, func() []string {
+			all := make([]string, 0, len(codes))
+			for _, c := range codes {
+				all = append(all, c.Code)
+			}
+			return all
+		}()); nerr == nil && len(names) > 0 {
+			for _, r := range rows {
+				if n, ok := names[r["code"].(string)]; ok {
+					r["name"] = n
+				}
+			}
+		}
+	} else if s.Tencent != nil {
 		all := make([]string, 0, len(codes))
 		for _, c := range codes {
 			all = append(all, c.Code)

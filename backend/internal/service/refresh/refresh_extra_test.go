@@ -11,8 +11,8 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/finance"
-	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/model"
+	"stockanalyzer/internal/service/tech"
 )
 
 // seedTradeCalendar 在 trade_calendar 表中为指定日期写入 is_open 值（测试辅助）
@@ -46,21 +46,21 @@ func (f *flexMarketSource) Name() string {
 
 func (f *flexMarketSource) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	if f.quoteF == nil {
-		return nil, market.ErrNotSupported
+		return nil, tech.ErrNotSupported
 	}
 	return f.quoteF(ctx, code)
 }
 
 func (f *flexMarketSource) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
 	if f.barsF == nil {
-		return nil, market.ErrNotSupported
+		return nil, tech.ErrNotSupported
 	}
 	return f.barsF(ctx, code, start, end)
 }
 
 func (f *flexMarketSource) Ticks(ctx context.Context, code string) ([]raw.TickRow, error) {
 	if f.ticksF == nil {
-		return nil, market.ErrNotSupported
+		return nil, tech.ErrNotSupported
 	}
 	return f.ticksF(ctx, code)
 }
@@ -77,7 +77,7 @@ func TestSyncDailyBarsForce(t *testing.T) {
 		{Date: "2026-08-12", Open: 8, High: 9, Low: 7.5, Close: 8.5, Volume: 100, Amount: 1000},
 		{Date: "2026-08-13", Open: 8.5, High: 9.2, Low: 8.2, Close: 9.0, Volume: 120, Amount: 1200},
 	}
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(_ context.Context, _, _, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(_ context.Context, _, _, _ string) ([]model.Bar, error) {
 		return bars, nil
 	}})
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local) // 周五
@@ -123,7 +123,7 @@ func TestSyncDailyBarsSparseFallback(t *testing.T) {
 	src := "tencent"
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})
 	startGot := ""
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(_ context.Context, _, start, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(_ context.Context, _, start, _ string) ([]model.Bar, error) {
 		startGot = start
 		// 返回一个在窗口内的旧 bar + 今日 bar（全量窗口）
 		return func() []model.Bar {
@@ -154,7 +154,7 @@ func TestSyncDailyBarsNonTradeDayFilter(t *testing.T) {
 		{Date: "2026-08-13", Close: 9.0, Volume: 120, Amount: 1200}, // 将被过滤
 		{Date: "2026-08-14", Close: 9.3, Volume: 130, Amount: 1300},
 	}
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
 		return bars, nil
 	}})
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local)
@@ -177,7 +177,7 @@ func TestSyncDailyBarsBeforeOpenNoToday(t *testing.T) {
 		{Date: "2026-08-13", Close: 9.0, Volume: 120, Amount: 1200},
 		{Date: "2026-08-14", Close: 9.3, Volume: 130, Amount: 1300}, // 今日，将被过滤
 	}
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
 		return bars, nil
 	}})
 	now := time.Date(2026, 8, 14, 8, 30, 0, 0, time.Local) // 08:30 盘前
@@ -195,7 +195,7 @@ func TestSyncDailyBarsBeforeOpenNoToday(t *testing.T) {
 // TestSyncDailyBarsSourceFail 数据源无返回 → source_fail
 func TestSyncDailyBarsSourceFail(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
 		return nil, nil
 	}})
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local)
@@ -221,7 +221,7 @@ func TestSyncDailyBarsCached(t *testing.T) {
 	futureDate := now.AddDate(0, 0, 1).Format("2006-01-02")
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: futureDate, Close: ptrF(9.0), Source: &src}})
 	// 拦截源，若被调用则 fail（cached 不应拉源）
-	s.Market = market.NewMarketManager(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
+	s.Tech = tech.New(&flexMarketSource{barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
 		t.Fatal("cached 分支不应调用数据源")
 		return nil, nil
 	}})
@@ -290,7 +290,7 @@ func TestSyncFinancialsPartialSelfHeal(t *testing.T) {
 // TestSyncFinancialsSourceFail 财务源失败 → source_fail
 func TestSyncFinancialsSourceFail(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
-	s.Finance = finance.NewFinanceManager(nil, financeSourceWithF(nil, market.ErrNotSupported), nil)
+	s.Finance = finance.NewFinanceManager(nil, financeSourceWithF(nil, tech.ErrNotSupported), nil)
 	out := s.syncFinancials(context.Background(), "600519", true)
 	if out["reason"] != "source_fail" {
 		t.Fatalf("源失败应 source_fail, got %v", out)
@@ -300,7 +300,7 @@ func TestSyncFinancialsSourceFail(t *testing.T) {
 // TestSyncFundflowNoTicks 无分笔 → no_ticks
 func TestSyncFundflowNoTicks(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
-	s.Market = market.NewMarketManager(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
+	s.Tech = tech.New(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
 		return nil, nil
 	}})
 	out := s.syncFundflow(context.Background(), "600519", time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local))
@@ -318,7 +318,7 @@ func TestSyncFundflowPersist(t *testing.T) {
 	closeV := 9.0
 	src := "tencent"
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})
-	s.Market = market.NewMarketManager(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
+	s.Tech = tech.New(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
 		return []raw.TickRow{
 			{Time: "10:30:00", Amount: 1000, Sign: 1, Price: 9.0},
 			{Time: "10:31:00", Amount: 2000, Sign: -1, Price: 9.1},
@@ -350,7 +350,7 @@ func TestSyncFundflowStaleTicks(t *testing.T) {
 	closeV := 9.0
 	src := "tencent"
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})
-	s.Market = market.NewMarketManager(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
+	s.Tech = tech.New(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
 		return []raw.TickRow{{Time: "16:00:00", Amount: 1000, Sign: 1, Price: 9.0}}, nil // 超前于 15:00
 	}})
 	out := s.syncFundflow(context.Background(), "600519", now)
@@ -375,7 +375,7 @@ func TestSyncFundflowUTCClockCutsAfternoon(t *testing.T) {
 		closeV := 9.0
 		src := "tencent"
 		_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{Code: "600519", TradeDate: today, Close: &closeV, Source: &src}})
-		s.Market = market.NewMarketManager(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
+		s.Tech = tech.New(&flexMarketSource{ticksF: func(ctx context.Context, _ string) ([]raw.TickRow, error) {
 			return ticks, nil
 		}})
 		out := s.syncFundflow(context.Background(), "600519", now)
@@ -434,7 +434,7 @@ func TestSyncRealtimeQuote(t *testing.T) {
 	s, _, g := openRefreshBatch(t)
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local)
 	today := now.Format("2006-01-02")
-	s.Market = market.NewMarketManager(&flexMarketSource{quoteF: func(ctx context.Context, _ string) (*model.Quote, error) {
+	s.Tech = tech.New(&flexMarketSource{quoteF: func(ctx context.Context, _ string) (*model.Quote, error) {
 		return &model.Quote{Price: 9.5, Open: 8.8, High: 9.6, Low: 8.6, Volume: 999, Amount: 9999, Ts: today + " 14:59:00", PctChg: 0.5}, nil
 	}})
 	q := s.syncRealtimeQuote(context.Background(), "600519", now)

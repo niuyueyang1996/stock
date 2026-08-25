@@ -14,22 +14,18 @@ import (
 	"gorm.io/gorm"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/fundamental"
 	"stockanalyzer/internal/service/holdings"
 )
 
-// LatestDividend 最近一次已除权的每股现金分红
-type LatestDividend struct {
-	ExDate     string
-	ReportDate string
-	Per10Share float64
-	PerShare   float64
-	Source     string
-}
+// LatestDividend 最近一次已除权的每股现金分红（复用 fundamental 统一类型，避免跨包类型不兼容）
+type LatestDividend = fundamental.LatestDividend
 
 // Service 除权服务
 type Service struct {
 	em       *raw.EM
 	cn       *raw.CNInfo
+	divMgr   dividendChain
 	holdings *holdings.Service
 	DB       *gorm.DB
 	// fetchDiv 测试注入点：非 nil 时优先走自定义的最近除权查询，绕过真实网络。
@@ -42,16 +38,38 @@ func New(e *raw.EM, c *raw.CNInfo, h *holdings.Service, g *gorm.DB) *Service {
 	return &Service{em: e, cn: c, holdings: h, DB: g}
 }
 
+// SetManager 注入分红 chain（供 Registry 统一装配后覆盖）
+func (s *Service) SetManager(mgr dividendChain) { s.divMgr = mgr }
+
+// dividendChain 分红 chain（由 fundamental.Manager 实现，避免循环依赖用接口隔离）
+type dividendChain interface {
+	LatestDividend(ctx context.Context, code string) (*LatestDividend, error)
+}
+
+// NewWithManager 注入分红 chain（EM→CNInfo→THS，顺序由 Registry 控制）
+func NewWithManager(mgr dividendChain, h *holdings.Service, g *gorm.DB) *Service {
+	return &Service{divMgr: mgr, holdings: h, DB: g}
+}
+
 // FetchLatestDividend 最近一次已除权的每股现金分红（东财优先，巨潮降级）
 func (s *Service) FetchLatestDividend(ctx context.Context, code string) *LatestDividend {
 	if s.fetchDiv != nil {
 		return s.fetchDiv(ctx, code)
 	}
-	if ld := latestEM(s.em.DividendDetail(ctx, code)); ld != nil {
-		return ld
+	if s.divMgr != nil {
+		if ld, err := s.divMgr.LatestDividend(ctx, code); err == nil && ld != nil {
+			return ld
+		}
 	}
-	// 降级：巨潮分红（无除权除息日 → 自动除权跳过，手动按钮仍可用）
-	return latestCN(s.cn.Dividend(ctx, code))
+	if s.em != nil {
+		if ld := latestEM(s.em.DividendDetail(ctx, code)); ld != nil {
+			return ld
+		}
+	}
+	if s.cn != nil {
+		return latestCN(s.cn.Dividend(ctx, code))
+	}
+	return nil
 }
 
 // latestEM 从东财分红送配行里挑选除权日最新的现金派息（过滤空除权日/无派息），返回 nil 表示无有效数据。
@@ -77,7 +95,7 @@ func latestEM(rows []raw.DividendRowEM) *LatestDividend {
 	last := ds[len(ds)-1]
 	return &LatestDividend{
 		ExDate: last.exDate, ReportDate: last.report,
-		Per10Share: round4(last.per10), PerShare: round4(last.per10/10), Source: "em",
+		Per10Share: round4(last.per10), PerShare: round4(last.per10 / 10), Source: "em",
 	}
 }
 

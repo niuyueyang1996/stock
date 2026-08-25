@@ -163,7 +163,7 @@ func TestPurgeDailyPricesNotIn(t *testing.T) {
 		mkPrice(code, "2026-08-10", floatPtr(4000)),
 		mkPrice(code, "2026-08-11", floatPtr(10.23)), // 源没有这一天
 		mkPrice(code, "2026-08-12", floatPtr(4010)),
-		mkPrice(code, "2026-07-01", floatPtr(10.0)),  // 窗口外
+		mkPrice(code, "2026-07-01", floatPtr(10.0)), // 窗口外
 	})
 	if err := d.PurgeDailyPricesNotIn(code, "2026-08-10", "2026-08-12", []string{"2026-08-10", "2026-08-12"}); err != nil {
 		t.Fatalf("PurgeDailyPricesNotIn: %v", err)
@@ -180,5 +180,3 @@ func TestPurgeDailyPricesNotIn(t *testing.T) {
 		t.Fatalf("窗口内假K 应删除: %+v", kept)
 	}
 }
-
-

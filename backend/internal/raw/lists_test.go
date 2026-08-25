@@ -7,9 +7,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 )

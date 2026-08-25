@@ -8,10 +8,8 @@ import (
 	"log"
 	"math"
 
-	"gorm.io/gorm"
-
 	"stockanalyzer/internal/db/dao"
-	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/infra"
 )
 
 // CurrencyNames 支持折算的币种
@@ -19,31 +17,35 @@ var CurrencyNames = map[string]string{
 	"HKD": "港币",
 }
 
-// Service 汇率服务
+// Service 汇率服务（仅经 infra.Manager 拉汇率，不直调 raw.Sina）
 type Service struct {
-	sina     *raw.Sina
+	fxMgr    *infra.Manager
 	fx       *dao.FxDAO
 	holdings *dao.HoldingsDAO
 }
 
-// New 构造（holdings DAO 用于港股持仓判定与回填）
-func New(s *raw.Sina, fxDAO *dao.FxDAO, hd *dao.HoldingsDAO) *Service {
-	return &Service{sina: s, fx: fxDAO, holdings: hd}
+// New 构造（仅 Manager 链路）
+func New(mgr *infra.Manager, fxDAO *dao.FxDAO, hd *dao.HoldingsDAO) *Service {
+	return &Service{fxMgr: mgr, fx: fxDAO, holdings: hd}
 }
 
-// NewWithDB 简化构造（仅测试）
-func NewWithDB(g *gorm.DB, s *raw.Sina) *Service {
-	return &Service{sina: s, fx: dao.NewFxDAO(g)}
+// NewWithDB 已废弃：测试请用 New(infra.New(...), dao)
+func NewWithDB(dao2 *dao.FxDAO, hd *dao.HoldingsDAO, mgr *infra.Manager) *Service {
+	return &Service{fxMgr: mgr, fx: dao2, holdings: hd}
 }
 
-// FetchRateForDate 拉取指定日汇率（新浪实时接口只给当前值，历史日期取当前近似）。返回 (rate, source)
+// FetchRateForDate 拉取指定日汇率（经 infra.Manager chain，新浪实时接口只给当前值，历史日期取当前近似）。返回 (rate, source)
 func (s *Service) FetchRateForDate(ctx context.Context, currency, rateDate string) (*float64, *string) {
 	if _, ok := CurrencyNames[currency]; !ok {
 		return nil, nil
 	}
-	rate := s.sina.FXRate(ctx)
-	if rate == nil {
-		log.Printf("[汇率] HKD/CNY 新浪实时拉取失败")
+	if s.fxMgr == nil {
+		log.Printf("[汇率] HKD/CNY Manager 未装配")
+		return nil, nil
+	}
+	rate, err := s.fxMgr.FXRate(ctx)
+	if err != nil || rate == nil {
+		log.Printf("[汇率] HKD/CNY 拉取失败（chain 均无返回） err=%v", err)
 		return nil, nil
 	}
 	src := "新浪外汇"

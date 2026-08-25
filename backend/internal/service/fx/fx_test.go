@@ -13,6 +13,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/infra"
 )
 
 // openTestDB 每个测试独立临时 SQLite（跑完整建表/迁移/种子），t.Cleanup 关闭。
@@ -58,7 +59,8 @@ func newSvc(t *testing.T, rate string, calls *int) (*Service, *gorm.DB, *dao.Hol
 	sina := stubSina(t, rate, rate, calls)
 	fxDAO := dao.NewFxDAO(g)
 	hd := dao.NewHoldingsDAO(g)
-	return New(sina, fxDAO, hd), g, hd
+	mgr := infra.New(infra.NewSinaFx(sina))
+	return New(mgr, fxDAO, hd), g, hd
 }
 
 // addHKHolding 造一条活跃港股持仓（stocks.currency=HKD），供 RefreshHKFX 判定。
@@ -189,7 +191,7 @@ func TestEnsureFxForDate_PullFailFallback(t *testing.T) {
 	}))
 	g := openTestDB(t)
 	hd := dao.NewHoldingsDAO(g)
-	svc := New(s, dao.NewFxDAO(g), hd)
+	svc := New(infra.New(infra.NewSinaFx(s)), dao.NewFxDAO(g), hd)
 	_ = svc.fx.Upsert("HKD", "2025-02-28", 0.9100, nil)
 	v := svc.EnsureFxForDate(context.Background(), "HKD", "2025-03-01")
 	if v == nil || *v != 0.9100 {
@@ -204,7 +206,7 @@ func TestEnsureFxForDate_AllFailNil(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("bad response")), Header: http.Header{}}, nil
 	}))
 	g := openTestDB(t)
-	svc := New(s, dao.NewFxDAO(g), dao.NewHoldingsDAO(g))
+	svc := New(infra.New(infra.NewSinaFx(s)), dao.NewFxDAO(g), dao.NewHoldingsDAO(g))
 	if v := svc.EnsureFxForDate(context.Background(), "HKD", "2025-03-01"); v != nil {
 		t.Fatalf("全失败应返回 nil，got %v", v)
 	}
@@ -255,7 +257,7 @@ func TestRefreshHKFX_NoHoldings(t *testing.T) {
 	}
 	// hd 为 nil 时也应早退不 panic
 	g := openTestDB(t)
-	svc2 := NewWithDB(g, stubSina(t, "0.9150", "0.9150", nil))
+	svc2 := New(infra.New(infra.NewSinaFx(stubSina(t, "0.9150", "0.9150", nil))), dao.NewFxDAO(g), dao.NewHoldingsDAO(g))
 	got2 := svc2.RefreshHKFX(context.Background(), "2025-03-01T10:00:00", false)
 	if got2["currency"] != nil || got2["fetched"] != 0 {
 		t.Fatalf("holdings nil 应早退，got %v", got2)

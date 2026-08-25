@@ -4,10 +4,10 @@ package ai
 // 对齐 app/services/ai.py 消息面/技术面部分。
 
 import (
-	"log"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"

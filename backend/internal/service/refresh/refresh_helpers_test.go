@@ -12,8 +12,8 @@ import (
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/finance"
-	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/model"
+	"stockanalyzer/internal/service/tech"
 	"stockanalyzer/internal/service/valuation"
 )
 
@@ -35,7 +35,7 @@ func TestRefreshDynamicAndFull(t *testing.T) {
 			return []raw.TickRow{{Time: "10:30:00", Amount: 1000, Sign: 1, Price: 10}}, nil
 		},
 	}
-	s.Market = market.NewMarketManager(flex)
+	s.Tech = tech.New(flex)
 	s.Finance = finance.NewFinanceManager(nil, financeSourceWithF(&model.Financials{
 		ReportDate: "2026-03-31", NetProfit: &np8, NetAssets: &na8, Eps: &eps8, TotalShares: &ts8,
 	}, nil), nil)
@@ -63,10 +63,10 @@ func TestRefreshDynamicAndFull(t *testing.T) {
 }
 
 var (
-	np8 = 1000.0
-	na8 = 5000.0
+	np8  = 1000.0
+	na8  = 5000.0
 	eps8 = 10.0
-	ts8 = 100.0
+	ts8  = 100.0
 )
 
 // TestSyncStockFull 一站式同步单股（同步所有项）
@@ -76,7 +76,7 @@ func TestSyncStockFull(t *testing.T) {
 	s.Cal = nil
 	now := time.Now()
 	today := now.Format("2006-01-02")
-	s.Market = market.NewMarketManager(&flexMarketSource{
+	s.Tech = tech.New(&flexMarketSource{
 		barsF: func(ctx context.Context, _, _, _ string) ([]model.Bar, error) {
 			return []model.Bar{{Date: today, Open: 9, High: 10, Low: 8, Close: 9.5, Volume: 100, Amount: 1000}}, nil
 		},
@@ -103,6 +103,7 @@ func TestSyncIndexFundflowNilTencent(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
 	s.IsIndex = func(string) bool { return true }
 	s.Tencent = nil
+	s.Tech = nil
 	out := s.syncFundflow(context.Background(), "000300", time.Now())
 	if out["reason"] != "no_source" {
 		t.Fatalf("指数资金流 Tencent nil 应 no_source, got %v", out)
@@ -212,7 +213,7 @@ func TestSyncRealtimeQuoteIndexForceClosed(t *testing.T) {
 	s.IsIndex = func(string) bool { return true }
 	now := time.Date(2026, 8, 14, 15, 0, 0, 0, time.Local)
 	today := now.Format("2006-01-02")
-	s.Market = market.NewMarketManager(&flexMarketSource{quoteF: func(ctx context.Context, _ string) (*model.Quote, error) {
+	s.Tech = tech.New(&flexMarketSource{quoteF: func(ctx context.Context, _ string) (*model.Quote, error) {
 		return &model.Quote{Price: 9.5, Open: 9, High: 9.6, Low: 8.9, Ts: today + " 14:59:00"}, nil
 	}})
 	q := s.syncRealtimeQuote(context.Background(), "000300", now)
@@ -374,7 +375,7 @@ func TestFetchDailyBarsNonIndexUsesMarket(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
 	s.IsIndex = func(string) bool { return false }
 	called := false
-	s.Market = market.NewMarketManager(&flexMarketSource{
+	s.Tech = tech.New(&flexMarketSource{
 		barsF: func(_ context.Context, code, start, end string) ([]model.Bar, error) {
 			called = true
 			return []model.Bar{{Date: "2026-08-12", Close: 10}}, nil
@@ -398,7 +399,7 @@ func TestFetchDailyBarsNonIndexUsesMarket(t *testing.T) {
 func TestSyncIndexDailyBarsPublicWrapper(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
 	today := time.Now().Format("2006-01-02")
-	s.Market = market.NewMarketManager(&flexMarketSource{
+	s.Tech = tech.New(&flexMarketSource{
 		barsF: func(_ context.Context, code, start, end string) ([]model.Bar, error) {
 			return []model.Bar{{Date: today, Open: 9, High: 10, Low: 8, Close: 9.5, Volume: 100, Amount: 1000}}, nil
 		},

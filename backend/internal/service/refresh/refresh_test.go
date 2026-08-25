@@ -15,7 +15,6 @@ import (
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
-	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -33,8 +32,7 @@ func openRefresh(t *testing.T) (*Service, *gorm.DB) {
 		}
 	})
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
-	mm := market.NewMarketManager()
-	s := New(g, dao.NewCacheDAO(g), h, mm, nil, nil, nil, nil, jobs.New())
+	s := New(g, dao.NewCacheDAO(g), h, nil, nil, nil, nil, jobs.New())
 	s.Cal = calendar.New(g)
 	return s, g
 }

@@ -810,7 +810,6 @@ func TestStockDetail_DailyFundflow(t *testing.T) {
 	}
 }
 
-
 func TestStockDetail_BackfillName_FromListFile(t *testing.T) {
 	// resolveStockName 从 DataDir 的 stock_list.json 回填名称并写 stocks 表。
 	dir := t.TempDir()
@@ -819,7 +818,14 @@ func TestStockDetail_BackfillName_FromListFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { _ = func() error { if d, _ := g.DB(); d != nil { return d.Close() }; return nil }() })
+	t.Cleanup(func() {
+		_ = func() error {
+			if d, _ := g.DB(); d != nil {
+				return d.Close()
+			}
+			return nil
+		}()
+	})
 	s := &Service{
 		Cache: dao.NewCacheDAO(g), Quote: quote.New(g), Live: valuation.NewLive(g, testFx),
 		Fx: testFx, Indices: indices.New(g, nil, nil),

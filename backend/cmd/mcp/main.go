@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,18 +16,17 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/raw/ifind"
+	"stockanalyzer/internal/service"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/datamanage"
 	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
-	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
-	"stockanalyzer/internal/service/market"
-	"stockanalyzer/internal/service/marketlists"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/refresh"
@@ -90,10 +88,12 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	cn := raw.NewCNInfo()
 	bd := raw.NewBaidu()
 	nw := raw.NewEMNews()
+	ifindClient := ifind.NewClient("")
 
-	_ = marketlists.Service{DataDir: cfg.DataDir, Em: em, Sina: sina, Tencent: tx}
+	rc := &service.RawClients{Tencent: tx, EM: em, Sina: sina, Legu: lg, CNInfo: cn, Baidu: bd, EMNews: nw, IFind: ifindClient}
+	infraMgr := service.InfraManager(rc)
 
-	fxSvc := fx.New(sina, dao.NewFxDAO(gdb), holdingsDAO)
+	fxSvc := fx.New(infraMgr, dao.NewFxDAO(gdb), holdingsDAO)
 	holdSvc := holdings.New(holdingsDAO, func(currency, rateDate string) *float64 {
 		if currency == "CNY" {
 			one := 1.0
@@ -102,16 +102,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 		return fxSvc.EnsureFxForDate(context.Background(), currency, rateDate)
 	})
 
-	fm := finance.NewFinanceManager(
-		func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) },
-		[]finance.FinanceSource{finance.NewAshareFinanceWithEM(sina, tx, cn, em)},
-		[]finance.FinanceSource{finance.NewEMHKFinance(em)},
-	)
-	mm := market.NewMarketManager(
-		market.NewTencentMarket(tx),
-		market.NewEMMarket(em),
-		market.NewSinaMarket(sina),
-	)
+	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
 	leguCode := func(code string) *string {
 		var c string
 		gdb.Raw("SELECT legu_code FROM index_defs WHERE code=?", code).Scan(&c)
@@ -120,10 +111,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 		}
 		return &c
 	}
-	vm := valuation.NewValuationManager(
-		valuation.NewLeguValuation(lg, leguCode),
-		valuation.NewBaiduValuation(bd),
-	)
+	vm := service.NewValuationManager(rc, leguCode)
 	liveSvc := valuation.NewLive(gdb, fxSvc.GetFxRateCNY)
 	jm := jobs.New()
 	calSvc := calendar.New(gdb)
@@ -131,8 +119,11 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
-	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, mm, fm, vm, liveSvc, fxSvc, jm)
+	divSvc.SetManager(service.FundamentalDividendManager(rc))
+	techMgr := service.TechManager(rc)
+	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, fm, vm, liveSvc, fxSvc, jm)
 	rfSvc.Baidu = bd
+	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = func(code string) bool {
@@ -182,8 +173,6 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 		kind, _ := snap["kind"].(string)
 		return running && kind == "system.prewarm"
 	}
-	_ = filepath.Join
-	_ = strings.TrimSpace
 
 	return &services{
 		Holdings: holdSvc, Settings: settingsSvc, Fx: fxSvc,

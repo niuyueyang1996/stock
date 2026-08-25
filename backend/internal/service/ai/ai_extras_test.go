@@ -20,12 +20,12 @@ import (
 // TestNormalizeReport_InvalidEnums 校验 NormalizeReport 对非法 grade/action/risk/confidence 的兜底。
 func TestNormalizeReport_InvalidEnums(t *testing.T) {
 	rep := NormalizeReport(map[string]any{
-		"grade": "Z",        // 非法 → C
-		"action": "panic",   // 非法 → hold
-		"risk_level": "huge", // 非法 → medium
-		"confidence": "sure", // 非法 → medium
-		"risk_score": 20,     // → risk=20, risk_level 由分数推导 low
-		"score": 150,         // 钳制 100
+		"grade":      "Z",     // 非法 → C
+		"action":     "panic", // 非法 → hold
+		"risk_level": "huge",  // 非法 → medium
+		"confidence": "sure",  // 非法 → medium
+		"risk_score": 20,      // → risk=20, risk_level 由分数推导 low
+		"score":      150,     // 钳制 100
 	})
 	if rep["grade"] != "C" || rep["grade_name"] != "一般" {
 		t.Fatalf("非法 grade 应兜底 C: %v", rep["grade"])
@@ -214,8 +214,8 @@ func TestNormalizeNews(t *testing.T) {
 		"stance": "SUPERBULLISH", // 非法 → neutral
 		"items": []any{
 			map[string]any{"headline": "好新闻", "event_date": "2026-01-02", "impact": "利多"},
-			map[string]any{"headline": "无日期", "impact": "利多"},                       // 无 event_date → 剥离
-			map[string]any{"headline": "已过时", "event_date": "2026-01-01", "stale": true}, // stale → 剥离
+			map[string]any{"headline": "无日期", "impact": "利多"},                              // 无 event_date → 剥离
+			map[string]any{"headline": "已过时", "event_date": "2026-01-01", "stale": true},   // stale → 剥离
 			map[string]any{"headline": "已过期", "event_date": "2026-01-01", "expired": true}, // expired → 剥离
 			"非对象", // 非法元素 → 忽略
 		},
@@ -246,7 +246,7 @@ func TestNormalizeTechnical(t *testing.T) {
 		"trend_short": "UP",
 		"trend_mid":   "weird",
 		"key_levels":  map[string]any{"support": []any{10.5, "20"}, "resistance": []any{30}},
-		"signals": []any{"放量突破", "  "},
+		"signals":     []any{"放量突破", "  "},
 	})
 	if tc["trend_short"] != "up" || tc["trend_mid"] != "range" {
 		t.Fatalf("trend 规整失败: %v %v", tc["trend_short"], tc["trend_mid"])

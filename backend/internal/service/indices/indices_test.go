@@ -57,9 +57,9 @@ func tencentQuoteFullMock(closePx, openPx, highPx, lowPx, vol, triple string) fu
 		parts[1] = "idx"
 		parts[2] = "000016"
 		parts[3] = closePx
-		parts[4] = "2990"  // prev_close
-		parts[5] = openPx  // open
-		parts[6] = vol     // volume
+		parts[4] = "2990" // prev_close
+		parts[5] = openPx // open
+		parts[6] = vol    // volume
 		for i := 7; i <= 32; i++ {
 			parts[i] = "0"
 		}
@@ -309,7 +309,7 @@ func TestRefreshOneQuoteAndValuationPersist(t *testing.T) {
 	s.Lg.AttachTestTransport(leguMock(
 		[]map[string]any{
 			{"date": "2025-01-02", "addTtmPe": 13.7},
-			{"date": "2025-01-03", "addTtmPe": 13.9}, // 测试 addTtmPe
+			{"date": "2025-01-03", "addTtmPe": 13.9},  // 测试 addTtmPe
 			{"date": "2025-01-04", "addLyrPe": "8.5"}, // 测试 addLyrPe 回退（字符串解析）
 			{"date": "2025-01-05"},                    // 无 addTtmPe/addLyrPe → numV nil → 跳过
 			{"date": "2025-01-06", "addLyrPe": "bad"}, // 解析失败 → nil → 跳过
@@ -317,8 +317,8 @@ func TestRefreshOneQuoteAndValuationPersist(t *testing.T) {
 		},
 		[]map[string]any{
 			{"date": "2025-01-02", "addPb": 1.5},
-			{"date": "2025-01-03"},             // 无 addPb → 跳过
-			{"date": "", "addPb": 2.0},         // 空 date → 跳过
+			{"date": "2025-01-03"},     // 无 addPb → 跳过
+			{"date": "", "addPb": 2.0}, // 空 date → 跳过
 		},
 	))
 

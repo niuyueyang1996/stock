@@ -545,14 +545,14 @@ func TestFundflowHKParticipation(t *testing.T) {
 	}
 	// 分时五档：A股 main_net 100、港股 main_net 50 → 组合 150（港股参与求和）
 	_ = g.Exec(`INSERT INTO fundflow_15m_cache(code,trade_date,ts,main_net,super_large_net,large_net,medium_net,small_net,buy_amount,sell_amount,price)
-		VALUES('600519','`+tradeDay+`','09:35',100,50,30,20,0,200,50,10)`).Error
+		VALUES('600519','` + tradeDay + `','09:35',100,50,30,20,0,200,50,10)`).Error
 	_ = g.Exec(`INSERT INTO fundflow_15m_cache(code,trade_date,ts,main_net,super_large_net,large_net,medium_net,small_net,buy_amount,sell_amount,price)
-		VALUES('00700','`+tradeDay+`','09:35',50,20,10,10,10,80,30,50)`).Error
+		VALUES('00700','` + tradeDay + `','09:35',50,20,10,10,10,80,30,50)`).Error
 	// 当日五档汇总：A股 100 + 港股 50
 	_ = g.Exec(`INSERT INTO daily_fundflow_cache(code,trade_date,netamount,main_net,super_large_net,large_net,medium_net,small_net,xs_net,buy_amount,sell_amount)
-		VALUES('600519','`+tradeDay+`',80,100,60,40,20,-10,0,200,50)`).Error
+		VALUES('600519','` + tradeDay + `',80,100,60,40,20,-10,0,200,50)`).Error
 	_ = g.Exec(`INSERT INTO daily_fundflow_cache(code,trade_date,netamount,main_net,super_large_net,large_net,medium_net,small_net,xs_net,buy_amount,sell_amount)
-		VALUES('00700','`+tradeDay+`',40,50,30,20,10,-5,0,80,30)`).Error
+		VALUES('00700','` + tradeDay + `',40,50,30,20,10,-5,0,80,30)`).Error
 
 	out := s.Fundflow(nil, "2026-07-15")
 	if out["covered"] != 2 {
@@ -618,8 +618,8 @@ func TestIndexVolume(t *testing.T) {
 
 	// 与 IndexVolume 内部 resolveTradeDay("") 保持一致（周末返回最近工作日）
 	tradeDay, _ := s.resolveTradeDay("")
-	_ = g.Exec(`INSERT INTO daily_price_cache(code,trade_date,close,volume) VALUES('000300','`+tradeDay+`',4000,1e6)`).Error
-	_ = g.Exec(`INSERT INTO index_intraday_cache(code,trade_date,ts,price,volume) VALUES('000300','`+tradeDay+`','09:35',4000,1000)`).Error
+	_ = g.Exec(`INSERT INTO daily_price_cache(code,trade_date,close,volume) VALUES('000300','` + tradeDay + `',4000,1e6)`).Error
+	_ = g.Exec(`INSERT INTO index_intraday_cache(code,trade_date,ts,price,volume) VALUES('000300','` + tradeDay + `','09:35',4000,1000)`).Error
 
 	out := s.IndexVolume([]string{"000300"})
 	if out["covered"] != 1 {

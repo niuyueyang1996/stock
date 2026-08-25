@@ -42,11 +42,11 @@ func (m *mockClient) setFundflowResult() {
 		"summary":     "早盘放量流入",
 		"segments": []any{
 			map[string]any{
-				"period":      "09:30-10:00",
-				"net_flow":    "+1000万",
-				"velocity":    "高",
-				"behavior":    "放量流入",
-				"transition":  "起始段",
+				"period":     "09:30-10:00",
+				"net_flow":   "+1000万",
+				"velocity":   "高",
+				"behavior":   "放量流入",
+				"transition": "起始段",
 			},
 		},
 		"trend": map[string]any{

@@ -4,9 +4,9 @@ package ai
 // 对齐 app/services/ai.py 资金流部分。
 
 import (
-	"log"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -465,16 +465,16 @@ func ParseFundflowAnalysis(data any) FundflowAnalysis {
 		return FundflowAnalysis{}
 	}
 	return FundflowAnalysis{
-		Correlation: normalizeCorrelation(strv(m["correlation"])),
-		Summary:     strv(m["summary"]),
-		Rhythm:      strv(m["rhythm"]),
-		Conclusion:  strv(m["conclusion"]),
-		HTML:        strv(m["html"]),
-		Segments:    parseSegments(m["segments"]),
-		Trend:       parseTrend(m["trend"]),
-		MainForce:   parseMainForce(m["main_force"]),
+		Correlation:  normalizeCorrelation(strv(m["correlation"])),
+		Summary:      strv(m["summary"]),
+		Rhythm:       strv(m["rhythm"]),
+		Conclusion:   strv(m["conclusion"]),
+		HTML:         strv(m["html"]),
+		Segments:     parseSegments(m["segments"]),
+		Trend:        parseTrend(m["trend"]),
+		MainForce:    parseMainForce(m["main_force"]),
 		SupplyDemand: parseSupplyDemand(m["supply_demand"]),
-		Alerts:      strList(m["alerts"]),
+		Alerts:       strList(m["alerts"]),
 	}
 }
 
@@ -487,9 +487,9 @@ func normalizeCorrelation(s string) string {
 	case "bullish", "bearish", "divergent", "neutral":
 		return s
 	case "positive":
-		return "bullish"  // 旧标签兼容：positive → bullish
+		return "bullish" // 旧标签兼容：positive → bullish
 	case "negative":
-		return "bearish"  // 旧标签兼容：negative → bearish
+		return "bearish" // 旧标签兼容：negative → bearish
 	default:
 		return "neutral"
 	}

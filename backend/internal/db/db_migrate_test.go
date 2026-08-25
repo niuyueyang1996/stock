@@ -121,26 +121,26 @@ func TestUpgradeDropsFormulaScoring(t *testing.T) {
 	for _, tc := range []struct {
 		table, col string
 	}{
-		{"daily_fundflow_cache", "p50"},   // v3
-		{"daily_fundflow_cache", "p80"},   // v3
-		{"daily_fundflow_cache", "p95"},   // v3
-		{"daily_fundflow_cache", "xs_net"}, // v4
-		{"daily_fundflow_cache", "p15"},   // v4
-		{"daily_fundflow_cache", "p40"},   // v4
-		{"daily_fundflow_cache", "p75"},   // v4
-		{"daily_fundflow_cache", "buy_amount"}, // v7
-		{"daily_fundflow_cache", "sell_amount"}, // v7
-		{"fundflow_15m_cache", "xs_net"},  // v4
-		{"fundflow_15m_cache", "buy_amount"}, // v4
-		{"fundflow_15m_cache", "sell_amount"}, // v4
-		{"fundflow_15m_cache", "price"},   // v9
-		{"ai_portfolio_reports", "tags_json"}, // v6
-		{"ai_fundflow_reports", "html"},   // v8
-		{"ai_fundflow_coherence_reports", "html"}, // v8
-		{"stocks", "currency"},            // v2
-		{"trades", "amount_cny"},          // v2
-		{"holdings", "avg_cost_cny"},      // v2
-		{"financial_cache", "last_year_net_assets"}, // v2
+		{"daily_fundflow_cache", "p50"},                 // v3
+		{"daily_fundflow_cache", "p80"},                 // v3
+		{"daily_fundflow_cache", "p95"},                 // v3
+		{"daily_fundflow_cache", "xs_net"},              // v4
+		{"daily_fundflow_cache", "p15"},                 // v4
+		{"daily_fundflow_cache", "p40"},                 // v4
+		{"daily_fundflow_cache", "p75"},                 // v4
+		{"daily_fundflow_cache", "buy_amount"},          // v7
+		{"daily_fundflow_cache", "sell_amount"},         // v7
+		{"fundflow_15m_cache", "xs_net"},                // v4
+		{"fundflow_15m_cache", "buy_amount"},            // v4
+		{"fundflow_15m_cache", "sell_amount"},           // v4
+		{"fundflow_15m_cache", "price"},                 // v9
+		{"ai_portfolio_reports", "tags_json"},           // v6
+		{"ai_fundflow_reports", "html"},                 // v8
+		{"ai_fundflow_coherence_reports", "html"},       // v8
+		{"stocks", "currency"},                          // v2
+		{"trades", "amount_cny"},                        // v2
+		{"holdings", "avg_cost_cny"},                    // v2
+		{"financial_cache", "last_year_net_assets"},     // v2
 		{"portfolio_valuation_cache", "portfolio_hash"}, // v2
 	} {
 		if !hasColumn(t, g, tc.table, tc.col) {

@@ -47,7 +47,7 @@ func TestParseFundflowAnalysis(t *testing.T) {
 					"exhaustion": "未出现",
 					"probe":      "未出现",
 				},
-				"alerts":    []any{"注意高位风险"},
+				"alerts":     []any{"注意高位风险"},
 				"conclusion": "整体强势，可持有",
 			},
 			expected: FundflowAnalysis{
@@ -81,7 +81,7 @@ func TestParseFundflowAnalysis(t *testing.T) {
 					Exhaustion: "未出现",
 					Probe:      "未出现",
 				},
-				Alerts:    []string{"注意高位风险"},
+				Alerts:     []string{"注意高位风险"},
 				Conclusion: "整体强势，可持有",
 			},
 		},
@@ -204,7 +204,7 @@ func TestFundflowAnalysisJSON(t *testing.T) {
 			Exhaustion: "未出现",
 			Probe:      "未出现",
 		},
-		Alerts:    []string{"注意高位风险"},
+		Alerts:     []string{"注意高位风险"},
 		Conclusion: "整体强势，可持有",
 	}
 
@@ -341,11 +341,11 @@ func TestParseFundflowBatchAnalysis(t *testing.T) {
 						"rhythm":      "早盘高流速",
 						"segments": []any{
 							map[string]any{
-								"period":      "09:30-10:00",
-								"net_flow":    "+1000万",
-								"velocity":    "高",
-								"behavior":    "放量流入",
-								"transition":  "起始段",
+								"period":     "09:30-10:00",
+								"net_flow":   "+1000万",
+								"velocity":   "高",
+								"behavior":   "放量流入",
+								"transition": "起始段",
 							},
 						},
 						"trend": map[string]any{
@@ -380,10 +380,10 @@ func TestParseFundflowBatchAnalysis(t *testing.T) {
 			expected: FundflowBatchAnalysis{
 				Stocks: []FundflowBatchStockAnalysis{
 					{
-						Code:         "600519",
-						Correlation:  "bullish",
-						Summary:      "早盘流入",
-						Rhythm:       "早盘高流速",
+						Code:        "600519",
+						Correlation: "bullish",
+						Summary:     "早盘流入",
+						Rhythm:      "早盘高流速",
 						Segments: []FundflowSegment{
 							{Period: "09:30-10:00", NetFlow: "+1000万", Velocity: "高", Behavior: "放量流入", Transition: "起始段"},
 						},
@@ -532,7 +532,7 @@ func TestNormFlowWindow(t *testing.T) {
 		{5, "5m"},
 		{15, "15m"},
 		{30, "30m"},
-		{60, "15m"},       // 非法值回退
+		{60, "15m"}, // 非法值回退
 		{"1m", "1m"},
 		{"5m", "5m"},
 		{"15m", "15m"},
@@ -540,11 +540,11 @@ func TestNormFlowWindow(t *testing.T) {
 		{"day", "day"},
 		{"week", "week"},
 		{"month", "month"},
-		{"1d", "day"},     // 旧格式兼容
-		{"7d", "week"},    // 旧格式兼容
-		{"30d", "month"},  // 旧格式兼容
-		{"abc", "15m"},    // 非法字符串回退
-		{nil, "15m"},      // nil 回退
+		{"1d", "day"},    // 旧格式兼容
+		{"7d", "week"},   // 旧格式兼容
+		{"30d", "month"}, // 旧格式兼容
+		{"abc", "15m"},   // 非法字符串回退
+		{nil, "15m"},     // nil 回退
 	}
 	for _, tt := range tests {
 		result := NormFlowWindow(tt.input)
@@ -563,8 +563,8 @@ func TestDayMode(t *testing.T) {
 		{"day", "day"},
 		{"week", "week"},
 		{"month", "month"},
-		{"15m", "day"},    // 分钟窗口默认 day
-		{"abc", "day"},    // 非法值默认 day
+		{"15m", "day"}, // 分钟窗口默认 day
+		{"abc", "day"}, // 非法值默认 day
 	}
 	for _, tt := range tests {
 		result := dayMode(tt.input)
@@ -583,7 +583,7 @@ func TestDayAILimit(t *testing.T) {
 		{"day", 120},
 		{"week", 60},
 		{"month", 36},
-		{"15m", 120},     // 分钟窗口默认 120
+		{"15m", 120}, // 分钟窗口默认 120
 	}
 	for _, tt := range tests {
 		result := dayAILimit(tt.input)
@@ -601,9 +601,9 @@ func TestNaturalGroupKey(t *testing.T) {
 		expected string
 	}{
 		{"2025-01-15", "month", "2025-01"},
-		{"2025-01-15", "week", "2025-W03"},   // ISO 周
-		{"2025-01-06", "week", "2025-W02"},   // ISO 周
-		{"2025-01-15", "day", "2025-W03"},    // day 模式也返回 ISO 周
+		{"2025-01-15", "week", "2025-W03"}, // ISO 周
+		{"2025-01-06", "week", "2025-W02"}, // ISO 周
+		{"2025-01-15", "day", "2025-W03"},  // day 模式也返回 ISO 周
 	}
 	for _, tt := range tests {
 		result := naturalGroupKey(tt.dateStr, tt.mode)
@@ -1001,7 +1001,6 @@ func TestNormalizeCorrelation(t *testing.T) {
 	}
 }
 
-
 // ----------------------------------------------------------------
 // Service 层 5 个函数单测：Upsert/Analyze 落库 + Get/List/Coherence 读取。
 // 复用 auto_score_test.go 的 openFundflowTest（含注入的 FlowR/FlowCoh）与 addModel。
@@ -1021,10 +1020,10 @@ func TestUpsertFundflowAnalysis(t *testing.T) {
 		Segments: []FundflowSegment{
 			{Period: "09:30-10:00", NetFlow: "+1000万", Velocity: "高", Behavior: "放量流入", Transition: "起始段"},
 		},
-		Trend:    FundflowTrend{Direction: "净流入", Stage: "拉升期", Strength: "强"},
-		MainForce: FundflowMainForce{Action: "拉升"},
+		Trend:        FundflowTrend{Direction: "净流入", Stage: "拉升期", Strength: "强"},
+		MainForce:    FundflowMainForce{Action: "拉升"},
 		SupplyDemand: FundflowSupplyDemand{Absorption: "强", ActiveBuy: "强"},
-		Alerts:   []string{"注意高位风险"},
+		Alerts:       []string{"注意高位风险"},
 	}
 
 	if err := f.s.UpsertFundflowAnalysis("600519", "2026-01-02", "single", "15m", analysis, "test-model"); err != nil {
@@ -1063,10 +1062,10 @@ func TestUpsertFundflowReport(t *testing.T) {
 		"segments": []any{
 			map[string]any{"period": "13:00-14:00", "net_flow": "-800万"},
 		},
-		"trend": map[string]any{"direction": "净流出", "stage": "出货期", "strength": "强"},
-		"main_force": map[string]any{"action": "出货"},
+		"trend":         map[string]any{"direction": "净流出", "stage": "出货期", "strength": "强"},
+		"main_force":    map[string]any{"action": "出货"},
 		"supply_demand": map[string]any{"absorption": "弱"},
-		"alerts":   []any{"注意回落风险"},
+		"alerts":        []any{"注意回落风险"},
 	}
 
 	if err := f.s.UpsertFundflowReport("000001", "2026-01-03", "single", "day", analysis, "test-model"); err != nil {

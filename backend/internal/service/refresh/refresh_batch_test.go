@@ -11,13 +11,13 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
-	"stockanalyzer/internal/raw"
-	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/model"
+	"stockanalyzer/internal/service/tech"
 )
 
 // openRefreshBatch 构造含 Finance（空降级链）/Market（空链）的 Service，用于验证 items 过滤分支。
@@ -35,10 +35,10 @@ func openRefreshBatch(t *testing.T) (*Service, *holdings.Service, *gorm.DB) {
 		}
 	})
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
-	mm := market.NewMarketManager() // 空链：所有源调用失败/返回空
 	fm := finance.NewFinanceManager(nil, nil, nil)
-	s := New(g, dao.NewCacheDAO(g), h, mm, fm, nil, nil, nil, jobs.New())
+	s := New(g, dao.NewCacheDAO(g), h, fm, nil, nil, nil, jobs.New())
 	s.Cal = calendar.New(g)
+	s.Tech = tech.New()
 	// 种子默认交易日历：仅工作日（Sat/Sun 不入 trade_calendar，与真实日历一致）
 	seedTradeCalendar(t, g, map[string]bool{
 		"2026-08-11": true, "2026-08-12": true, "2026-08-13": true,
@@ -233,7 +233,7 @@ func TestRefreshStockFullPersists(t *testing.T) {
 		{Date: "2026-08-13", Open: 8.5, High: 9.2, Low: 8.2, Close: 9.0, Volume: 120, Amount: 1200},
 		{Date: "2026-08-14", Open: 9.0, High: 9.5, Low: 8.8, Close: 9.3, Volume: 130, Amount: 1300},
 	}
-	s.Market = market.NewMarketManager(&fakeMarketSource{bars: bars})
+	s.Tech = tech.New(&fakeMarketSource{bars: bars})
 	set := s.itemSet(true, nil)
 	entry := s.processStock(context.Background(), "601857", true, set)
 	// bars 已落库（fake 源成功）；财务链为空 → 财务失败上报 error（部分失败可见）
@@ -257,7 +257,7 @@ type fakeMarketSource struct {
 func (f *fakeMarketSource) Name() string { return "fake" }
 
 func (f *fakeMarketSource) Quote(ctx context.Context, code string) (*model.Quote, error) {
-	return nil, market.ErrNotSupported
+	return nil, tech.ErrNotSupported
 }
 
 func (f *fakeMarketSource) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {

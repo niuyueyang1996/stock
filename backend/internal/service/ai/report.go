@@ -4,11 +4,11 @@ package ai
 // 对齐 app/services/ai.py build_stock_context/_normalize_report/analyze_stock/get_report。
 
 import (
-	"log"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"

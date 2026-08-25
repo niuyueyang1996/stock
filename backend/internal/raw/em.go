@@ -7,12 +7,12 @@ package raw
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 )
 
 const (

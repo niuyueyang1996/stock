@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -23,18 +23,18 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/route"
+	"stockanalyzer/internal/service"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/datamanage"
 	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
-	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
-	"stockanalyzer/internal/service/market"
 	"stockanalyzer/internal/service/marketlists"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
@@ -108,12 +108,17 @@ func main() {
 	cn := raw.NewCNInfo()
 	bd := raw.NewBaidu()
 	nw := raw.NewEMNews()
+	ifindClient := ifind.NewClient("")
 
 	// 市场列表预热（A股/ETF/港股全列表 → data/ 下 JSON，搜索依赖；幂等）
 	listsSvc := &marketlists.Service{DataDir: cfg.DataDir, Em: em, Sina: sina, Tencent: tx}
+	// 基础设施域（汇率/列表）chain 已就绪，marketlists 优先走 InfraManager
+	rc := &service.RawClients{Tencent: tx, EM: em, Sina: sina, Legu: lg, CNInfo: cn, Baidu: bd, EMNews: nw, IFind: ifindClient}
+	infraMgr := service.InfraManager(rc)
+	listsSvc.Infra = infraMgr
 
-	// 汇率服务
-	fxSvc := fx.New(sina, dao.NewFxDAO(gdb), holdingsDAO)
+	// 汇率服务（优先走 infra.Fx chain，回退 Sina 直调）
+	fxSvc := fx.New(infraMgr, dao.NewFxDAO(gdb), holdingsDAO)
 
 	// 持仓服务（汇率注入）
 	holdSvc := holdings.New(holdingsDAO, func(currency, rateDate string) *float64 {
@@ -124,17 +129,8 @@ func main() {
 		return fxSvc.EnsureFxForDate(context.Background(), currency, rateDate)
 	})
 
-	// 数据子包（多态降级链）
-	fm := finance.NewFinanceManager(
-		func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) },
-		[]finance.FinanceSource{finance.NewAshareFinanceWithEM(sina, tx, cn, em)},
-		[]finance.FinanceSource{finance.NewEMHKFinance(em)},
-	)
-	mm := market.NewMarketManager(
-		market.NewTencentMarket(tx),
-		market.NewEMMarket(em),
-		market.NewSinaMarket(sina),
-	)
+	// 数据子包（多态降级链，收口 Registry）
+	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
 	// 指数注册表（index_defs 表）
 	leguCode := func(code string) *string {
 		var c string
@@ -144,10 +140,7 @@ func main() {
 		}
 		return &c
 	}
-	vm := valuation.NewValuationManager(
-		valuation.NewLeguValuation(lg, leguCode),
-		valuation.NewBaiduValuation(bd),
-	)
+	vm := service.NewValuationManager(rc, leguCode)
 	liveSvc := valuation.NewLive(gdb, fxSvc.GetFxRateCNY)
 
 	// 任务系统
@@ -160,10 +153,13 @@ func main() {
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
+	techMgr := service.TechManager(rc)
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
+	divSvc.SetManager(service.FundamentalDividendManager(rc))
 
-	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, mm, fm, vm, liveSvc, fxSvc, jm)
+	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, fm, vm, liveSvc, fxSvc, jm)
 	rfSvc.Baidu = bd // 估值历史序列（sync_valuation）
+	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = func(code string) bool {
@@ -240,8 +236,6 @@ func main() {
 		Detail: detailSvc, StockMeta: stockMetaSvc, DataManage: dataManageSvc,
 		LogFile: logFilePath(),
 	}
-	_ = settingsSvc
-	_ = nw
 
 	// ---- WebSocket（任务进度推送 + 数据更新广播）----
 	hub := ws.NewHub()

@@ -464,8 +464,8 @@ func TestAshareFinanceFinancialsEndToEnd(t *testing.T) {
 		}
 		fields[1] = "贵州茅台"
 		fields[2] = "600519"
-		fields[3] = "1500.0"   // 现价
-		fields[45] = "1.5e4"   // 总市值 15000 亿 → 股数 = 15000e8/1500 = 10 亿
+		fields[3] = "1500.0" // 现价
+		fields[45] = "1.5e4" // 总市值 15000 亿 → 股数 = 15000e8/1500 = 10 亿
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("v_sh600519=\"\"" + strings.Join(fields, "~") + "\";")), Header: http.Header{}}, nil
 	})
 	// 东财分红：每 10 股派 30 元 → 每股 3 元（按 REPORT 年=2025 累加）
@@ -603,7 +603,7 @@ func TestNormalizeAshareMissingFields(t *testing.T) {
 	m := &sinaMatrix{
 		periods: []string{"20260630", "20251231"},
 		cells: map[string]map[string]any{
-			"归母净利润": {"20260630": "100.0", "20251231": "90.0"},
+			"归母净利润":  {"20260630": "100.0", "20251231": "90.0"},
 			"基本每股收益": {"20260630": "2.0", "20251231": "1.5"},
 		},
 	}

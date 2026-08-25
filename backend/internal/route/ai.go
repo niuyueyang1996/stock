@@ -455,10 +455,10 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 			scopeKey = strings.Join(sorted, ",")
 		}
 		out := map[string]any{
-			"score":     aiSvc.GetPortfolioReport(tags),
-			"news":      aiSvc.GetNewsCoherence(scope, scopeKey),
-			"tech":      aiSvc.GetTechCoherence(scope, scopeKey),
-			"flow":      aiSvc.GetCoherenceReport(scope, scopeKey, window),
+			"score":      aiSvc.GetPortfolioReport(tags),
+			"news":       aiSvc.GetNewsCoherence(scope, scopeKey),
+			"tech":       aiSvc.GetTechCoherence(scope, scopeKey),
+			"flow":       aiSvc.GetCoherenceReport(scope, scopeKey, window),
 			"configured": aiSvc.GetActiveModel() != nil,
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": out})
