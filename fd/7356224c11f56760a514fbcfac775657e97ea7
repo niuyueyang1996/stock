@@ -1,0 +1,240 @@
+backend/internal/service/finance/manager.go
+  s_b2869fccf4a95f::t_0c6ba550114c71 10
+  s_b2869fccf4a95f::t_62fe789a3ffb84 72-73,76,85,109,112
+  s_4b59e624d8b5c3::t_129a6d4510b757 61,117,138-145
+backend/internal/service/tech/provider_ifind.go
+  s_e6a358eecdac83::t_f2ce7b6d432192 99
+  s_b2869fccf4a95f::t_d0e4e20a2b543a 37
+backend/internal/service/finance/normalizer.go
+  s_e6a358eecdac83::t_d27f1517e32bda 12,67,74-75,152,157-160,166-172,180,189-194,196-197,216,220,223,226,236-246,250-254,258-259
+backend/internal/db/dao/code.go
+  s_e6a358eecdac83::t_9322002820147d 1-11
+backend/internal/service/tech/providers.go
+  s_e6a358eecdac83::t_5e07f31b3d34ea 9,22,36,71,85,107,162
+  s_e6a358eecdac83::t_daadf6ee01e6af 179-180
+backend/internal/service/marketlists/marketlists.go
+  s_b2869fccf4a95f::t_d53091e98fe53c 23,231,235
+  s_e6a358eecdac83::t_8242ece07e9d8f 17,186-193,206-213
+backend/internal/service/managerlog/name.go
+  s_e6a358eecdac83::t_cd35aabe089030 6,9,11,14-15,17-20
+  s_e6a358eecdac83::t_1a0ea90761589b 27-28
+backend/internal/service/valuation/valuation_test.go
+  s_e6a358eecdac83::t_12faaa2406ef4b 5-6,8-10,12-15,25-28,34-35,44-46
+backend/internal/service/indices/indices.go
+  s_e6a358eecdac83::t_6dbca716640679 80,83-84,86,89,210-211,213,223-224
+backend/cmd/server/main.go
+  s_b2869fccf4a95f::t_139103656617a6 39
+  s_e6a358eecdac83::t_05ce21ef68080d 178
+  s_e6a358eecdac83::t_1c494a29d72ea4 137-141,150,154,166,187,199,234
+backend/internal/raw/legu.go
+  s_e6a358eecdac83::t_394d106ac7b672 14-15,54-179,194,206,211
+backend/internal/service/detail/detail.go
+  s_e6a358eecdac83::t_62b6f8a2b2c98a 416,418,533,572
+  s_966b10c4c0c5f4::t_4c0df884f110b4 12-13,30,46-47
+  s_4b59e624d8b5c3::t_88277cf470970c 97,100,103,149,419,421,529,559-562,564,567-571,573
+backend/internal/service/valuation/normalizer.go
+  s_e6a358eecdac83::t_fe1ff405b5534a 12,29,37,44-45,48,56
+backend/internal/service/quote/quote.go
+  s_e6a358eecdac83::t_ac4dfa38c66de4 252,256,260-261,263-265,284
+  s_b2869fccf4a95f::t_0f498c1c534f94 16-17
+  s_e6a358eecdac83::t_02c37eef1674b6 26-27,286,289,300-303
+backend/internal/service/quote/quote_extra_test.go
+  s_e6a358eecdac83::t_8e7d9974664217 468-469,472,475
+  s_e6a358eecdac83::t_2abbde36a1493c 382,392,441
+backend/internal/raw/raw_test.go
+  s_e6a358eecdac83::t_c5db4826d78d22 102-103,165,167-169
+backend/internal/route/route_api_test.go
+  s_e6a358eecdac83::t_5d7c3939ae0292 23,47-49,169,172-174,177,179,200,209,216,332
+static/js/common.js
+  s_b2869fccf4a95f::t_ebd17cd89a7e57 935-936,938,953,955-959
+backend/internal/service/finance/provider_sina.go
+  s_b2869fccf4a95f::t_3ac50c9707463b 101,177,179,191,193
+  s_e6a358eecdac83::t_fec3c9f77568e9 45,47,61-62,86,88
+  s_e6a358eecdac83::t_2c089dd9e409ff 13
+backend/internal/service/infra/manager.go
+  s_e6a358eecdac83::t_9f6fb8a5cf2ae3 52-55,59,86-89,93,120-123,127
+backend/internal/db/dao/cache.go
+  s_2524aae2f26336::t_5812b43d8c774f 41,50,59,73,168
+backend/internal/service/holdings/holdings_extra_test.go
+  s_e6a358eecdac83::t_7358ee7d49e1f2 266,268,424,435,440,447
+backend/internal/raw/sina.go
+  s_e6a358eecdac83::t_b2c6f1811daa6a 13,62-63,70,87-89,122-193,196,198-206,303,327-332,334
+backend/internal/service/portfolio/portfolio.go
+  s_e6a358eecdac83::t_4b5c88f272e638 6,46,1390-1391
+  s_4b59e624d8b5c3::t_9f4ece3084511e 1392-1393,1395,1619
+backend/internal/service/marketcode/code_test.go
+  s_e6a358eecdac83::t_779cc403a2cddc 6-7,10,12-20,31-36,44
+  s_b2869fccf4a95f::t_6188bcaf9be608 1-5,8-9,11,21-30,37-43,45-57
+  s_b2869fccf4a95f::t_53530135c5fa65 58-60
+  s_e6a358eecdac83::t_912500a01a3620 61-80
+backend/internal/service/portfolio/portfolio_passthrough_test.go
+  s_e6a358eecdac83::t_bbac8ff2bc0378 149-150,152,541,548,555,560
+  s_e6a358eecdac83::t_acae7c502377f7 16,54,56,58,74
+backend/internal/service/refresh/refresh_extra_test.go
+  s_e6a358eecdac83::t_716adb3ef7ea83 454
+backend/internal/service/marketlists/marketlists_test.go
+  s_e6a358eecdac83::t_ce35bef8561e3e 18,79,88,244,280,287,299,331,380,389,404,409,420,443,463,479
+backend/internal/service/tech/manager.go
+  s_e6a358eecdac83::t_24614fb89115d3 169
+  s_4b59e624d8b5c3::t_8de35f33639b2f 23,54,85,108,139,170,201
+backend/cmd/rawprobe/main.go
+  s_e6a358eecdac83::t_2f72635201eb6a 45,51
+backend/internal/service/finance/provider_em.go
+  s_b2869fccf4a95f::t_793c1784ee9b47 7,21-22
+  s_e6a358eecdac83::t_ac2c2f4576b4d0 47,59,67-68
+backend/cmd/mcp/main.go
+  s_b2869fccf4a95f::t_4c1708da4d8c8d 21
+  s_e6a358eecdac83::t_d8f414e6baea6e 138
+  s_e6a358eecdac83::t_31a12c9de1c042 108-110,118,121,132,146,154,177
+backend/internal/service/quote/quote_test.go
+  s_e6a358eecdac83::t_19f088392c7d6d 13,32,109-110,117,121
+  s_e6a358eecdac83::t_6f26b0c23b6344 124
+backend/internal/raw/tencent.go
+  s_e6a358eecdac83::t_d2de2fd27e3cec 156,227-229,239-272,274-284,286-288,292,304-307,311-340,342,345-347,351-352,359,380,383,385,387,392,394,396,400,403-404,412-419,425-432,434,439,442-444,463-465,471-475,477-481,484-485,497,506-507,509-523,544,546-548,558-567,569,571,590
+backend/internal/raw/em.go
+  s_e6a358eecdac83::t_6c24142a8ea614 18-52,104,106,114-125,130,132,141-148,151,154,392,394-401,404,406-413,448,462-496
+  s_b2869fccf4a95f::t_74075da823463f 103,105,109,129,131,135,248,250,261,454-461
+backend/internal/service/marketcode/loader.go
+  s_e6a358eecdac83::t_a3cf4639014706 1-141
+backend/internal/db/dao/period.go
+  s_2524aae2f26336::t_40acd77e022de0 21
+backend/internal/db/dao/ai.go
+  s_2524aae2f26336::t_2efcb32d65a246 126,254,324,336-338,368,380-382,467
+backend/internal/service/tech/source.go
+  s_e6a358eecdac83::t_39cf8569ba039d 47,181,191
+backend/internal/service/refresh/refresh_helpers_test.go
+  s_e6a358eecdac83::t_88f5d2eb64ddb1 23,49,59,90,95,106,119,121,123,127,160-161,169-171,186,214,219,232,239,248,287
+  s_e6a358eecdac83::t_528105b422382b 14,289,292-293,302-303,343
+backend/internal/db/dao/cache_read.go
+  s_2524aae2f26336::t_72010840672613 11,19,31,47,62,70,77,93
+backend/internal/service/detail/detail_test.go
+  s_e6a358eecdac83::t_e7f7a203c853e7 14,47-49,59,61-62,643-644,657,664,670,710,846
+  s_e6a358eecdac83::t_72ddaf23061dc5 645
+  s_e6a358eecdac83::t_c6731360de8763 658-660
+  s_e6a358eecdac83::t_c667a7897c0e30 671-672
+  s_e6a358eecdac83::t_9fe07e17a57b41 711-712
+  s_e6a358eecdac83::t_1ec82a079c440c 844-845
+  s_e6a358eecdac83::t_86466526a24b41 847
+  s_e6a358eecdac83::t_3d3fc1baa51aac 648,651,675,678,830-831,849,854
+backend/internal/service/marketcode/migrate.go
+  s_e6a358eecdac83::t_1dceef0b0f7c16 1-198
+backend/internal/route/router.go
+  s_e6a358eecdac83::t_a2be46572373a6 212-214,226-228,403-405,420-422,434-436,442-444,472-474,481-483,497-499,506-508,522-524,531-533,580-583,631-634,637,661,663-670,672
+  s_966b10c4c0c5f4::t_e868a2a96130a0 211,225,402,419,433,441,471,480,496,505,521,530,659-660,662,671
+backend/internal/service/valuation/providers.go
+  s_e6a358eecdac83::t_3e4daeeb7281c9 36
+  s_4b59e624d8b5c3::t_8cdaa23ea69b18 95
+backend/internal/service/valuation/sync.go
+  s_b2869fccf4a95f::t_58f12acf636c4b 27,58
+backend/internal/service/ai/scoring.go
+  s_e6a358eecdac83::t_79814e4e82e49b 8,479-480,482
+  s_e6a358eecdac83::t_584fe3793f25d7 484-485
+backend/internal/service/finance/finance_extra_test.go
+  s_e6a358eecdac83::t_64ea645b7274bf 55,68,80,91,102,115,120,129,143,150,198,208,217,229,232,240,242,300-325,354,359,372,378,384,466,477,521,528,539,549,657-660,668-671,677-678,688
+backend/cmd/rawprobe2/main.go
+  s_e6a358eecdac83::t_ed2830a5e94370 53-54,56,60-61
+backend/internal/service/marketcode/code.go
+  s_e6a358eecdac83::t_8d323298bb56c8 178-179,200
+  s_b2869fccf4a95f::t_e62c83418d9337 221-224,232,235
+  s_e6a358eecdac83::t_97b97605c7eb37 3,6,9,12,18,21-29,31-33,35-139,154-175,180-199,203,208-218,220,225-231,233-234,253,255-288,290-355
+  s_b2869fccf4a95f::t_abc7edf123ca79 1-2,4-5,7-8,10-11,13-17,19-20,30,34,140-153,176-177,201-202,204-207,219,236-252,254,289
+  s_4b59e624d8b5c3::t_12d682a8fada6c 356-357
+backend/internal/service/finance/finance_test.go
+  s_e6a358eecdac83::t_ea1690a02e4e76 7,14-31,35-43,124,128
+backend/internal/service/refresh/refresh_test.go
+  s_e6a358eecdac83::t_8d5f8e8418e29d 15,120-121,131,138,141,150,156,164-165,174,187,189,191
+backend/internal/db/dao/holdings.go
+  s_2524aae2f26336::t_2ada3b7f3eda41 50,60
+backend/internal/service/tech/manager_test.go
+  s_e6a358eecdac83::t_3d940138ca47de 105,120
+backend/internal/service/tech/normalizer.go
+  s_e6a358eecdac83::t_eb0d5d2242cd72 324-325,331,340
+backend/internal/raw/baidu.go
+  s_e6a358eecdac83::t_e2bc88d18284eb 1-125
+backend/internal/raw/misc.go
+  s_b9b5cdb1241191::t_57d9418f3549f2 3-4,26-86,90-91,100,105,199-222,224,230-244
+backend/internal/service/tech/providers_test.go
+  s_e6a358eecdac83::t_6464da0aa7cae8 82,85
+backend/internal/raw/lists_test.go
+  s_e6a358eecdac83::t_a423d0dd6788e6 88
+backend/internal/service/holdings/holdings.go
+  s_b2869fccf4a95f::t_a1a86de5f62cdd 12
+  s_e6a358eecdac83::t_421763898d3a70 206,217-218
+  s_4b59e624d8b5c3::t_3f8b3c39e53228 21-22,203,219-223,226-233,253,279
+backend/internal/service/refresh/refresh.go
+  s_966b10c4c0c5f4::t_7c274cb078893f 21
+  s_e6a358eecdac83::t_aa5357aa74479f 487,554,589,594,620-621,623,666,669,689,761,766-767,769-775
+  s_b2869fccf4a95f::t_ccd74535bde048 730-731
+  s_4b59e624d8b5c3::t_ac50bec58ffaca 54,59,235,732-733,735,742,751,759-760,776,779
+backend/internal/service/valuation/live.go
+  s_966b10c4c0c5f4::t_da13d9dc7e6657 15,648-651
+  s_2524aae2f26336::t_97c1c008f98e97 74,525
+  s_4b59e624d8b5c3::t_84ca54d6b878b2 28,652-654
+CLAUDE.md
+  s_e6a358eecdac83::t_67a92994808bbe 23-30
+backend/internal/service/fundamental/manager.go
+  s_e6a358eecdac83::t_d02adc38f223dc 22
+backend/internal/service/holdings/holdings_test.go
+  s_e6a358eecdac83::t_d8c1a0b2003b55 11,27-29
+backend/internal/service/holdings/trades.go
+  s_e6a358eecdac83::t_732bc7c4ef6a9d 172
+backend/internal/service/portfolio/portfolio_test.go
+  s_e6a358eecdac83::t_c16f6e87c56c87 12,42,44,46,48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fd7356224c11f56760a514fbcfac775657e97ea7",
+  "prompts": {},
+  "logical_commit_id": "fd7356224c11f56760a514fbcfac775657e97ea7",
+  "sessions": {
+    "s_2524aae2f26336": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f43f4aff-d2e1-4cc9-b210-75c20f623288",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_4b59e624d8b5c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1630f89d-6f7a-47e4-8f0a-222ca763ec1b",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_b9b5cdb1241191": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "76600fac-51cf-4b12-a416-b93865c3932c",
+        "model": "auto-smart"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_e6a358eecdac83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a3afd03f-a17e-4e78-af90-6d1d30b26bdb",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
