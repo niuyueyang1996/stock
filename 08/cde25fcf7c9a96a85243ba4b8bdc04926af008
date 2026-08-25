@@ -1,0 +1,32 @@
+backend/cmd/mcp/main.go
+  s_b2869fccf4a95f::t_b9b09c82def075 91-101
+backend/cmd/server/main.go
+  s_b2869fccf4a95f::t_3a9d43059a3281 17,112-124,250
+backend/internal/raw/ifind/client.go
+  s_b2869fccf4a95f::t_f4f49ffa33a479 12,73,76-92
+backend/internal/route/router.go
+  s_b2869fccf4a95f::t_659d412571af74 17,50,358-387
+backend/internal/service/registry.go
+  s_b2869fccf4a95f::t_e33ea308e34016 28,31,39,42,50,55
+backend/internal/service/settings/settings.go
+  s_b2869fccf4a95f::t_d4cdc529fb54bd 7,148-173
+static/js/common.js
+  s_b2869fccf4a95f::t_0f7b69c7a0b827 375-379,396-401,415-418
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "08cde25fcf7c9a96a85243ba4b8bdc04926af008",
+  "prompts": {},
+  "logical_commit_id": "08cde25fcf7c9a96a85243ba4b8bdc04926af008",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
