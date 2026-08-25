@@ -1,0 +1,20 @@
+backend/internal/service/valuation/sync.go
+  s_b2869fccf4a95f::t_58f12acf636c4b 10,28,31,42-43,51,61,65,67,74-76,78,85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "de5640f0b9432927b3a135ba172d3f7bd2b4a963",
+  "prompts": {},
+  "logical_commit_id": "de5640f0b9432927b3a135ba172d3f7bd2b4a963",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
