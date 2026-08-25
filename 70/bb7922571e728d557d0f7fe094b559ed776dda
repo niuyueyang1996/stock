@@ -1,0 +1,20 @@
+backend/internal/route/router.go
+  s_966b10c4c0c5f4::t_e868a2a96130a0 26,212,223,226,240,244,397,404,411,413,422,427,433,454-455,460,468,473-474,479,487,492-493,498,514,594,616-631
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "70bb7922571e728d557d0f7fe094b559ed776dda",
+  "prompts": {},
+  "logical_commit_id": "70bb7922571e728d557d0f7fe094b559ed776dda",
+  "sessions": {
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
