@@ -1,0 +1,144 @@
+backend/internal/db/dao/dao_read_test.go
+  s_966b10c4c0c5f4::t_b31ce3f6f21694 166
+backend/internal/db/db_migrate_test.go
+  s_966b10c4c0c5f4::t_7f3bb596c3857a 124-143
+backend/internal/raw/em.go
+  s_966b10c4c0c5f4::t_bef987ff22fca6 12,15
+backend/internal/raw/ifind/client.go
+  s_966b10c4c0c5f4::t_07b3b12d15b4c1 1,4-5,7,10,12-13,15,19-33,35-102,104-108,110-115,117-120,123,125-131,134-140,142-152,154-157,159-164,166-167,169-170,172,175-179,182-192,194-196,198-200,202-205,207-211,213-214,216-217,219-220,222-225,228-236,238-240,242-245,247-250,252-254,256-257,259-261,263-264,266,269-271,273-275,277-278,280,282-284,286-287,289-294,296,299-304,306,308-309,311-312,314-316,318-319,321,324-332,334-335,338-346,348,350-351,353-354,356-358,360-361,363,366-379,381-391,394-415,419,421-424,426,429-430,433-436,438-439,441,444-447
+backend/internal/raw/ifind/helpers_test.go
+  s_1a6f6a7744c7ef::t_c2587c2e853f59 1-54
+backend/internal/raw/lists_test.go
+  s_966b10c4c0c5f4::t_01bb81b7264122 12
+backend/internal/route/ai.go
+  s_966b10c4c0c5f4::t_fdbbb1bbcf2034 458-461
+backend/internal/service/ai/ai_extras_test.go
+  s_966b10c4c0c5f4::t_de9a22c2f04480 23-28,217-218,249
+backend/internal/service/ai/auto_score_test.go
+  s_966b10c4c0c5f4::t_37c37d3fbd5d5d 45-49
+backend/internal/service/ai/fundflow.go
+  s_966b10c4c0c5f4::t_b698e7d34949a5 9,468-475,477,490,492
+backend/internal/service/ai/fundflow_test.go
+  s_966b10c4c0c5f4::t_b2742854b2f946 50,84,207,344-348,383-386,535,543-547,566-567,586,604-606,1023-1024,1026,1065-1066,1068
+backend/internal/service/ai/fundflow_types.go
+  s_966b10c4c0c5f4::t_b618a6a9e2319a 10-20,45-46,53-60,78-88,95-105,110-115,122-127,132-135,140-142,163-165,167,173-182,187-190,192-193
+backend/internal/service/ai/news_tech.go
+  s_966b10c4c0c5f4::t_cda3203c1be459 10
+backend/internal/service/ai/report.go
+  s_966b10c4c0c5f4::t_2076ef37f92a55 11
+backend/internal/service/detail/detail_test.go
+  s_966b10c4c0c5f4::t_2dddfbadf8c897 821-828
+backend/internal/service/finance/finance_extra_test.go
+  s_966b10c4c0c5f4::t_df02e15f5b64fe 467-468,606
+backend/internal/service/fundamental/manager.go
+  s_b25e7ebd567980::t_2195bc76cde6af 1-36
+backend/internal/service/fundamental/provider_dividend.go
+  s_966b10c4c0c5f4::t_5f46066fbc4939 1-82
+backend/internal/service/fundamental/provider_ifind_test.go
+  s_966b10c4c0c5f4::t_4a89d80ce6b0a7 1-59
+backend/internal/service/fundamental/source.go
+  s_b25e7ebd567980::t_a47cfb3a1c6a23 1-48
+backend/internal/service/fx/fx.go
+  s_b25e7ebd567980::t_95124f4cd6fa28 12,20,22,27-29,32-34,37,40-43,46-48
+backend/internal/service/fx/fx_test.go
+  s_b25e7ebd567980::t_9899655bbe14cf 16,62-63,194,209,260
+backend/internal/service/indices/indices_test.go
+  s_966b10c4c0c5f4::t_1ea8a763ce8888 60-62,312,320-321
+backend/internal/service/infra/provider_ifind.go
+  s_966b10c4c0c5f4::t_4f50473aaaa6a1 1-67
+backend/internal/service/marketlists/marketlists.go
+  s_966b10c4c0c5f4::t_f1b5303a6986cf 6,21,38,44-45,50-51,53-55,60-62,66-72,126-129,131-135,137-143,145-146,161-169,175-189
+backend/internal/service/portfolio/portfolio_passthrough_test.go
+  s_966b10c4c0c5f4::t_b55a72f73a0608 548,550,553,555,621-622
+backend/internal/service/refresh/refresh.go
+  s_966b10c4c0c5f4::t_5c3ba85384ff54 26,32-39,47,66,69,176-179,245-248,264,267,270,487,553-562,591,594-603,607,609-612,658-670,678,682,686,691,710,717,735-744,769,799,802,807-816
+backend/internal/service/refresh/refresh_batch_test.go
+  s_966b10c4c0c5f4::t_2c7c777fb4a256 14,20,39,41,236,260
+backend/internal/service/refresh/refresh_extra_test.go
+  s_966b10c4c0c5f4::t_3ba0c6a07d4cb5 15,49,56,63,80,126,157,180,198,224,293,303,321,353,378,437
+backend/internal/service/refresh/refresh_helpers_test.go
+  s_966b10c4c0c5f4::t_a1f5b215a33d71 16,38,66-67,69,79,106,216,378,402
+backend/internal/service/refresh/refresh_test.go
+  s_b25e7ebd567980::t_01686650dd879d 35
+backend/internal/service/registry.go
+  s_966b10c4c0c5f4::t_691207a1d42119 1-3,7,9-11,15-25,27-36,38-43,45-55,57-63,65-72,74-78,80-86,89-94
+backend/internal/service/tech/normalizer.go
+  s_966b10c4c0c5f4::t_3b2c69924b7d3c 1,348-384
+backend/internal/service/tech/provider_ifind_test.go
+  s_966b10c4c0c5f4::t_1569d483759e85 1-66
+backend/internal/service/tech/providers.go
+  s_966b10c4c0c5f4::t_adedbae84178ad 1,12-13,15-20,22,32-36,42-45,47,49,51-83,85-95,97-98,100-102,105,108,111-121,123,125,128-129,131-133,136,140,144,151-152,155,158,165-167,169-170,172-173,175-176,179-183,185,216-218,220,222-223
+backend/internal/service/tech/source.go
+  s_966b10c4c0c5f4::t_ecd00ea0b26044 1,11-12,14-15,18-22,24-28,30-215
+.gitignore
+  s_966b10c4c0c5f4::t_23a71455e5d70e 26-29
+backend/cmd/mcp/main.go
+  s_966b10c4c0c5f4::t_e362b35e6b667d 19-20,91,93-94,96,105,114,122-124,126
+backend/cmd/server/main.go
+  s_966b10c4c0c5f4::t_bbc4389ea7c1a0 15,26,28,111,115-118,120-121,132-133,143,156,158,160,162
+backend/internal/raw/ifind/codec.go
+  s_966b10c4c0c5f4::t_c0e0544c2b3937 1-151
+backend/internal/raw/ifind/helpers.go
+  s_966b10c4c0c5f4::t_06ab8afccc4843 1-76
+backend/internal/service/dividend/dividend.go
+  s_966b10c4c0c5f4::t_3a53465462bb3c 17,21-22,28,39-51,58-67,69-70,72,98
+backend/internal/service/fundamental/manager_test.go
+  s_966b10c4c0c5f4::t_64ae5af29c36a6 1-45
+backend/internal/service/fundamental/provider_dividend_test.go
+  s_966b10c4c0c5f4::t_ecb65008bb5c1f 1-70
+backend/internal/service/fundamental/provider_ifind.go
+  s_966b10c4c0c5f4::t_da888aa4cfe106 1-61
+backend/internal/service/infra/manager.go
+  s_966b10c4c0c5f4::t_dcaace5fb9db23 1-167
+backend/internal/service/infra/manager_test.go
+  s_966b10c4c0c5f4::t_1121320f4cb071 1-119
+backend/internal/service/infra/provider_ifind_test.go
+  s_966b10c4c0c5f4::t_245b6a9c4f7123 1-29
+backend/internal/service/infra/providers.go
+  s_966b10c4c0c5f4::t_2c8f01f7535447 1-115
+backend/internal/service/infra/providers_test.go
+  s_966b10c4c0c5f4::t_368051066f9d40 1-89
+backend/internal/service/infra/source.go
+  s_966b10c4c0c5f4::t_a3fd64e686105a 1-103
+backend/internal/service/tech/manager.go
+  s_966b10c4c0c5f4::t_2299de73bee464 1,12-15,18-19,22,25-29,37,46-47,50-54,62,71-72,74-78,84-183
+backend/internal/service/tech/manager_test.go
+  s_966b10c4c0c5f4::t_cb38918de6bbff 1-159
+backend/internal/service/tech/provider_ifind.go
+  s_966b10c4c0c5f4::t_f39175d0fd1b59 1,7,11-14,17-20,23-25,28-40,43-85
+backend/internal/service/tech/providers_test.go
+  s_966b10c4c0c5f4::t_328697ec74fc39 1-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7bfa906bf828e23324e93c5ca918cc8e0df94a45",
+  "prompts": {},
+  "logical_commit_id": "7bfa906bf828e23324e93c5ca918cc8e0df94a45",
+  "sessions": {
+    "s_1a6f6a7744c7ef": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0327b-d30e-7402-b36a-cdc90ed4ea48",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_966b10c4c0c5f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6bee75ad-5be7-4783-9b19-8fe9164ca70a",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_b25e7ebd567980": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "12dff735-b82c-42dc-8515-3bcd5badea93",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
