@@ -84,6 +84,8 @@ func (s *Service) SaveModel(name, baseURL, apiKey, model string, id int64) (map[
 	if err != nil {
 		return nil, err
 	}
+	// 异步探测协议并记录，避免阻塞保存
+	go s.probeAndCacheProtocol(m.BaseURL, m.APIKey, m.Model)
 	return modelRow(m), nil
 }
 
@@ -98,7 +100,21 @@ func (s *Service) ActivateModel(id int64) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	go s.probeAndCacheProtocol(m.BaseURL, m.APIKey, m.Model)
 	return modelRow(m), nil
+}
+
+// probeAndCacheProtocol 探测模型协议并记录到 config 与内存缓存
+func (s *Service) probeAndCacheProtocol(baseURL, apiKey, model string) {
+	if s.Client == nil {
+		return
+	}
+	if c, ok := s.Client.(*OpenAICompatClient); ok {
+		proto := c.DetectProtocol(requestCtx(), baseURL, apiKey, model)
+		// 持久化到 config 便于重启后直接使用
+		key := "ai_protocol:" + strings.TrimSpace(baseURL) + "|" + strings.TrimSpace(model)
+		_ = s.Config.Set(key, proto)
+	}
 }
 
 // ListAvailableModels 调提供商 /v1/models 列出可用模型名

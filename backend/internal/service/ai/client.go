@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,13 @@ const (
 	MaxTokensSafe  = 16384
 	RequestTimeout = 300 * time.Second
 )
+
+// protocolCache 按 host+model 缓存探测到的协议 chat/response，避免每次都试错
+var protocolCache sync.Map // key: host|model -> "chat" or "response"
+
+func protocolKey(baseURL, model string) string {
+	return chatLogHost(baseURL) + "|" + strings.TrimSpace(model)
+}
 
 // AIClient 通用接口（多态：OpenAICompatClient 真实实现 / MockClient 测试）
 type AIClient interface {
@@ -102,6 +110,100 @@ func (c *OpenAICompatClient) postChatCompletion(ctx context.Context, baseURL, ap
 	return data.Choices[0].Message.Content, data.Choices[0].FinishReason, nil
 }
 
+// postResponse 发送一次 /responses 请求（OpenAI Responses API）；返回模型输出 content
+func (c *OpenAICompatClient) postResponse(ctx context.Context, baseURL, apiKey, model, system, user string, maxTokens int, effort string) (string, error) {
+	input := strings.TrimSpace(system) + "\n\n" + strings.TrimSpace(user)
+	payload := map[string]any{
+		"model": model,
+		"input": input,
+	}
+	if maxTokens > 0 {
+		payload["max_output_tokens"] = maxTokens
+	}
+	if effort != "" {
+		payload["reasoning"] = map[string]any{"effort": effort}
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openaiCompatURL(baseURL, "/responses"), bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("responses HTTP %d: %s", resp.StatusCode, truncStr(string(b), 300))
+	}
+	var data struct {
+		Output []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			Text string `json:"text"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return "", err
+	}
+	for _, o := range data.Output {
+		if o.Type == "message" {
+			for _, c := range o.Content {
+				if c.Type == "output_text" && strings.TrimSpace(c.Text) != "" {
+					return c.Text, nil
+				}
+			}
+			if strings.TrimSpace(o.Text) != "" {
+				return o.Text, nil
+			}
+		}
+	}
+	// 兼容直接返回 content 字段
+	if len(data.Output) > 0 && strings.TrimSpace(data.Output[0].Text) != "" {
+		return data.Output[0].Text, nil
+	}
+	return "", fmt.Errorf("responses 无有效输出")
+}
+
+func isChatNotSupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "500") || strings.Contains(msg, "404") || strings.Contains(msg, "not found") || strings.Contains(msg, "unsupported") || strings.Contains(msg, "internal server error")
+}
+
+// DetectProtocol 探测模型协议并缓存，返回 chat 或 response
+func (c *OpenAICompatClient) DetectProtocol(ctx context.Context, baseURL, apiKey, model string) string {
+	key := protocolKey(baseURL, model)
+	if v, ok := protocolCache.Load(key); ok {
+		return v.(string)
+	}
+	// 先试 chat
+	chatPayload := chatPayload{
+		Model: model, Temperature: 0.1, MaxTokens: 10,
+		Messages: []chatMessage{{Role: "user", Content: "hi"}},
+	}
+	if _, _, err := c.postChatCompletion(ctx, baseURL, apiKey, model, chatPayload); err == nil {
+		protocolCache.Store(key, "chat")
+		return "chat"
+	}
+	// 再试 response
+	if _, err := c.postResponse(ctx, baseURL, apiKey, model, "", "hi", 10, ""); err == nil {
+		protocolCache.Store(key, "response")
+		return "response"
+	}
+	// 默认 chat，避免误判
+	protocolCache.Store(key, "chat")
+	return "chat"
+}
+
 // ParseJSONContent 解析模型输出为 JSON map（截取首尾花括号包裹的 JSON 对象）
 func ParseJSONContent(content string) (map[string]any, error) {
 	s := strings.TrimSpace(content)
@@ -146,13 +248,31 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	if len(task) > 0 && task[0] != "" {
 		taskTag = " task=" + task[0]
 	}
-	// AI 输入日志：调用方/模型/输入规模一目了然；卡住时「入」已打印、「出」未出现 = 卡在等待模型响应
 	start := time.Now()
 	log.Printf("[ai] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s%s",
 		chatLogHost(baseURL), model, len(system)+len(user), maxTokens, effortP, taskTag)
 	defer func() {
 		log.Printf("[ai] 出 host=%s model=%s 耗时=%s%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), taskTag)
 	}()
+	// 若已探测为 response 协议，直接走 responses
+	key := protocolKey(baseURL, model)
+	if v, ok := protocolCache.Load(key); ok && v.(string) == "response" {
+		tryResp := func(eff string) (string, error) { return c.postResponse(ctx, baseURL, apiKey, model, system, user, maxTokens, eff) }
+		content, err := tryResp(effortP)
+		if err != nil {
+			content, err = tryResp("")
+		}
+		if err == nil && strings.TrimSpace(content) != "" {
+			if parsed, pe := ParseJSONContent(content); pe == nil {
+				log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content), taskTag)
+				return parsed, nil
+			}
+			if parsed, pe := ParseJSONContent(repairJSON(content)); pe == nil {
+				return parsed, nil
+			}
+		}
+		// response 失败回落 chat
+	}
 	payload := chatPayload{
 		Model: model, Temperature: 0.1, MaxTokens: maxTokens,
 		Messages: []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: user}},
@@ -163,13 +283,53 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	}{Type: "json_object"}
 
 	content, _, err := c.postChatCompletion(ctx, baseURL, apiKey, model, payload)
+	if err != nil && isChatNotSupported(err) {
+		// 自动探测：chat 不支持，切 response 并记录
+		tryResponse := func(eff string) (string, error) {
+			rc, re := c.postResponse(ctx, baseURL, apiKey, model, system, user, maxTokens, eff)
+			if re != nil {
+				log.Printf("[ai] response 尝试 host=%s model=%s effort=%s 失败: %v", chatLogHost(baseURL), model, eff, re)
+			}
+			return rc, re
+		}
+		if rc, re := tryResponse(effortP); re == nil && strings.TrimSpace(rc) != "" {
+			protocolCache.Store(key, "response")
+			log.Printf("[ai] 探测 host=%s model=%s 协议=response (chat 失败: %v)", chatLogHost(baseURL), model, err)
+			if parsed, pe := ParseJSONContent(rc); pe == nil {
+				log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(rc), taskTag)
+				return parsed, nil
+			}
+			if parsed, pe := ParseJSONContent(repairJSON(rc)); pe == nil {
+				return parsed, nil
+			}
+			return nil, fmt.Errorf("AI 调用失败: %v", re)
+		}
+		if rc, re := tryResponse(""); re == nil && strings.TrimSpace(rc) != "" {
+			protocolCache.Store(key, "response")
+			log.Printf("[ai] 探测 host=%s model=%s 协议=response (无effort重试成功)", chatLogHost(baseURL), model)
+			if parsed, pe := ParseJSONContent(rc); pe == nil {
+				return parsed, nil
+			}
+			if parsed, pe := ParseJSONContent(repairJSON(rc)); pe == nil {
+				return parsed, nil
+			}
+		}
+	}
 	if err != nil || strings.TrimSpace(content) == "" {
+		// 若 chat 失败且是协议问题，已在上一步尝试 response；否则按原逻辑降级重试
+		if err != nil && isChatNotSupported(err) {
+			// 已试 response 仍失败，返回原错
+			return nil, fmt.Errorf("AI 调用失败: %v", err)
+		}
 		payload.ResponseFormat = nil
 		payload.ReasoningEffort = nil
 		content, _, err = c.postChatCompletion(ctx, baseURL, apiKey, model, payload)
 		if err != nil || strings.TrimSpace(content) == "" {
 			return nil, fmt.Errorf("AI 调用失败: %v", err)
 		}
+	} else {
+		// chat 成功，记录协议
+		protocolCache.Store(key, "chat")
 	}
 	parsed, parseErr := ParseJSONContent(content)
 	if parseErr == nil {
