@@ -1,0 +1,30 @@
+backend/internal/raw/em.go
+  s_b2869fccf4a95f::t_74075da823463f 68,70,74,82,84,88,193,195,206,385-392
+backend/internal/service/finance/manager.go
+  s_b2869fccf4a95f::t_62fe789a3ffb84 71-72,75,89,108,111,121,137-153
+backend/internal/service/finance/provider_em.go
+  s_b2869fccf4a95f::t_793c1784ee9b47 7,21-22,24,27-28,35,48,50,53-54,69,71-72,75
+backend/internal/service/finance/provider_sina.go
+  s_b2869fccf4a95f::t_3ac50c9707463b 13,45,47-53,55-60,101,116,120-121,193,195,207,209,329-330,332-341,343
+backend/internal/service/marketcode/code.go
+  s_b2869fccf4a95f::t_e62c83418d9337 102-116
+backend/internal/service/refresh/refresh.go
+  s_b2869fccf4a95f::t_4b83261a58e714 229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f0238e72057f43d7f090ed334e8a77faca6e24c7",
+  "prompts": {},
+  "logical_commit_id": "f0238e72057f43d7f090ed334e8a77faca6e24c7",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
