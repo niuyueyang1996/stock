@@ -5,6 +5,7 @@ package route
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log"
 	"strings"
@@ -34,7 +35,7 @@ func RequestLog() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		// POST/PUT/PATCH + JSON body 时记入请求体（截断 500 字符）
+		// POST/PUT/PATCH + JSON body 时记入请求体（截断 500 字符，敏感字段脱敏）
 		var bodyStr string
 		method := c.Request.Method
 		ct := c.Request.Header.Get("Content-Type")
@@ -42,6 +43,7 @@ func RequestLog() gin.HandlerFunc {
 			body, err := io.ReadAll(c.Request.Body)
 			if err == nil && len(body) > 0 {
 				s := string(body)
+				s = maskSensitiveJSON(s)
 				if len(s) > 500 {
 					s = s[:500] + "...(truncated)"
 				}
@@ -61,4 +63,42 @@ func RequestLog() gin.HandlerFunc {
 				c.Request.URL.Path, dur)
 		}
 	}
+}
+
+// maskSensitiveJSON 脱敏 JSON 体中的敏感字段（api_key/refresh_token 等），避免明文落盘
+func maskSensitiveJSON(s string) string {
+	// 尝试按 JSON 解析后脱敏，回落字符串替换
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err == nil {
+		changed := false
+		for _, k := range []string{"api_key", "apikey", "apiKey", "refresh_token", "refreshToken", "token"} {
+			if _, ok := m[k]; ok {
+				m[k] = "***"
+				changed = true
+			}
+			// 兼容大小写变体
+			for mk := range m {
+				if strings.EqualFold(mk, k) && mk != k {
+					m[mk] = "***"
+					changed = true
+				}
+			}
+		}
+		if changed {
+			if b, err := json.Marshal(m); err == nil {
+				return string(b)
+			}
+		}
+		return s
+	}
+	// 非 JSON 或解析失败，回落简单替换
+	lower := strings.ToLower(s)
+	for _, k := range []string{"api_key", "refresh_token"} {
+		if idx := strings.Index(lower, k); idx >= 0 {
+			// 找到后把冒号后的值替换为 ***
+			// 简易：直接返回脱敏提示，避免正则复杂
+			return strings.ReplaceAll(s, s[idx:], k+"\":\"***\"}")
+		}
+	}
+	return s
 }
