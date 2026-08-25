@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/datamanage"
 	"stockanalyzer/internal/service/detail"
@@ -46,6 +47,7 @@ type Services struct {
 	Detail     *detail.Service
 	StockMeta  *stockmeta.Service
 	DataManage *datamanage.Service
+	Ifind      *ifind.Client
 	// LogFile 后端日志文件路径（main 装配；GET /api/logs 读尾部，App 内排查用）
 	LogFile string
 }
@@ -353,6 +355,36 @@ func Setup(r *gin.Engine, s *Services) {
 			"mode":                     s.Settings.GetUIMode(),
 			"static_ttl_minutes":       s.Settings.GetStaticTTLMinutes(),
 			"dynamic_interval_seconds": s.Settings.GetDynamicIntervalSeconds(),
+		}})
+	})
+	// GET /api/settings/ifind —— 读取同花顺 refresh_token 配置（脱敏展示）
+	api.GET("/settings/ifind", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+			"refresh_token_masked": s.Settings.GetIfindRefreshTokenMasked(),
+			"configured":           s.Settings.GetIfindRefreshToken() != "",
+		}})
+	})
+	// PUT /api/settings/ifind —— 更新同花顺 refresh_token（空串=清空）
+	api.PUT("/settings/ifind", func(c *gin.Context) {
+		var body struct {
+			RefreshToken *string `json:"refresh_token"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		if body.RefreshToken == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": "refresh_token 必填"})
+			return
+		}
+		tok := strings.TrimSpace(*body.RefreshToken)
+		if err := s.Settings.SetIfindRefreshToken(tok); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+			return
+		}
+		if s.Ifind != nil {
+			s.Ifind.SetRefreshToken(tok)
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+			"refresh_token_masked": s.Settings.GetIfindRefreshTokenMasked(),
+			"configured":           tok != "",
 		}})
 	})
 

@@ -372,6 +372,11 @@ function openSettings() {
           现价/资金流会在交易时段自动更新，无需手动点刷新；静态数据在打开个股、启动程序、每天收盘后自动同步。
         </div>
       </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700;margin-bottom:6px">同花顺 iFind（可选）</div>
+        <input type="password" id="ifindToken" placeholder="refresh_token，未配置时自动降级" style="width:100%;padding:6px 8px;box-sizing:border-box">
+        <div class="muted" style="font-size:12px;margin-top:6px">已配置: <span id="ifindMasked">—</span> · 留空不改 · 清空请删后保存空值</div>
+      </div>
       <div class="modal-actions">
         <span class="link muted" id="setCancel">关闭</span>
         <span class="grow" style="flex:1"></span>
@@ -388,6 +393,12 @@ function openSettings() {
   mask.querySelector('input[name="uiMode"][value="' + mode + '"]').checked = true;
   mask.querySelector('#setTtl').value = st.static_ttl_minutes || 60;
   mask.querySelector('#setInterval').value = st.dynamic_interval_seconds || 300;
+  // 拉取同花顺脱敏展示
+  api('/settings/ifind', {silent:true}).then(r=>{
+    const d = r && (r.data || r);
+    const m = d && d.refresh_token_masked;
+    mask.querySelector('#ifindMasked').textContent = m || '未配置';
+  }).catch(()=>{});
 
   mask.querySelector('#setSave').onclick = async () => {
     const modeV = mask.querySelector('input[name="uiMode"]:checked').value;
@@ -401,6 +412,10 @@ function openSettings() {
         method: 'PUT',
         body: { mode: modeV, static_ttl_minutes: ttl, dynamic_interval_seconds: interval },
       });
+      const ifindVal = mask.querySelector('#ifindToken').value.trim();
+      if (ifindVal) {
+        await api('/settings/ifind', {method:'PUT', body:{refresh_token: ifindVal}});
+      }
       await refreshAppSettings();
       applyNavMode();
       close();

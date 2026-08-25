@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,9 +70,26 @@ func NewClient(refreshToken string) *Client {
 		"Accept-Encoding": "gzip,deflate",
 	}
 	return &Client{
-		refreshToken: refreshToken,
+		refreshToken: strings.TrimSpace(refreshToken),
 		http:         c,
 	}
+}
+
+// SetRefreshToken 热更新 refresh_token（清空已缓存的 access_token）
+func (c *Client) SetRefreshToken(token string) {
+	c.mu.Lock()
+	c.refreshToken = strings.TrimSpace(token)
+	c.accessToken = ""
+	c.expireAt = time.Time{}
+	c.mu.Unlock()
+	log.Printf("[ifind] refresh_token 已更新 %s", c.RefreshTokenMasked())
+}
+
+// GetRefreshToken 读取当前 refresh_token（用于回显校验）
+func (c *Client) GetRefreshToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshToken
 }
 
 // ensureAccessToken 确保 access_token 有效（7 天内；并发单flight，避免多 goroutine 同时 update 使旧集体失效）

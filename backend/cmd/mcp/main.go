@@ -88,7 +88,17 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	cn := raw.NewCNInfo()
 	bd := raw.NewBaidu()
 	nw := raw.NewEMNews()
-	ifindClient := ifind.NewClient("")
+	ifindToken := strings.TrimSpace(os.Getenv("STOCK_IFIND_REFRESH_TOKEN"))
+	if ifindToken == "" {
+		ifindToken = strings.TrimSpace(os.Getenv("IFIND_REFRESH_TOKEN"))
+	}
+	if ifindToken == "" {
+		ifindToken = strings.TrimSpace(cfgDAO.Get("ifind_refresh_token"))
+	}
+	ifindClient := ifind.NewClient(ifindToken)
+	if ifindToken != "" {
+		log.Printf("[ifind] refresh_token 已加载 %s", ifindClient.RefreshTokenMasked())
+	}
 
 	rc := &service.RawClients{Tencent: tx, EM: em, Sina: sina, Legu: lg, CNInfo: cn, Baidu: bd, EMNews: nw, IFind: ifindClient}
 	infraMgr := service.InfraManager(rc)

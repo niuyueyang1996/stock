@@ -4,6 +4,7 @@ package settings
 
 import (
 	"fmt"
+	"strings"
 
 	"stockanalyzer/internal/db/dao"
 )
@@ -144,4 +145,30 @@ func (s *Service) SetRefreshSettings(mode *string, staticTTL, dynamicInterval *i
 		}
 	}
 	return nil
+}
+
+// GetIfindRefreshToken 读取同花顺 refresh_token（脱敏前原始值，空=未配置）
+func (s *Service) GetIfindRefreshToken() string {
+	return strings.TrimSpace(s.Cfg.Get("ifind_refresh_token"))
+}
+
+// GetIfindRefreshTokenMasked 脱敏展示（前4后4，中间***）
+func (s *Service) GetIfindRefreshTokenMasked() string {
+	tok := s.GetIfindRefreshToken()
+	if tok == "" {
+		return ""
+	}
+	if len(tok) <= 8 {
+		return "***"
+	}
+	return tok[:4] + "***" + tok[len(tok)-4:]
+}
+
+// SetIfindRefreshToken 写入同花顺 refresh_token（空串=清空，自动 trim）
+func (s *Service) SetIfindRefreshToken(token string) error {
+	v := strings.TrimSpace(token)
+	if v == "" {
+		return s.Cfg.Delete("ifind_refresh_token")
+	}
+	return s.Cfg.Set("ifind_refresh_token", v)
 }

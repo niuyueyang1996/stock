@@ -25,17 +25,10 @@ type RawClients struct {
 }
 
 // TechManager 构造技术面域 Manager（行情/分时/资金流/K线）
-// chain 顺序即降级优先级；同花顺全覆盖时插到首位（如 NewTHSTech）
+// chain 顺序即降级优先级；同花顺插首位，未配置时内部返回 ErrNotSupported 自动降级
 func TechManager(rc *RawClients) *tech.Manager {
-	if rc.IFind != nil {
-		return tech.New(
-			&tech.IFIndTech{Raw: rc.IFind},
-			tech.NewTencentTech(rc.Tencent),
-			tech.NewEMTech(rc.EM),
-			tech.NewSinaTech(rc.Sina),
-		)
-	}
 	return tech.New(
+		&tech.IFIndTech{Raw: rc.IFind},
 		tech.NewTencentTech(rc.Tencent),
 		tech.NewEMTech(rc.EM),
 		tech.NewSinaTech(rc.Sina),
@@ -43,18 +36,10 @@ func TechManager(rc *RawClients) *tech.Manager {
 }
 
 // InfraManager 构造基础能力域 Manager（汇率/市场列表）
-// Fx: Sina→THS；List: EM→Sina→Tencent
+// Fx: Sina→THS；List: EM→Sina→Tencent；IFind 未配置时返回 ErrNotSupported 自动降级
 func InfraManager(rc *RawClients) *infra.Manager {
-	if rc.IFind != nil {
-		return infra.New(
-			&infra.IFIndInfra{Raw: rc.IFind},
-			infra.NewSinaFx(rc.Sina),
-			infra.NewEMMarketList(rc.EM),
-			infra.NewSinaMarketList(rc.Sina),
-			infra.NewTencentMarketList(rc.Tencent),
-		)
-	}
 	return infra.New(
+		&infra.IFIndInfra{Raw: rc.IFind},
 		infra.NewSinaFx(rc.Sina),
 		infra.NewEMMarketList(rc.EM),
 		infra.NewSinaMarketList(rc.Sina),
@@ -62,18 +47,12 @@ func InfraManager(rc *RawClients) *infra.Manager {
 	)
 }
 
-// FundamentalDividendManager 构造基本面域分红 Manager（EM→CNInfo→THS）
+// FundamentalDividendManager 构造基本面域分红 Manager（EM→CNInfo→THS，未配置自动降级）
 func FundamentalDividendManager(rc *RawClients) *fundamental.Manager {
-	if rc.IFind != nil {
-		return fundamental.New(
-			fundamental.NewEMDividend(rc.EM),
-			fundamental.NewCNInfoDividend(rc.CNInfo),
-			&fundamental.IFIndFundamental{Raw: rc.IFind},
-		)
-	}
 	return fundamental.New(
 		fundamental.NewEMDividend(rc.EM),
 		fundamental.NewCNInfoDividend(rc.CNInfo),
+		&fundamental.IFIndFundamental{Raw: rc.IFind},
 	)
 }
 

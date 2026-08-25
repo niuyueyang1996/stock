@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -108,7 +109,19 @@ func main() {
 	cn := raw.NewCNInfo()
 	bd := raw.NewBaidu()
 	nw := raw.NewEMNews()
-	ifindClient := ifind.NewClient("")
+	ifindToken := strings.TrimSpace(os.Getenv("STOCK_IFIND_REFRESH_TOKEN"))
+	if ifindToken == "" {
+		ifindToken = strings.TrimSpace(os.Getenv("IFIND_REFRESH_TOKEN"))
+	}
+	if ifindToken == "" {
+		ifindToken = strings.TrimSpace(cfgDAO.Get("ifind_refresh_token"))
+	}
+	ifindClient := ifind.NewClient(ifindToken)
+	if ifindToken != "" {
+		log.Printf("[ifind] refresh_token 已加载 %s", ifindClient.RefreshTokenMasked())
+	} else {
+		log.Printf("[ifind] refresh_token 未配置，同花顺链路自动降级")
+	}
 
 	// 市场列表预热（A股/ETF/港股全列表 → data/ 下 JSON，搜索依赖；幂等）
 	listsSvc := &marketlists.Service{DataDir: cfg.DataDir, Em: em, Sina: sina, Tencent: tx}
@@ -234,6 +247,7 @@ func main() {
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
 		Jobs: jm, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
 		Detail: detailSvc, StockMeta: stockMetaSvc, DataManage: dataManageSvc,
+		Ifind: ifindClient,
 		LogFile: logFilePath(),
 	}
 
