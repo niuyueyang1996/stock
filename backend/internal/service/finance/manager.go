@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"stockanalyzer/internal/service/model"
 )
@@ -76,20 +77,26 @@ func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Fi
 	if m.Fx != nil {
 		fx = m.Fx()
 	}
+	log.Printf("[debug][finance] Financials code=%s hk=%v fx=%v chain=%d", code, isHKCode(code), fx, len(chain))
 	var errs []error
 	for _, s := range chain {
 		f, err := s.Financials(ctx, code, fx)
 		if err == nil && f != nil {
+			log.Printf("[debug][finance] Financials code=%s -> %s 成功", code, s.Name())
 			return f, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
+			log.Printf("[debug][finance] Financials code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
+		log.Printf("[debug][finance] Financials code=%s -> %s 失败: %v", code, s.Name(), err)
 		errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
 	}
 	if len(errs) > 0 {
+		log.Printf("[debug][finance] Financials code=%s 全部失败: %v", code, errs)
 		return nil, errors.Join(errs...)
 	}
+	log.Printf("[debug][finance] Financials code=%s 全部不支持/空", code)
 	return nil, ErrNotSupported
 }
 
@@ -101,19 +108,25 @@ func (m *FinanceManager) DividendPerShare(ctx context.Context, code string) (*fl
 	} else {
 		chain = m.ashare
 	}
+	log.Printf("[debug][finance] DividendPerShare code=%s hk=%v chain=%d", code, isHKCode(code), len(chain))
 	var errs []error
 	for _, s := range chain {
 		v, err := s.DividendPerShare(ctx, code)
 		if err == nil && v != nil {
+			log.Printf("[debug][finance] DividendPerShare code=%s -> %s 成功 %.4f", code, s.Name(), *v)
 			return v, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
+			log.Printf("[debug][finance] DividendPerShare code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
+		log.Printf("[debug][finance] DividendPerShare code=%s -> %s 失败: %v", code, s.Name(), err)
 		errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
 	}
 	if len(errs) > 0 {
+		log.Printf("[debug][finance] DividendPerShare code=%s 全部失败: %v", code, errs)
 		return nil, errors.Join(errs...)
 	}
+	log.Printf("[debug][finance] DividendPerShare code=%s 全部不支持/空", code)
 	return nil, ErrNotSupported
 }

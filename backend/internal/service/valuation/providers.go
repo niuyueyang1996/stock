@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/model"
@@ -102,21 +103,29 @@ func NewValuationManager(sources ...ValuationSource) *ValuationManager {
 
 // ValuationHistory 沿估值源降级链逐个尝试，返回第一个非空结果的估值历史序列；全部失败则汇总各源错误返回。
 func (m *ValuationManager) ValuationHistory(ctx context.Context, code, indicator, period string) ([]model.ValuationPoint, error) {
+	log.Printf("[debug][valuation] ValuationHistory code=%s %s/%s chain=%d", code, indicator, period, len(m.sources))
 	var errs []error
 	for _, s := range m.sources {
 		pts, err := s.ValuationHistory(ctx, code, indicator, period)
 		if err == nil && len(pts) > 0 {
+			log.Printf("[debug][valuation] ValuationHistory code=%s -> %s 成功 %d条", code, s.Name(), len(pts))
 			return pts, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
+			log.Printf("[debug][valuation] ValuationHistory code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
 		if err != nil {
+			log.Printf("[debug][valuation] ValuationHistory code=%s -> %s 失败: %v", code, s.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
+		} else {
+			log.Printf("[debug][valuation] ValuationHistory code=%s -> %s 空", code, s.Name())
 		}
 	}
 	if len(errs) > 0 {
+		log.Printf("[debug][valuation] ValuationHistory code=%s 全部失败: %v", code, errs)
 		return nil, errors.Join(errs...)
 	}
+	log.Printf("[debug][valuation] ValuationHistory code=%s 全部不支持/空", code)
 	return nil, ErrNotSupported
 }
