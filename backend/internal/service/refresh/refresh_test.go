@@ -12,6 +12,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/tech"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
@@ -116,7 +117,8 @@ func TestDBDailyFlowFromBands(t *testing.T) {
 
 func TestSyncFundflowHistory_Incremental(t *testing.T) {
 	s, g := openRefresh(t)
-	s.Sina = raw.NewSina()
+	sinaRaw := raw.NewSina()
+	s.Tech = tech.New(&tech.SinaTech{Raw: sinaRaw})
 
 	// mock 新浪接口：返回 2 天历史日级资金流
 	mux := http.NewServeMux()
@@ -126,17 +128,17 @@ func TestSyncFundflowHistory_Incremental(t *testing.T) {
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
-	s.Sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+	sinaRaw.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
 		r.URL.Scheme = "http"
 		r.URL.Host = ts.Listener.Addr().String()
 		return http.DefaultTransport.RoundTrip(r)
 	})
 
 	// 预置 8-14 已有 → 只应回填 8-13
-	_ = g.Exec("INSERT INTO daily_fundflow_cache(code,trade_date,netamount) VALUES('600519','2026-08-14',999)").Error
+	_ = g.Exec("INSERT INTO daily_fundflow_cache(code,trade_date,netamount) VALUES('600519.SH','2026-08-14',999)").Error
 
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local)
-	res := s.syncFundflowHistory(t.Context(), "600519", now)
+	res := s.syncFundflowHistory(t.Context(), "600519.SH", now)
 	if res["reason"] != "ok" {
 		t.Fatalf("reason = %v", res["reason"])
 	}
@@ -145,13 +147,13 @@ func TestSyncFundflowHistory_Incremental(t *testing.T) {
 	}
 
 	var n int64
-	_ = g.Raw("SELECT COUNT(*) FROM daily_fundflow_cache WHERE code='600519'").Scan(&n)
+	_ = g.Raw("SELECT COUNT(*) FROM daily_fundflow_cache WHERE code='600519.SH'").Scan(&n)
 	if n != 2 {
 		t.Fatalf("总天数应为2, got %d", n)
 	}
 
 	// 再跑一次应命中 cached
-	res2 := s.syncFundflowHistory(t.Context(), "600519", now)
+	res2 := s.syncFundflowHistory(t.Context(), "600519.SH", now)
 	if res2["reason"] != "cached" {
 		t.Fatalf("二次回填应 cached, got %v", res2)
 	}
@@ -159,7 +161,8 @@ func TestSyncFundflowHistory_Incremental(t *testing.T) {
 
 func TestSyncFundflowHistory_SufficientWindow(t *testing.T) {
 	s, g := openRefresh(t)
-	s.Sina = raw.NewSina()
+	sinaRaw := raw.NewSina()
+	s.Tech = tech.New(&tech.SinaTech{Raw: sinaRaw})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb", func(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +171,7 @@ func TestSyncFundflowHistory_SufficientWindow(t *testing.T) {
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
-	s.Sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
+	sinaRaw.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
 		r.URL.Scheme = "http"
 		r.URL.Host = ts.Listener.Addr().String()
 		return http.DefaultTransport.RoundTrip(r)
@@ -181,11 +184,11 @@ func TestSyncFundflowHistory_SufficientWindow(t *testing.T) {
 	base := windowStart
 	for i := 0; i < 45; i++ {
 		d := base.AddDate(0, 0, i).Format("2006-01-02")
-		_ = g.Exec("INSERT OR IGNORE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519", d, float64(i)).Error
+		_ = g.Exec("INSERT OR IGNORE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519.SH", d, float64(i)).Error
 	}
-	_ = g.Exec("INSERT OR REPLACE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519", target.Format("2006-01-02"), 999).Error
+	_ = g.Exec("INSERT OR REPLACE INTO daily_fundflow_cache(code,trade_date,netamount) VALUES(?,?,?)", "600519.SH", target.Format("2006-01-02"), 999).Error
 
-	res := s.syncFundflowHistory(t.Context(), "600519", now)
+	res := s.syncFundflowHistory(t.Context(), "600519.SH", now)
 	if res["reason"] != "cached" {
 		t.Fatalf("窗口充足应 cached, got %v", res)
 	}

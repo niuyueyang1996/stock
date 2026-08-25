@@ -99,8 +99,8 @@ func TestEMFinancialsHKMulti(t *testing.T) {
 	if !strings.Contains(captured.Get("filter"), "00700.HK") {
 		t.Fatalf("filter=%q", captured.Get("filter"))
 	}
-	if rows[0]["BASIC_EPS"] != 0.5 {
-		t.Fatalf("EPS=%v", rows[0]["BASIC_EPS"])
+	if rows[0].BasicEPS == nil || *rows[0].BasicEPS != 0.5 {
+		t.Fatalf("EPS=%v", rows[0].BasicEPS)
 	}
 }
 
@@ -162,8 +162,11 @@ func TestLeguFetch(t *testing.T) {
 		return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
 	})
 	rows := tc.IndexPEHist(context.Background(), "000300.SH")
-	if len(rows) != 1 || rows[0]["ttmPe"] != 13.7 {
+	if len(rows) != 1 || rows[0].TtmPe == nil || *rows[0].TtmPe != 13.7 {
 		t.Fatalf("rows = %v", rows)
+	}
+	if rows[0].Date != "2025-01-02" {
+		t.Fatalf("date = %v", rows[0].Date)
 	}
 	if !hitPage {
 		t.Fatal("未请求 csrf 页面")

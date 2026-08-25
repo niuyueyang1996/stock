@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -18,8 +19,7 @@ func (t *TencentTech) Quote(ctx context.Context, code string) (*model.Quote, err
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	sym := toSymbol(code)
-	parts := t.Raw.QuoteRaw(ctx, sym)
+	parts := t.Raw.QuoteRaw(ctx, code)
 	if len(parts) < 5 {
 		return nil, ErrNotSupported
 	}
@@ -33,7 +33,7 @@ func (t *TencentTech) DailyBars(ctx context.Context, code, start, end string) ([
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	rows := t.Raw.Kline(ctx, toSymbol(code), "day", start, end, 800)
+	rows := t.Raw.Kline(ctx, code, "day", start, end, 800)
 	if len(rows) == 0 {
 		return nil, ErrNotSupported
 	}
@@ -68,7 +68,7 @@ func (t *TencentTech) HKIntraday(ctx context.Context, code string) ([]raw.HKIntr
 	}
 	return days, nil
 }
-func (t *TencentTech) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
+func (t *TencentTech) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
@@ -82,17 +82,7 @@ func (t *TencentTech) FundflowDailyHistory(ctx context.Context, symbol string, c
 	return nil, ErrNotSupported
 }
 
-func isHKCode(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
+func isHKCode(code string) bool { return marketcode.Suffix(code) == "HK" }
 
 // SinaTech 新浪资金流历史适配器
 type SinaTech struct{ Raw *raw.Sina }
@@ -114,7 +104,7 @@ func (s *SinaTech) Kline(ctx context.Context, symbol, period, start, end string,
 func (s *SinaTech) HKIntraday(ctx context.Context, code string) ([]raw.HKIntradayDay, error) {
 	return nil, ErrNotSupported
 }
-func (s *SinaTech) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
+func (s *SinaTech) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
 	return nil, ErrNotSupported
 }
 func (s *SinaTech) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
@@ -169,7 +159,7 @@ func (e *EMTech) Kline(ctx context.Context, symbol, period, start, end string, c
 func (e *EMTech) HKIntraday(ctx context.Context, code string) ([]raw.HKIntradayDay, error) {
 	return nil, ErrNotSupported
 }
-func (e *EMTech) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
+func (e *EMTech) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
 	return nil, ErrNotSupported
 }
 func (e *EMTech) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
@@ -185,32 +175,9 @@ func (e *EMTech) ETFHist(ctx context.Context, symbol, start, end string) [][]str
 	return rows
 }
 
-func toSymbol(code string) string {
-	// 对齐 Python to_symbol：沪 60/68/90/50/51/56/58；深 00/30/39/15/16/20；北 43/82/83/87/92
-	if isHKCode(code) {
-		return "hk" + code
-	}
-	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") ||
-		strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") ||
-		strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
-		return "sh" + code
-	}
-	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") ||
-		strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") ||
-		strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
-		return "sz" + code
-	}
-	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") ||
-		strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
-		return "bj" + code
-	}
-	return code
-}
-
 func isETFCode(code string) bool {
-	// 场内 ETF：沪市 51/56/58，深市 15/16
-	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
-		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
+	bare := marketcode.Bare(code)
+	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
 }
 
 func strF(s string) float64 {
@@ -219,5 +186,3 @@ func strF(s string) float64 {
 	}
 	return 0
 }
-
-func ToSymbol(code string) string { return toSymbol(code) }

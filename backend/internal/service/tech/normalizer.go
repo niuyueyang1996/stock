@@ -321,14 +321,14 @@ func MinuteBarsToTicks(rows []raw.HKIntradayDay) []raw.TickRow {
 		var lastPrice *float64
 		lastDir := 0
 		prevCum := 0.0
-		for _, row := range day.Points {
-			cumAmt := row[3].(float64)
+		for _, pt := range day.Points {
+			cumAmt := pt.CumAmt
 			delta := cumAmt - prevCum
 			prevCum = cumAmt
 			if delta <= 0 {
 				continue
 			}
-			price := row[1].(float64)
+			price := pt.Price
 			if lastPrice != nil && math.Abs(price-*lastPrice) > 1e-9 {
 				if price > *lastPrice {
 					lastDir = 1
@@ -337,7 +337,7 @@ func MinuteBarsToTicks(rows []raw.HKIntradayDay) []raw.TickRow {
 				}
 			}
 			lastPrice = &price
-			ts := fmt.Sprintf("%v", row[0])
+			ts := pt.Time
 			if len(ts) == 4 && isDigits(ts) {
 				ts = ts[0:2] + ":" + ts[2:4]
 			}

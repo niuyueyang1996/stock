@@ -4,13 +4,12 @@
 package detail
 
 import (
-	"encoding/json"
 	"math"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"stockanalyzer/internal/service/marketcode"
 
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/calendar"
@@ -28,6 +27,7 @@ type Service struct {
 	Indices *indices.Service
 	IsIndex func(code string) bool
 	Cal     *calendar.Service
+	Codes   *marketcode.Registry
 	// Stocks 股票基础信息 DAO（名称回填写 stocks 表，对齐 Python stock_detail）
 	Stocks *dao.HoldingsDAO
 	// DataDir 数据目录（读全市场列表缓存 stock_list.json/etf_list.json/hk_stock_list.json）
@@ -43,6 +43,8 @@ const quantileMinSamples = 60
 // StockDetail 个股详情（指数代码自动走指数口径：注册表名称 + 量价 intraday，无 409）。
 // asOfGiven：query 参数是否存在（Python as_of: str|None——`?as_of=` 空串也算给定，hist_view=True）。
 func (s *Service) StockDetail(code string, partial bool, window int, asOf string, asOfGiven bool) (int, map[string]any) {
+	bare := marketcode.Bare(code)
+	_ = bare
 	if s.IsIndex != nil && s.IsIndex(code) {
 		return s.indexDetail(code, window, asOf, asOfGiven)
 	}
@@ -92,13 +94,13 @@ func (s *Service) StockDetail(code string, partial bool, window int, asOf string
 		}
 	}
 	// 港股货币兜底（stocks 表未记录时按代码判定，对齐 Python instrument.currency）
-	if currency == "CNY" && isHKCode5(code) {
+	if currency == "CNY" && s.isHKCode5(code) {
 		currency = "HKD"
 	}
-	isETF := isETFCodeL(code) || tag == "ETF"
+	isETF := s.isETFCodeL(code) || tag == "ETF"
 	// tag 兜底：stocks 表无 tag 时用类型默认标签（对齐 Python inst.tag）
 	if tag == "" {
-		tag = instDefaultTag(code, isETF)
+		tag = s.instDefaultTag(code, isETF)
 	}
 
 	tradeDay, adjusted := s.resolveTradeDay(asOf)
@@ -144,7 +146,7 @@ func (s *Service) StockDetail(code string, partial bool, window int, asOf string
 	}
 
 	note := "当日分笔派生，历史从接入日起累积"
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		note = "港股无逐笔：资金流由腾讯分时分钟量价按价向派生（tick rule），分档按分钟成交额自适应"
 	}
 
@@ -411,35 +413,12 @@ func (s *Service) stockTag(code string) any {
 	return nil
 }
 
-// resolveStockName 从全市场列表（A股/ETF/港股本地缓存）精确匹配代码名称（只读文件，绝不联网）
+// resolveStockName 从常驻表精确匹配代码名称（唯一真相源 Codes 注册表，零读盘）
 func (s *Service) resolveStockName(code string) string {
-	for _, f := range []string{"stock_list.json", "etf_list.json", "hk_stock_list.json"} {
-		rows := s.readListFile(f)
-		for _, r := range rows {
-			if c, ok := r["code"].(string); ok && c == code {
-				if n, ok := r["name"].(string); ok {
-					return n
-				}
-			}
-		}
+	if s.Codes == nil {
+		return ""
 	}
-	return ""
-}
-
-// readListFile 读取市场列表缓存文件（不存在/损坏返回空，绝不联网）
-func (s *Service) readListFile(name string) []map[string]any {
-	if s.DataDir == "" {
-		return nil
-	}
-	b, err := os.ReadFile(filepath.Join(s.DataDir, name))
-	if err != nil {
-		return nil
-	}
-	var out []map[string]any
-	if err := json.Unmarshal(b, &out); err != nil {
-		return nil
-	}
-	return out
+	return s.Codes.Name(code)
 }
 
 // seriesPoints 估值序列 → [{date, value}]（历史回看截断）
@@ -547,11 +526,11 @@ func (s *Service) marketStatusStr() string {
 }
 
 // instDefaultTag 类型默认标签（对齐 Python instruments RULES tag：个股/港股/ETF）
-func instDefaultTag(code string, isETF bool) string {
+func (s *Service) instDefaultTag(code string, isETF bool) string {
 	if isETF {
 		return "ETF"
 	}
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		return "港股"
 	}
 	return "个股"
@@ -577,21 +556,19 @@ func addDays(day string, n int) string {
 	return t.AddDate(0, 0, n).Format("2006-01-02")
 }
 
-// isHKCode5 港股五位代码判定
-func isHKCode5(code string) bool {
-	if len(code) != 5 {
-		return false
+// isHKCode5 港股判定（委托 Codes，兼容全局回退）
+func (s *Service) isHKCode5(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsHK(code)
 	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return marketcode.Suffix(code) == "HK"
 }
 
-// isETFCodeL 场内 ETF 代码判定（51/56/58/15/16 开头）
-func isETFCodeL(code string) bool {
-	return len(code) >= 6 && (strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
-		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16"))
+// isETFCodeL 场内 ETF 判定（委托 Codes，兼容全局回退）
+func (s *Service) isETFCodeL(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsETF(code)
+	}
+	bare := marketcode.Bare(code)
+	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
 }

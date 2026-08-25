@@ -379,6 +379,7 @@ func TestListsReadyAnyList(t *testing.T) {
 	dir := t.TempDir()
 	writeJSONList(t, dir, "stock_list.json", []map[string]any{{"code": "600519", "name": "贵州茅台"}})
 	s, _ := openQuote(t)
+	s.Codes.RefreshFromDataDir(dir)
 	s.DataDir = dir
 	if !s.listsReady() {
 		t.Fatal("任一列表存在应 ready")
@@ -388,6 +389,7 @@ func TestListsReadyAnyList(t *testing.T) {
 	dir2 := t.TempDir()
 	writeJSONList(t, dir2, "etf_list.json", []map[string]any{{"code": "510300", "name": "沪深300ETF"}})
 	s2, _ := openQuote(t)
+	s2.Codes.RefreshFromDataDir(dir2)
 	s2.DataDir = dir2
 	if !s2.listsReady() {
 		t.Fatal("仅 etf 也应 ready")
@@ -436,6 +438,7 @@ func TestSearchHintAndListsReady(t *testing.T) {
 	dir := t.TempDir()
 	writeJSONList(t, dir, "stock_list.json", []map[string]any{{"code": "600519", "name": "贵州茅台"}})
 	s, _ := openQuote(t)
+	s.Codes.RefreshFromDataDir(dir)
 	s.DataDir = dir
 	data, ready, hint := s.Search("", 10)
 	if len(data) != 0 || !ready || hint != "ok" {
@@ -462,13 +465,14 @@ func TestSearchHintAndListsReady(t *testing.T) {
 func TestSearchHKList(t *testing.T) {
 	dir := t.TempDir()
 	writeJSONList(t, dir, "hk_stock_list.json", []map[string]any{
-		{"code": "00700", "name": "腾讯控股"},
-		{"code": "09988", "name": "阿里巴巴-W"},
+		{"code": "00700.HK", "full_code": "00700.HK", "name": "腾讯控股"},
+		{"code": "09988.HK", "full_code": "09988.HK", "name": "阿里巴巴-W"},
 	})
 	s, _ := openQuote(t)
+	s.Codes.RefreshFromDataDir(dir)
 	s.DataDir = dir
 	data, _, _ := s.Search("腾讯", 10)
-	if len(data) != 1 || data[0]["code"] != "00700" {
+	if len(data) != 1 || data[0]["code"] != "00700.HK" {
 		t.Fatalf("港股搜索: %+v", data)
 	}
 	// limit 截断

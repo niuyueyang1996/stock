@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -17,6 +18,8 @@ func NewEMHKFinance(r *raw.EM) *EMHKFinance { return &EMHKFinance{raw: r} }
 func (e *EMHKFinance) Name() string { return "em" }
 
 // Financials 拉取港股标准财务：校验港股代码，取多期 F10 + 主指标 MAX，经 NormalizeFinancialsHK 折算成人民币
+// 入参为 fullCode（如 00700.HK），内部 Bare 用于 DB 过滤（SECUCODE），fullCode 用于 API 层面区分重码
+// 兼容裸码 00700
 func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
 	if !isHKCode(code) {
 		return nil, ErrNotSupported
@@ -41,6 +44,7 @@ func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *flo
 }
 
 // DividendPerShare 最近年报每股股息（港元口径，需上层注入汇率折算）
+// 入参为 fullCode，Bare 用于查询；兼容裸码
 func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
 	if !isHKCode(code) {
 		return nil, ErrNotSupported
@@ -52,7 +56,7 @@ func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float
 	if max == nil {
 		return nil, ErrNotSupported
 	}
-	v := num(max["DIVIDEND_TTM"])
+	v := max.DividendTTM
 	if v == nil {
 		return nil, ErrNotSupported
 	}
@@ -60,15 +64,5 @@ func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float
 	return v, nil
 }
 
-// isHKCode 五位纯数字代码为港股
-func isHKCode(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
-}
+// isHKCode 港股判定（fullCode 纯后缀判定，无需注册表）
+func isHKCode(code string) bool { return marketcode.Suffix(code) == "HK" }

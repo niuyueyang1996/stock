@@ -263,9 +263,9 @@ func TestSetStockTag(t *testing.T) {
 		t.Fatalf("update 期望 科技, got %q %v", tag, err)
 	}
 	// 港股代码 → market=hk
-	_, _ = svc.SetStockTag("00700", "互联网", "腾讯")
+	_, _ = svc.SetStockTag("00700.HK", "互联网", "腾讯")
 	var st2 struct{ Mkt string }
-	g.Raw("SELECT market AS mkt FROM stocks WHERE code='00700'").Scan(&st2)
+	g.Raw("SELECT market AS mkt FROM stocks WHERE code='00700.HK'").Scan(&st2)
 	if st2.Mkt != "hk" {
 		t.Fatalf("港股 market 期望 hk, got %q", st2.Mkt)
 	}
@@ -421,7 +421,7 @@ func TestHKFirstTradeInfersCurrency(t *testing.T) {
 	rate := 0.91
 	svc.FxEnsure = func(currency, rateDate string) *float64 { return &rate }
 	name := "腾讯控股"
-	_, h, err := svc.RecordTrade("00700", "buy", 400, 100, 0, "2026-01-01 10:00:00", "", &name, false)
+	_, h, err := svc.RecordTrade("00700.HK", "buy", 400, 100, 0, "2026-01-01 10:00:00", "", &name, false)
 	if err != nil {
 		t.Fatalf("first hk buy: %v", err)
 	}
@@ -432,19 +432,19 @@ func TestHKFirstTradeInfersCurrency(t *testing.T) {
 		t.Fatalf("应折算 400*0.91=364, got %+v", h)
 	}
 	var st struct{ Name, Market, Currency string }
-	g.Raw("SELECT name, market, currency FROM stocks WHERE code='00700'").Scan(&st)
+	g.Raw("SELECT name, market, currency FROM stocks WHERE code='00700.HK'").Scan(&st)
 	if st.Name != "腾讯控股" || st.Market != "hk" || st.Currency != "HKD" {
 		t.Fatalf("stocks 行 %+v", st)
 	}
 	// 无 name：仍建 hk/HKD，不把已有名称改成代码
-	_, h2, err := svc.RecordTrade("00700", "buy", 400, 100, 0, "2026-01-02 10:00:00", "", nil, false)
+	_, h2, err := svc.RecordTrade("00700.HK", "buy", 400, 100, 0, "2026-01-02 10:00:00", "", nil, false)
 	if err != nil {
 		t.Fatalf("second buy: %v", err)
 	}
 	if h2.Currency != "HKD" || h2.AvgCostCny == nil || *h2.AvgCostCny != 364 {
 		t.Fatalf("第二笔仍应 HKD 折算: %+v", h2)
 	}
-	g.Raw("SELECT name, market FROM stocks WHERE code='00700'").Scan(&st)
+	g.Raw("SELECT name, market FROM stocks WHERE code='00700.HK'").Scan(&st)
 	if st.Name != "腾讯控股" || st.Market != "hk" {
 		t.Fatalf("无 name 不应覆盖名称: %+v", st)
 	}

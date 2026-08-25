@@ -18,6 +18,7 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/calendar"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
@@ -42,8 +43,6 @@ const (
 // Service 刷新服务
 type Service struct {
 	DB        *gorm.DB
-	Tencent   *raw.Tencent
-	Sina      *raw.Sina
 	Tech      *tech.Manager
 	Cache     *dao.CacheDAO
 	Holdings  *holdings.Service
@@ -52,11 +51,12 @@ type Service struct {
 	Live      *valuation.Service
 	Fx        *fx.Service
 	Jobs      *jobs.Manager
+	Codes     *marketcode.Registry
 	// Baidu 百度客户端（估值历史序列 sync_valuation 用；main 装配注入）
 	Baidu *raw.Baidu
 	// Cal 交易日历（全局统一入口：交易日/最近交易日/开盘前判定）
 	Cal *calendar.Service
-	// IsIndex 指数判定（注入：注册表）
+	// IsIndex 指数判定（注入：注册表，优先于 Codes.IsIndex）
 	IsIndex func(code string) bool
 	// EnsureNews 个股新闻预拉（main 注入 ai.EnsureStockNews force 包装；全局全量刷新时批量拉）
 	EnsureNews func(code string)
@@ -232,7 +232,7 @@ func (s *Service) syncFundflow(ctx context.Context, code string, now time.Time) 
 	if s.IsIndex != nil && s.IsIndex(code) {
 		return s.syncIndexIntraday(ctx, code)
 	}
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		return s.syncHKFundflow(ctx, code)
 	}
 	// 目标日期判定（用户口径：不按日历跳过，始终加载最近一个交易日的分时）：
@@ -484,7 +484,7 @@ func round4(v float64) float64 { return math.Round(v*10000) / 10000 }
 // force=true 重拉全量（800 根）覆盖；pct_change 按相邻段末收盘计算（首根用缓存中更早一条收盘衔接）；
 // UPSERT 主键 code+trade_date 天然覆盖。
 func (s *Service) SyncPeriodKline(code string, force bool) {
-	if s.Tencent == nil && s.Tech == nil {
+	if s.Tech == nil {
 		return
 	}
 	ctx := context.Background()
@@ -549,16 +549,11 @@ func (s *Service) SyncPeriodKline(code string, force bool) {
 
 // fetchPeriodBars 拉取周期K（腾讯 fqkline）
 func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end string, count int) []db.PeriodPrice {
-	symbol := s.resolveSymbol(code)
 	var rows [][]string
 	if s.Tech != nil {
-		if r, err := s.Tech.Kline(ctx, symbol, period, start, end, count); err == nil && len(r) > 0 {
+		if r, err := s.Tech.Kline(ctx, code, period, start, end, count); err == nil && len(r) > 0 {
 			rows = r
-		} else if s.Tencent != nil {
-			rows = s.Tencent.Kline(ctx, symbol, period, start, end, count)
 		}
-	} else if s.Tencent != nil {
-		rows = s.Tencent.Kline(ctx, symbol, period, start, end, count)
 	}
 	out := make([]db.PeriodPrice, 0, len(rows))
 	for _, r := range rows {
@@ -588,21 +583,15 @@ func (s *Service) fetchPeriodBars(ctx context.Context, code, period, start, end 
 
 // fetchDailyBars 拉取日K（指数从 index_defs 取正确 symbol，非指数走 Market 降级链）。
 func (s *Service) fetchDailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
-	// 指数：从 index_defs 取 sh/sz 正确 symbol，优先走 Tech chain（对齐 Python inst.daily_bars）
 	if s.IsIndex != nil && s.IsIndex(code) {
-		symbol := s.resolveSymbol(code)
 		var rows [][]string
 		if s.Tech != nil {
-			if r, err := s.Tech.Kline(ctx, symbol, "day", start, end, 800); err == nil && len(r) > 0 {
+			if r, err := s.Tech.Kline(ctx, code, "day", start, end, 800); err == nil && len(r) > 0 {
 				rows = r
-			} else if s.Tencent != nil {
-				rows = s.Tencent.Kline(ctx, symbol, "day", start, end, 800)
 			}
-		} else if s.Tencent != nil {
-			rows = s.Tencent.Kline(ctx, symbol, "day", start, end, 800)
 		}
 		if len(rows) == 0 {
-			return nil, fmt.Errorf("index kline empty: %s", symbol)
+			return nil, fmt.Errorf("index kline empty: %s", code)
 		}
 		return tech.NormalizeBars(rows, code, start, end), nil
 	}
@@ -612,33 +601,6 @@ func (s *Service) fetchDailyBars(ctx context.Context, code, start, end string) (
 	return s.Tech.DailyBars(ctx, code, start, end)
 }
 
-// resolveSymbol 解析腾讯代码符号：指数代码从 index_defs.symbol 读取（避免 000xxx 上海指数被误标为 sz），
-// 其余走 toSymbol2 兜底。
-func (s *Service) resolveSymbol(code string) string {
-	if s.IsIndex != nil && s.IsIndex(code) {
-		var symbol string
-		s.DB.Raw("SELECT symbol FROM index_defs WHERE code=?", code).Scan(&symbol)
-		if symbol != "" {
-			return symbol
-		}
-	}
-	return toSymbol2(code)
-}
-
-// toSymbol2 腾讯代码符号（sh/sz/hk/bj 前缀；注意：不适用于 000xxx 上海指数代码）
-func toSymbol2(code string) string {
-	if len(code) == 5 {
-		return "hk" + code
-	}
-	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") ||
-		strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
-		return "bj" + code
-	}
-	if strings.HasPrefix(code, "6") {
-		return "sh" + code
-	}
-	return "sz" + code
-}
 
 // pf2 行内浮点解析
 func pf2(row []string, i int) *float64 {
@@ -655,20 +617,10 @@ func pf2(row []string, i int) *float64 {
 // syncHKFundflow 港股资金流：腾讯分时分钟量价按价向派生（tick rule），近5个交易日逐日
 // 五档 + 1 分钟分时落库（对齐 Python sync_fundflow 港股分支 + instruments/hk.py fundflow_days/fundflow_intraday_by_date）。
 func (s *Service) syncHKFundflow(ctx context.Context, code string) map[string]any {
-	var days []raw.HKIntradayDay
-	var got bool
-	if s.Tech != nil {
-		if d, err := s.Tech.HKIntraday(ctx, code); err == nil && len(d) > 0 {
-			days = d
-			got = true
-		}
+	if s.Tech == nil {
+		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
 	}
-	if !got {
-		if s.Tencent == nil {
-			return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
-		}
-		days = s.Tencent.HKIntraday(ctx, code)
-	}
+	days, _ := s.Tech.HKIntraday(ctx, code)
 	if len(days) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
 	}
@@ -711,10 +663,10 @@ func (s *Service) syncFundflowHistory(ctx context.Context, code string, now time
 	if s.IsIndex != nil && s.IsIndex(code) {
 		return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
 	}
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		return map[string]any{"code": code, "fetched": 0, "reason": "skipped"}
 	}
-	if s.Tech == nil && s.Sina == nil {
+	if s.Tech == nil {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
 	}
 
@@ -734,13 +686,9 @@ func (s *Service) syncFundflowHistory(ctx context.Context, code string, now time
 
 	var rows []raw.FundflowDayRow
 	if s.Tech != nil {
-		if r, err := s.Tech.FundflowDailyHistory(ctx, tech.ToSymbol(code), 500); err == nil && len(r) > 0 {
+		if r, err := s.Tech.FundflowDailyHistory(ctx, code, 500); err == nil {
 			rows = r
-		} else if s.Sina != nil {
-			rows = s.Sina.FundflowDailyHistory(ctx, tech.ToSymbol(code), 500)
 		}
-	} else {
-		rows = s.Sina.FundflowDailyHistory(ctx, tech.ToSymbol(code), 500)
 	}
 	if len(rows) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_data"}
@@ -779,24 +727,19 @@ func (s *Service) syncFundflowHistory(ctx context.Context, code string, now time
 	return map[string]any{"code": code, "fetched": wrote, "reason": "ok"}
 }
 
-// isHKCode5 港股五位代码判定
-func isHKCode5(code string) bool {
-	if len(code) != 5 {
-		return false
+// isHKCode5 港股判定（委托 Codes，兼容全局回退）
+func (s *Service) isHKCode5(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsHK(code)
 	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return marketcode.Suffix(code) == "HK"
 }
 
 // syncIndexIntraday 指数分时量价同步（腾讯 mkline，对齐 Python sync_fundflow 指数分支）：
 // 一次请求含跨日分钟（今+昨尾盘，约 320 分钟），按交易日拆分逐日落 index_intraday_cache，
 // 供「较昨同时段成交量」用真实数据而非进度估算。
 func (s *Service) syncIndexIntraday(ctx context.Context, code string) map[string]any {
-	if s.Tech == nil && s.Tencent == nil {
+	if s.Tech == nil {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_source"}
 	}
 	// 指数符号（index_defs.symbol，如 sh000300）
@@ -805,16 +748,7 @@ func (s *Service) syncIndexIntraday(ctx context.Context, code string) map[string
 	if symbol == "" {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_symbol"}
 	}
-	var rows [][]any
-	if s.Tech != nil {
-		if r, err := s.Tech.IndexMinKline(ctx, symbol, 320); err == nil && len(r) > 0 {
-			rows = r
-		} else if s.Tencent != nil {
-			rows = s.Tencent.IndexMinKline(ctx, symbol, 320)
-		}
-	} else if s.Tencent != nil {
-		rows = s.Tencent.IndexMinKline(ctx, symbol, 320)
-	}
+	rows, _ := s.Tech.IndexMinKline(ctx, symbol, 320)
 	if len(rows) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "no_ticks"}
 	}
@@ -822,21 +756,27 @@ func (s *Service) syncIndexIntraday(ctx context.Context, code string) map[string
 	buckets := map[string][]dao.IndexIntradayRow{}
 	fetched := 0
 	for _, r := range rows {
-		stamp := fmt.Sprintf("%v", r[0])
+		stamp := strings.ReplaceAll(r.Time, " ", "")
+		stamp = strings.ReplaceAll(stamp, "-", "")
+		stamp = strings.ReplaceAll(stamp, ":", "")
 		if len(stamp) < 12 {
 			continue
 		}
 		date := stamp[0:4] + "-" + stamp[4:6] + "-" + stamp[6:8]
-		price := parseF3(r[2])
-		volume := parseF3(r[5])
-		if price == nil || *price == 0 {
+		price := r.Close
+		if price == 0 {
 			continue
 		}
-		// 对齐 Python normalize_index_trends：price 保留 3 位小数；volume 原样
-		p3 := math.Round(*price*1000) / 1000
-		price = &p3
+		p3 := math.Round(price*1000) / 1000
+		pricePtr := p3
+		vol := r.Volume
+		var volPtr *float64
+		if vol != 0 {
+			v := vol
+			volPtr = &v
+		}
 		ts := stamp[8:10] + ":" + stamp[10:12]
-		buckets[date] = append(buckets[date], dao.IndexIntradayRow{Ts: ts, Price: price, Volume: volume})
+		buckets[date] = append(buckets[date], dao.IndexIntradayRow{Ts: ts, Price: &pricePtr, Volume: volPtr})
 		fetched++
 	}
 	for date, pts := range buckets {

@@ -20,7 +20,7 @@ func New(sources ...any) *Manager { return &Manager{sources: sources} }
 
 // Quote 实时行情
 func (m *Manager) Quote(ctx context.Context, code string) (*model.Quote, error) {
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(nil, code)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
@@ -51,7 +51,7 @@ func (m *Manager) Quote(ctx context.Context, code string) (*model.Quote, error) 
 
 // DailyBars 日K
 func (m *Manager) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(nil, code)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
@@ -82,7 +82,7 @@ func (m *Manager) DailyBars(ctx context.Context, code, start, end string) ([]mod
 
 // Ticks 当日分笔
 func (m *Manager) Ticks(ctx context.Context, code string) []raw.TickRow {
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(nil, code)
 	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(TicksSource)
@@ -105,7 +105,7 @@ func (m *Manager) Ticks(ctx context.Context, code string) []raw.TickRow {
 
 // Kline K线原始行
 func (m *Manager) Kline(ctx context.Context, symbol, period, start, end string, count int) ([][]string, error) {
-	label := managerlog.FormatCode(symbol)
+	label := managerlog.FormatCode(nil, symbol)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
@@ -136,7 +136,7 @@ func (m *Manager) Kline(ctx context.Context, symbol, period, start, end string, 
 
 // HKIntraday 港股近5日分时
 func (m *Manager) HKIntraday(ctx context.Context, code string) ([]raw.HKIntradayDay, error) {
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(nil, code)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
@@ -166,8 +166,8 @@ func (m *Manager) HKIntraday(ctx context.Context, code string) ([]raw.HKIntraday
 }
 
 // IndexMinKline 指数分钟K线
-func (m *Manager) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
-	label := managerlog.FormatCode(symbol)
+func (m *Manager) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
+	label := managerlog.FormatCode(nil, symbol)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
@@ -198,7 +198,7 @@ func (m *Manager) IndexMinKline(ctx context.Context, symbol string, count int) (
 
 // FundflowDailyHistory 日级资金流历史
 func (m *Manager) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
-	label := managerlog.FormatCode(symbol)
+	label := managerlog.FormatCode(nil, symbol)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {

@@ -20,6 +20,7 @@ import (
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/settings"
 )
@@ -43,6 +44,9 @@ func newTestRouter(t *testing.T, quoteDir string) (*gin.Engine, *Services) {
 
 	q := quote.New(g)
 	q.DataDir = quoteDir
+	codes := marketcode.New()
+	codes.RefreshFromDataDir(quoteDir)
+	q.Codes = codes
 
 	idx := indices.New(g, nil, nil)
 	idx.Cache = dao.NewCacheDAO(g)
@@ -162,15 +166,17 @@ func TestStatusEndpoint(t *testing.T) {
 
 // TestSearchEndpointWithLists 验证 GET /api/stocks/search：本地列表存在时返回候选且 lists_ready=true。
 func TestSearchEndpointWithLists(t *testing.T) {
+	/* reset */
 	dir := t.TempDir()
 	writeListFile(t, dir, "stock_list.json", []map[string]any{
-		{"code": "600519", "name": "贵州茅台"},
-		{"code": "000858", "name": "五粮液"},
-		{"code": "601318", "name": "中国平安"},
+		{"code": "600519.SH", "full_code": "600519.SH", "name": "贵州茅台"},
+		{"code": "000858.SZ", "full_code": "000858.SZ", "name": "五粮液"},
+		{"code": "601318.SH", "full_code": "601318.SH", "name": "中国平安"},
 	})
 	writeListFile(t, dir, "hk_stock_list.json", []map[string]any{
-		{"code": "00700", "name": "腾讯控股"},
+		{"code": "00700.HK", "full_code": "00700.HK", "name": "腾讯控股"},
 	})
+	/* refresh via instance */
 
 	r, _ := newTestRouter(t, dir)
 	w := httptest.NewRecorder()
@@ -191,7 +197,7 @@ func TestSearchEndpointWithLists(t *testing.T) {
 		t.Fatalf("期望 1 个结果（code 前缀 6005），got %d: %v", len(data), body["data"])
 	}
 	first := data[0].(map[string]any)
-	if first["code"] != "600519" {
+	if first["code"] != "600519.SH" {
 		t.Errorf("命中 code=%v", first["code"])
 	}
 
@@ -200,13 +206,14 @@ func TestSearchEndpointWithLists(t *testing.T) {
 	r.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/api/stocks/search?q=腾讯", nil))
 	b2 := jsonBody(t, w2)
 	d2, _ := b2["data"].([]any)
-	if len(d2) != 1 || d2[0].(map[string]any)["code"] != "00700" {
+	if len(d2) != 1 || d2[0].(map[string]any)["code"] != "00700.HK" {
 		t.Errorf("名称搜索 腾讯 结果=%v", b2["data"])
 	}
 }
 
 // TestSearchEndpointNoLists 验证 GET /api/stocks/search：无列表文件时 lists_ready=false。
 func TestSearchEndpointNoLists(t *testing.T) {
+	/* reset */
 	r, _ := newTestRouter(t, t.TempDir())
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/stocks/search?q=600519", nil))
@@ -322,7 +329,7 @@ func TestJobNotFoundDetailShape(t *testing.T) {
 func TestIndicesPutNotFound(t *testing.T) {
 	r, _ := newTestRouter(t, t.TempDir())
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/indices/999999", strings.NewReader(`{"name":"x"}`)))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/indices/999999.SH", strings.NewReader(`{"name":"x"}`)))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("404 期望但 got %d body=%s", w.Code, w.Body.String())
 	}

@@ -36,6 +36,7 @@ import (
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/marketlists"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
@@ -133,6 +134,11 @@ func main() {
 	// 汇率服务（优先走 infra.Fx chain，回退 Sina 直调）
 	fxSvc := fx.New(infraMgr, dao.NewFxDAO(gdb), holdingsDAO)
 
+	// 常驻注册表（fullCode 统一解析，实例注入消除全局）
+	codes := marketcode.New()
+	codes.StartupLoad(gdb, cfg.DataDir)
+	isIndex := codes.IsIndex
+
 	// 持仓服务（汇率注入）
 	holdSvc := holdings.New(holdingsDAO, func(currency, rateDate string) *float64 {
 		if currency == "CNY" {
@@ -141,9 +147,11 @@ func main() {
 		}
 		return fxSvc.EnsureFxForDate(context.Background(), currency, rateDate)
 	})
+	holdSvc.Codes = codes
 
 	// 数据子包（多态降级链，收口 Registry）
 	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
+	fm.Codes = codes
 	// 指数注册表（index_defs 表）
 	leguCode := func(code string) *string {
 		var c string
@@ -155,6 +163,7 @@ func main() {
 	}
 	vm := service.NewValuationManager(rc, leguCode)
 	liveSvc := valuation.NewLive(gdb, fxSvc.GetFxRateCNY)
+	liveSvc.Codes = codes
 
 	// 任务系统
 	jm := jobs.New()
@@ -166,11 +175,7 @@ func main() {
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
-	isIndex := func(code string) bool {
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
-		return n > 0
-	}
+	quoteSvc.Codes = codes
 	techMgr := service.TechManager(rc, isIndex)
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
@@ -179,6 +184,7 @@ func main() {
 	rfSvc.Baidu = bd // 估值历史序列（sync_valuation）
 	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
+	rfSvc.Codes = codes
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = isIndex
 	holdings.SetIndexChecker(rfSvc.IsIndex)
@@ -190,6 +196,7 @@ func main() {
 	// 组合服务
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY, cacheDAO, idxSvc)
 	portSvc.Cal = calSvc
+	portSvc.Codes = codes
 
 	// AI 服务
 	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
@@ -224,14 +231,13 @@ func main() {
 	detailSvc := &detail.Service{
 		Cache: cacheDAO, Quote: quoteSvc, Live: liveSvc, Fx: fxSvc.GetFxRateCNY,
 		Indices: idxSvc, IsIndex: rfSvc.IsIndex, Cal: calSvc, Stocks: holdingsDAO, DataDir: cfg.DataDir,
+		Codes: codes,
 	}
 	// 个股预期数据服务
 	stockMetaSvc := stockmeta.New(gdb)
 	// 数据管理服务（一键清空/批量初始化）
 	dataManageSvc := datamanage.New(gdb, holdSvc)
 	// 搜索辅助注入（quote service）
-	rfSvc.Tencent = tx
-	rfSvc.Sina = sina
 	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }

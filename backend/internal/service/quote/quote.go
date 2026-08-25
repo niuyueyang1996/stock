@@ -13,6 +13,8 @@ import (
 
 	"gorm.io/gorm"
 
+	"stockanalyzer/internal/service/marketcode"
+
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/calendar"
@@ -21,6 +23,8 @@ import (
 // Service 缓存行情服务
 type Service struct {
 	DB *gorm.DB
+	// Codes 常驻 fullCode 注册表（注入，替代全局 marketcode；单测可 New() 隔离）
+	Codes *marketcode.Registry
 	// Cal 交易日历（注入 calendar 全局统一入口）
 	Cal *calendar.Service
 	// BeforeOpen 开盘判定（<09:15 未开盘；非交易日）；nil 视为已开盘
@@ -245,26 +249,20 @@ func (s *Service) periodRows(table dao.PeriodTable, code, start, end string) []d
 	return cache.GetPeriodPrices(table, code, start, end)
 }
 
-// Search 全市场搜索（A股/ETF/港股本地列表缓存，零网络；对齐 Python search_stocks）。
+// Search 全市场搜索（唯一真相源 Codes 注册表，ready=false 时提示等待；零网络）。
 // 返回 (data, lists_ready, hint)。
 func (s *Service) Search(q string, limit int) ([]map[string]any, bool, string) {
 	q = strings.TrimSpace(q)
-	ready := s.listsReady()
+	ready := s.Codes != nil && s.Codes.Ready()
 	if q == "" {
 		return []map[string]any{}, ready, s.searchHint(ready, nil)
 	}
-	var data []map[string]any
-	for _, f := range []string{"stock_list.json", "etf_list.json", "hk_stock_list.json"} {
-		for _, r := range s.readList(f) {
-			code, _ := r["code"].(string)
-			name, _ := r["name"].(string)
-			if strings.HasPrefix(code, q) || strings.Contains(name, q) {
-				data = append(data, r)
-			}
-		}
+	if s.Codes == nil {
+		return nil, false, s.searchHint(false, nil)
 	}
-	if limit > 0 && len(data) > limit {
-		data = data[:limit]
+	data, err := s.Codes.Query(q, limit)
+	if err != nil {
+		return nil, false, s.searchHint(false, nil)
 	}
 	return data, ready, s.searchHint(ready, data)
 }
@@ -283,14 +281,12 @@ func (s *Service) searchHint(ready bool, data []map[string]any) string {
 	return "error"
 }
 
-// listsReady 本地是否已有任一市场列表缓存（对齐 Python market_lists_ready）
+// listsReady 本地是否已有任一市场列表缓存（现委托 Codes.Ready，不再读盘）
 func (s *Service) listsReady() bool {
-	return len(s.readList("stock_list.json")) > 0 ||
-		len(s.readList("etf_list.json")) > 0 ||
-		len(s.readList("hk_stock_list.json")) > 0
+	return s.Codes != nil && s.Codes.Ready()
 }
 
-// readList 读取市场列表缓存文件（不存在/损坏返回空，绝不联网）
+// readList 读取市场列表缓存文件（仅供测试兼容，业务已不再使用）
 func (s *Service) readList(name string) []map[string]any {
 	if s.DataDir == "" {
 		return nil
@@ -301,7 +297,10 @@ func (s *Service) readList(name string) []map[string]any {
 	}
 	var out []map[string]any
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil
+		return []map[string]any{}
+	}
+	if len(out) == 0 {
+		return []map[string]any{}
 	}
 	return out
 }

@@ -10,6 +10,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/calendar"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // openQuote 临时库 + quote.Service
@@ -28,6 +29,7 @@ func openQuote(t *testing.T) (*Service, *dao.CacheDAO) {
 	d := dao.NewCacheDAO(g)
 	s := New(g)
 	s.Cal = calendar.New(g)
+	s.Codes = marketcode.New()
 	return s, d
 }
 
@@ -104,21 +106,22 @@ func TestBars(t *testing.T) {
 func TestSearch(t *testing.T) {
 	dir := t.TempDir()
 	list := []map[string]any{
-		{"code": "600519", "name": "贵州茅台"},
-		{"code": "601857", "name": "中国石油"},
+		{"code": "600519.SH", "full_code": "600519.SH", "name": "贵州茅台"},
+		{"code": "601857.SH", "full_code": "601857.SH", "name": "中国石油"},
 	}
 	b, _ := json.Marshal(list)
 	if err := os.WriteFile(filepath.Join(dir, "stock_list.json"), b, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, _ := openQuote(t)
+	s.Codes.RefreshFromDataDir(dir)
 	s.DataDir = dir
 
 	data, ready, hint := s.Search("茅台", 10)
-	if !ready || hint != "ok" || len(data) != 1 || data[0]["code"] != "600519" {
+	if !ready || hint != "ok" || len(data) != 1 || data[0]["code"] != "600519.SH" {
 		t.Fatalf("data=%v ready=%v hint=%v", data, ready, hint)
 	}
-	// 空 DataDir → 未就绪
+	// 空 DataDir → 未就绪（新实例天然未就绪）
 	s2, _ := openQuote(t)
 	_, ready2, hint2 := s2.Search("茅台", 10)
 	if ready2 || hint2 == "ok" {

@@ -85,7 +85,7 @@ func TestListHKRetry(t *testing.T) {
 	if len(codes) != 2 {
 		t.Fatalf("codes=%d, 期望 2", len(codes))
 	}
-	if codes[0].Code != "00001" || codes[0].Name != "长和" {
+	if codes[0].Code != "00001.HK" || codes[0].Name != "长和" {
 		t.Fatalf("codes[0]=%+v", codes[0])
 	}
 	if atomic.LoadInt32(&calls) < 2 {

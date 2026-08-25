@@ -34,10 +34,7 @@ func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	thscode := toThscodeForQuote(code, p.IsIndex)
-	if thscode == "" {
-		return nil, ErrNotSupported
-	}
+	thscode := code
 	m, err := p.Raw.RealTime(ctx, thscode)
 	if err != nil {
 		if ifind.IsNotSupported(err) {
@@ -99,57 +96,12 @@ func (p *IFIndTech) HKIntraday(ctx context.Context, code string) ([]raw.HKIntrad
 	return nil, ErrNotSupported
 }
 
-func (p *IFIndTech) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
+func (p *IFIndTech) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
 	return nil, ErrNotSupported
 }
 
 func (p *IFIndTech) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
 	return nil, ErrNotSupported
-}
-
-func toThscode(code string) string {
-	cands := thscodeCandidates(code)
-	if len(cands) > 0 {
-		return cands[0]
-	}
-	return ""
-}
-
-func toThscodeForQuote(code string, isIndex func(string) bool) string {
-	code = strings.TrimSpace(code)
-	if isIndex != nil && isIndex(code) {
-		// 指数：000001.SH 等，按上证/深证区分
-		if code == "000001" {
-			return "000001.SH"
-		}
-		if strings.HasPrefix(code, "39") || strings.HasPrefix(code, "00") && len(code) == 6 {
-			// 深证指数 399001 等
-			return code + ".SZ"
-		}
-		// 默认指数按 SH
-		if len(code) == 6 {
-			return code + ".SH"
-		}
-	}
-	return toThscode(code)
-}
-
-func thscodeCandidates(code string) []string {
-	code = strings.TrimSpace(code)
-	if len(code) == 5 {
-		return []string{code + ".HK"}
-	}
-	// 北交所 43/82/83/87/92 → .BJ
-	if strings.HasPrefix(code, "43") || strings.HasPrefix(code, "82") || strings.HasPrefix(code, "83") || strings.HasPrefix(code, "87") || strings.HasPrefix(code, "92") {
-		return []string{code + ".BJ"}
-	}
-	if strings.HasPrefix(code, "60") || strings.HasPrefix(code, "68") || strings.HasPrefix(code, "90") || strings.HasPrefix(code, "50") || strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") || strings.HasPrefix(code, "58") {
-		return []string{code + ".SH"}
-	}
-	if strings.HasPrefix(code, "00") || strings.HasPrefix(code, "30") || strings.HasPrefix(code, "39") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") || strings.HasPrefix(code, "20") {
-		return []string{code + ".SZ"}
-	}
-	return nil
 }
 
 func parseFloat(s string) float64 {

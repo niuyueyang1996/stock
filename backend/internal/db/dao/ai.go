@@ -123,7 +123,7 @@ func (d *AIReportDAO) Upsert(code, name, reportJSON, modelName string) error {
 // Get 按 code 取报告；无则 nil
 func (d *AIReportDAO) Get(code string) *db.AIReport {
 	var r db.AIReport
-	if err := d.DB.Where("code = ?", code).First(&r).Error; err != nil {
+	if err := whereCode(d.DB, code).First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -251,7 +251,7 @@ func (d *AIFundflowReportDAO) Upsert(r *db.AIFundflowReport) error {
 // 否则取该 code 最近一条。
 func (d *AIFundflowReportDAO) GetLatest(code, window string) *db.AIFundflowReport {
 	var r db.AIFundflowReport
-	q := d.DB.Where("code = ?", code)
+	q := whereCode(d.DB, code)
 	if window != "" {
 		alias := map[string]string{"day": "1d", "week": "7d", "month": "30d"}[window]
 		if alias != "" {
@@ -321,7 +321,7 @@ func (d *AINewsReportDAO) Upsert(r *db.AINewsReport) error {
 // GetLatest 该 code 最近一条
 func (d *AINewsReportDAO) GetLatest(code string) *db.AINewsReport {
 	var r db.AINewsReport
-	if err := d.DB.Where("code = ?", code).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
+	if err := whereCode(d.DB, code).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -333,7 +333,9 @@ func (d *AINewsReportDAO) ListLatestByCodes(codes []string) []db.AINewsReport {
 	if len(codes) == 0 {
 		return rs
 	}
-	d.DB.Where("code IN (?)", codes).Order("as_of DESC, updated_at DESC").Find(&rs)
+	codesExp := make([]string, 0, len(codes)*2)
+	for _, c := range codes { codesExp = append(codesExp, codeCandidates(c)...) }
+	d.DB.Where("code IN ?", codesExp).Order("as_of DESC, updated_at DESC").Find(&rs)
 	seen := map[string]bool{}
 	out := make([]db.AINewsReport, 0, len(rs))
 	for _, r := range rs {
@@ -363,7 +365,7 @@ func (d *AITechReportDAO) Upsert(r *db.AITechReport) error {
 // GetLatest 该 code 最近一条
 func (d *AITechReportDAO) GetLatest(code string) *db.AITechReport {
 	var r db.AITechReport
-	if err := d.DB.Where("code = ?", code).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
+	if err := whereCode(d.DB, code).Order("as_of DESC, updated_at DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -375,7 +377,9 @@ func (d *AITechReportDAO) ListLatestByCodes(codes []string) []db.AITechReport {
 	if len(codes) == 0 {
 		return rs
 	}
-	d.DB.Where("code IN (?)", codes).Order("as_of DESC, updated_at DESC").Find(&rs)
+	codesExp := make([]string, 0, len(codes)*2)
+	for _, c := range codes { codesExp = append(codesExp, codeCandidates(c)...) }
+	d.DB.Where("code IN ?", codesExp).Order("as_of DESC, updated_at DESC").Find(&rs)
 	seen := map[string]bool{}
 	out := make([]db.AITechReport, 0, len(rs))
 	for _, r := range rs {
@@ -460,7 +464,7 @@ func (d *StockNewsCacheDAO) List(code string, limit int) []db.StockNewsCache {
 	if limit <= 0 {
 		limit = 50
 	}
-	d.DB.Where("code = ?", code).Order("news_time DESC").Limit(limit).Find(&rs)
+	whereCode(d.DB, code).Order("news_time DESC").Limit(limit).Find(&rs)
 	return rs
 }
 

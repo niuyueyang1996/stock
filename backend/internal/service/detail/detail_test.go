@@ -11,6 +11,7 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/indices"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
 )
@@ -43,6 +44,9 @@ func openDetail(t *testing.T) (*Service, *gorm.DB) {
 	})
 	idx := indices.New(g, nil, nil)
 	cal := calendar.New(g)
+	codes := marketcode.New()
+	// 预置基本 fullCode 映射，避免单测依赖外部 Build
+	codes.Build([]string{"600519.SH", "510300.SH", "000001.SZ"}, nil, []string{"00700.HK"}, nil)
 	s := &Service{
 		Cache:   dao.NewCacheDAO(g),
 		Quote:   quote.New(g),
@@ -52,7 +56,10 @@ func openDetail(t *testing.T) (*Service, *gorm.DB) {
 		IsIndex: func(code string) bool { return idx.GetIndexDef(code) != nil },
 		Cal:     cal,
 		Stocks:  dao.NewHoldingsDAO(g),
+		Codes:   codes,
 	}
+	s.Quote.Codes = codes
+	s.Live.Codes = codes
 	return s, g
 }
 
@@ -633,36 +640,42 @@ func TestAddDays(t *testing.T) {
 }
 
 func TestIsHKCode5(t *testing.T) {
-	if !isHKCode5("00700") {
+	codes := marketcode.New()
+	s := &Service{Codes: codes}
+	if !s.isHKCode5("00700.HK") {
 		t.Fatal("00700 应是港股五位码")
 	}
-	if isHKCode5("600519") {
+	if s.isHKCode5("600519.SH") {
 		t.Fatal("600519 非港股五位码")
 	}
-	if isHKCode5("700X0") {
+	if s.isHKCode5("700X0") {
 		t.Fatal("含非数字不应视为港股")
 	}
 }
 
 func TestIsETFCodeL(t *testing.T) {
-	for _, c := range []string{"510300", "159915", "588000", "516010"} {
-		if !isETFCodeL(c) {
+	codes := marketcode.New()
+	s := &Service{Codes: codes}
+	for _, c := range []string{"510300.SH", "159915.SZ", "588000.SH", "516010.SH"} {
+		if !s.isETFCodeL(c) {
 			t.Fatalf("%s 应为 ETF 前缀", c)
 		}
 	}
-	if isETFCodeL("600519") {
+	if s.isETFCodeL("600519.SH") {
 		t.Fatal("600519 非 ETF")
 	}
 }
 
 func TestInstDefaultTag(t *testing.T) {
-	if instDefaultTag("600519", false) != "个股" {
+	codes := marketcode.New()
+	s := &Service{Codes: codes}
+	if s.instDefaultTag("600519.SH", false) != "个股" {
 		t.Fatal("A股默认标签应为个股")
 	}
-	if instDefaultTag("510300", true) != "ETF" {
+	if s.instDefaultTag("510300.SH", true) != "ETF" {
 		t.Fatal("ETF 默认标签应为 ETF")
 	}
-	if instDefaultTag("00700", false) != "港股" {
+	if s.instDefaultTag("00700.HK", false) != "港股" {
 		t.Fatal("港股默认标签应为 港股")
 	}
 }
@@ -694,9 +707,9 @@ func TestPartialMissing(t *testing.T) {
 func TestStockDetail_HK_CurrencyFx(t *testing.T) {
 	s, g := openDetail(t)
 	// 港股五位码：即使 stocks 无记录，也应兜底 currency=HKD、tag=港股、fx_rate 输出。
-	seedBars(t, g, "00700", "2024-01-01", []float64{100, 110})
-	seedFinancial(t, g, "00700", "2024-06-30", 10000, 20000, 20)
-	status, body := s.StockDetail("00700", false, 15, "", false)
+	seedBars(t, g, "00700.HK", "2024-01-01", []float64{100, 110})
+	seedFinancial(t, g, "00700.HK", "2024-06-30", 10000, 20000, 20)
+	status, body := s.StockDetail("00700.HK", false, 15, "", false)
 	if status != 200 {
 		t.Fatalf("status = %d: %v", status, body)
 	}
@@ -814,6 +827,8 @@ func TestStockDetail_BackfillName_FromListFile(t *testing.T) {
 	// resolveStockName 从 DataDir 的 stock_list.json 回填名称并写 stocks 表。
 	dir := t.TempDir()
 	writeListFile(t, dir, "stock_list.json", []map[string]any{{"code": "600519", "name": "贵州茅台"}})
+	codes := marketcode.New()
+	codes.RefreshFromDataDir(dir)
 	g, err := db.Open(filepath.Join(t.TempDir(), "t2.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -826,12 +841,17 @@ func TestStockDetail_BackfillName_FromListFile(t *testing.T) {
 			return nil
 		}()
 	})
+	q := quote.New(g)
+	q.Codes = codes
+	lv := valuation.NewLive(g, testFx)
+	lv.Codes = codes
 	s := &Service{
-		Cache: dao.NewCacheDAO(g), Quote: quote.New(g), Live: valuation.NewLive(g, testFx),
+		Cache: dao.NewCacheDAO(g), Quote: q, Live: lv,
 		Fx: testFx, Indices: indices.New(g, nil, nil),
 		IsIndex: func(c string) bool { return false },
 		Cal:     calendar.New(g),
 		Stocks:  dao.NewHoldingsDAO(g), DataDir: dir,
+		Codes:   codes,
 	}
 	seedBars(t, g, "600519", "2024-01-01", []float64{100, 110})
 	status, body := s.StockDetail("600519", false, 15, "", false)

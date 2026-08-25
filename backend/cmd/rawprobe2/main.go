@@ -50,14 +50,15 @@ func main() {
 	// 5) 雪球公司资料（茅台总股本）
 	x := raw.NewXueqiu()
 	info := x.CompanyInfo(ctx, "SH600519")
-	if len(info) > 0 {
-		fmt.Printf("[xueqiu] keys=%v reg_asset=%v\n", func() []string {
+	if info != nil {
+		keys := func() []string {
 			var ks []string
-			for k := range info {
+			for k := range info.Extra {
 				ks = append(ks, k)
 			}
 			return ks
-		}(), info["reg_asset"])
+		}()
+		fmt.Printf("[xueqiu] keys=%v name=%v reg_asset=%v\n", keys, info.Name, info.StringField("reg_asset"))
 	} else {
 		fmt.Println("[xueqiu] FAIL")
 	}

@@ -6,10 +6,10 @@ package holdings
 import (
 	"errors"
 	"math"
-	"strings"
 	"time"
 
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // ErrInvalid 业务校验失败
@@ -18,6 +18,8 @@ var ErrInvalid = errors.New("invalid")
 // Service 持仓服务
 type Service struct {
 	DB *dao.HoldingsDAO
+	// Codes 常驻注册表（注入）
+	Codes *marketcode.Registry
 	// FxEnsure 交易日汇率确保（注入 fx 服务）
 	FxEnsure func(currency, rateDate string) *float64
 }
@@ -198,10 +200,10 @@ func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
 			v := round(h.AvgCost, 4)
 			avgCostCny = &v
 		}
-		isETF := isETFCode(h.Code) || tag == "ETF"
+		isETF := s.isETFCode(h.Code) || tag == "ETF"
 		// 输出舍入对齐 Python get_holdings：quantity 6 位 / avg_cost* 4 位 / total_buy* 2 位
 		out = append(out, map[string]any{
-			"code": h.Code, "quantity": round(h.Quantity, 6), "avg_cost": round(h.AvgCost, 4),
+			"code": h.Code, "full_code": h.Code, "quantity": round(h.Quantity, 6), "avg_cost": round(h.AvgCost, 4),
 			"avg_cost_cny": roundP(avgCostCny, 4), "total_buy": round(h.TotalBuy, 2),
 			"total_buy_cny": roundP(h.TotalBuyCny, 2),
 			"currency":      currency, "status": h.Status, "name": h.Name, "tag": tag,
@@ -212,10 +214,21 @@ func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
 	return out
 }
 
-// isETFCode 场内 ETF 代码判定（51/56/58/15/16 开头）
-func isETFCode(code string) bool {
-	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
-		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
+// isETFCode 场内 ETF 判定（委托 Codes，兼容全局回退）
+func (s *Service) isETFCode(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsETF(code)
+	}
+	bare := marketcode.Bare(code)
+	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
+}
+
+// isHKCode5 港股判定（委托 Codes，兼容全局回退）
+func (s *Service) isHKCode5(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsHK(code)
+	}
+	return marketcode.Suffix(code) == "HK"
 }
 
 // strptr 空白串返回 nil 指针，否则返回其地址（可选字段写库用）
@@ -237,7 +250,7 @@ func round(v float64, digits int) float64 {
 
 // resolveTradeCurrency 交易计价币种：五位港股代码一律 HKD，不信 stocks 表缺省 CNY。
 func (s *Service) resolveTradeCurrency(code string) string {
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		return "HKD"
 	}
 	return s.DB.CurrencyOf(code)
@@ -263,7 +276,7 @@ func (s *Service) tradeFx(code, tradeTime string, amount float64) (currency stri
 // ensureListedStock 建/纠正 stocks 的 market+currency；name 为空时冲突不覆盖已有名称。
 func (s *Service) ensureListedStock(code string, name *string, currency string) {
 	mkt := "sh"
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		mkt = "hk"
 	}
 	n := ""

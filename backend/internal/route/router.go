@@ -208,7 +208,10 @@ func Setup(r *gin.Engine, s *Services) {
 	// GET /api/indices/:code —— 指数详情（对齐 app/api/index.py /detail，走个股详情口径 is_index）：返回该指数行情、
 	// 估值/历史分位等；支持 query window（窗口，默认 15）。
 	api.GET("/indices/:code", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		window := 15
 		if v := c.Query("window"); v != "" {
 			window, _ = strconv.Atoi(v)
@@ -219,7 +222,10 @@ func Setup(r *gin.Engine, s *Services) {
 	// PUT /api/indices/:code —— 更新指数定义字段（对齐 app/api/index.py）：支持 name/symbol/legu_code/pe_source/pb_source；
 	// 指数不存在 404、无有效字段 400。
 	api.PUT("/indices/:code", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body map[string]any
 		_ = c.ShouldBindJSON(&body)
 		if s.Indices.GetIndexDef(code) == nil {
@@ -393,7 +399,10 @@ func Setup(r *gin.Engine, s *Services) {
 	// window(基本面窗口，默认 15)、as_of(回看某交易日)、index=1(指数模式返回 is_index)；
 	// 缓存缺失返回 409 CACHE_MISS，前端弹窗询问下载。
 	api.GET("/stocks/:code", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		partial := c.Query("partial") == "1"
 		window := 15
 		if v := c.Query("window"); v != "" {
@@ -407,7 +416,10 @@ func Setup(r *gin.Engine, s *Services) {
 	// ---- stocks 补充端点 ----
 	// GET /api/stocks/:code/kline —— 个股 K 线（对齐 Python kline）：query period（day/wk/month 等，默认 day）返回行情序列。
 	api.GET("/stocks/:code/kline", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		period := c.DefaultQuery("period", "day")
 		status, data, errMsg := s.Quote.Kline(code, period)
 		if errMsg != "" {
@@ -418,12 +430,18 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 	// GET /api/stocks/:code/cache-status —— 个股缓存状态（对齐 Python cache_status）：返回各缓存项是否已就绪，前端据此决定 409 提示。
 	api.GET("/stocks/:code/cache-status", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Detail.CacheStatus(code)})
 	})
 	// PUT /api/stocks/:code/tag —— 设置个股标签（对齐 Python set_tag）：body 需 tag/name，返回生效的 tag。
 	api.PUT("/stocks/:code/tag", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body struct {
 			Tag  string `json:"tag"`
 			Name string `json:"name"`
@@ -450,13 +468,19 @@ func Setup(r *gin.Engine, s *Services) {
 	// 预期增速/营收增速/支付率（对齐 Python：GET 返回 {code, growth, updated_at}）
 	// GET /api/stocks/:code/expected-growth —— 读取该股预期增速（对齐 app/api/stocks.py）：返回 growth/updated_at。
 	api.GET("/stocks/:code/expected-growth", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		g, ts := s.StockMeta.GetExpectedGrowth(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
 	// PUT /api/stocks/:code/expected-growth —— 设置预期增速：body 需 growth（必填），覆盖旧值并回写 updated_at。
 	api.PUT("/stocks/:code/expected-growth", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body struct {
 			Growth *float64 `json:"growth"`
 		}
@@ -469,13 +493,19 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 	// GET /api/stocks/:code/expected-revenue-growth —— 读取该股预期营收增速（对齐 app/api/stocks.py）：返回 growth/updated_at。
 	api.GET("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		g, ts := s.StockMeta.GetExpectedRevenueGrowth(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "growth": g, "updated_at": ts}})
 	})
 	// PUT /api/stocks/:code/expected-revenue-growth —— 设置预期营收增速：body 需 growth（必填）。
 	api.PUT("/stocks/:code/expected-revenue-growth", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body struct {
 			Growth *float64 `json:"growth"`
 		}
@@ -488,13 +518,19 @@ func Setup(r *gin.Engine, s *Services) {
 	})
 	// GET /api/stocks/:code/expected-payout —— 读取该股预期支付率（对齐 app/api/stocks.py）：返回 payout/updated_at。
 	api.GET("/stocks/:code/expected-payout", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		g, ts := s.StockMeta.GetExpectedPayout(code)
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"code": code, "payout": g, "updated_at": ts}})
 	})
 	// PUT /api/stocks/:code/expected-payout —— 设置预期支付率：body 需 payout（必填）。
 	api.PUT("/stocks/:code/expected-payout", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var raw map[string]any
 		_ = c.ShouldBindJSON(&raw)
 		var payout *float64
@@ -539,6 +575,10 @@ func Setup(r *gin.Engine, s *Services) {
 		}
 		if body.Code == "" || body.Side == "" || body.Price <= 0 || body.Quantity <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "code/side/price/quantity 必填"})
+			return
+		}
+		body.Code = normalizeCode(body.Code)
+		if !requireFullCode(c, body.Code) {
 			return
 		}
 		id, h, err := s.Holdings.RecordTrade(body.Code, body.Side, body.Price, body.Quantity,
@@ -590,7 +630,11 @@ func Setup(r *gin.Engine, s *Services) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "参数错误"})
 			return
 		}
-		h, err := s.Holdings.AdjustCost(c.Param("code"), body.Amount, body.DeltaQty,
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
+		h, err := s.Holdings.AdjustCost(code, body.Amount, body.DeltaQty,
 			body.Note, body.TradeTime, body.IsDividend, nil)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -612,4 +656,18 @@ func findStock(list any, code string) map[string]any {
 		}
 	}
 	return nil
+}
+
+// normalizeCode 仅做大小写与空白归一，不猜后缀
+func normalizeCode(code string) string {
+	return strings.ToUpper(strings.TrimSpace(code))
+}
+
+// requireFullCode 校验 fullCode 必须带后缀（.SH/.SZ/.HK/.BJ），裸码直接 400
+func requireFullCode(c *gin.Context, code string) bool {
+	if !strings.Contains(code, ".") {
+		c.JSON(http.StatusBadRequest, gin.H{"detail": "code 必须为 fullCode（如 000001.SZ / 00700.HK），不接受裸码"})
+		return false
+	}
+	return true
 }

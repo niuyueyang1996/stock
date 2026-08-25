@@ -932,9 +932,10 @@ function stockSearchInput() {
         rows.forEach((r) => {
           const o = document.createElement('div');
           o.className = 'stock-sug-item';
-          o.textContent = `${r.code} ${r.name}` + (r.market === 'hk' ? '（港股）' : r.market === 'etf' ? '（ETF）' : '');
+          const dispCode = r.full_code || r.code;
+          o.textContent = `${dispCode} ${r.name}` + (r.market === 'hk' ? '（港股）' : r.market === 'etf' ? '（ETF）' : '');
           o.onclick = () => {
-            input.value = `${r.code} ${r.name}`;
+            input.value = `${dispCode} ${r.name}`;
             sug.style.display = 'none';
             input.dispatchEvent(new Event('change'));
           };
@@ -949,10 +950,13 @@ function stockSearchInput() {
   return wrap;
 }
 
-// 从 "600519 贵州茅台" 解析 {code,name}
+// 从 "600519 贵州茅台" 或 "600519.SH 贵州茅台" 解析 {code,name}
 function parseStockChoice(text) {
-  const m = String(text || '').trim().match(/^(\d{5,6})\s*(.*)$/);
-  return m ? { code: m[1], name: m[2] || null } : null;
+  const m = String(text || '').trim().match(/^([A-Z0-9.]+)\s*(.*)$/i);
+  if (!m) return null;
+  let code = m[1].trim();
+  // 去掉后缀点后的 SH/SZ/HK/BJ，存裸码时由后端归一，这里保留 fullCode 供展示
+  return { code, name: m[2] || null };
 }
 
 

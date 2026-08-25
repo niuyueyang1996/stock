@@ -12,6 +12,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // QUANTILE_MIN_SAMPLES 分位样本下限（对齐 app/config.py）
@@ -24,6 +25,7 @@ type FxGetter func(currency, rateDate string) *float64
 type Service struct {
 	DB *gorm.DB
 	Fx FxGetter
+	Codes *marketcode.Registry
 	// dao 数据访问（SetDao 注入；估值序列/分位/当日估值落库，对齐 Python cache.py 层）
 	dao *dao.CacheDAO
 }
@@ -69,7 +71,7 @@ func (s *Service) getExpectedPayout(code string) *float64 {
 	return &g.Payout
 }
 
-// getSeries 估值历史序列（升序）
+// getSeries 估值历史序列（升序）；code 兼容 fullCode（内部 Bare 查库）
 func (s *Service) getSeries(code, indicator, period string, asOf string) []db.ValuationHistoryCache {
 	var rows []db.ValuationHistoryCache
 	q := s.DB.Where("code = ? AND indicator = ? AND period = ?", code, indicator, period)
@@ -520,7 +522,7 @@ func (s *Service) computeLiveSeriesFallback(code string, price *float64, asOf st
 	return out
 }
 
-// resolveLivePrice 读最近一次日收盘价（asOf 前），无则返回 nil
+// resolveLivePrice 读最近一次日收盘价（asOf 前），无则返回 nil；code 兼容 fullCode（内部 Bare）
 func (s *Service) resolveLivePrice(code, asOf string) *float64 {
 	var c db.DailyPriceCache
 	q := s.DB.Where("code = ?", code)
@@ -643,5 +645,11 @@ func itoa(n int) string {
 func (s *Service) isHKStock(code string) bool {
 	var cur string
 	_ = s.DB.Raw("SELECT COALESCE(currency,'CNY') FROM stocks WHERE code=?", code).Scan(&cur).Error
-	return cur == "HKD"
+	if cur == "HKD" {
+		return true
+	}
+	if s.Codes != nil {
+		return s.Codes.IsHK(code)
+	}
+	return marketcode.Suffix(code) == "HK"
 }

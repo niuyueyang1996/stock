@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -25,7 +26,7 @@ func periodDays(period string) int {
 }
 
 // clipPositive 从乐咕行列表取 valueCol 列，按 period 截取近 N 天 + 剔非正，返回升序
-func clipPositive(rows []map[string]any, valueCol, period string) []model.ValuationPoint {
+func clipPositive(rows []raw.LeguRow, valueCol, period string) []model.ValuationPoint {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -33,22 +34,18 @@ func clipPositive(rows []map[string]any, valueCol, period string) []model.Valuat
 	cutoff := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 	var pts []model.ValuationPoint
 	for _, r := range rows {
-		d := strv(r["date"])
+		d := r.Date
 		if len(d) > 10 {
 			d = d[:10]
 		}
 		if d == "" || d < cutoff {
 			continue
 		}
-		v, ok := r[valueCol]
-		if !ok {
+		v := r.ValueByColumn(valueCol)
+		if v == nil || *v <= 0 {
 			continue
 		}
-		f := numf(v)
-		if f == nil || *f <= 0 {
-			continue
-		}
-		pts = append(pts, model.ValuationPoint{Date: d, Value: *f})
+		pts = append(pts, model.ValuationPoint{Date: d, Value: *v})
 	}
 	return pts
 }
@@ -56,7 +53,7 @@ func clipPositive(rows []map[string]any, valueCol, period string) []model.Valuat
 // NormalizeIndexValuationHTTP 乐咕 HTTP 指数估值 → 指定周期序列。
 // 标准估值用整体法 add* 列（ttmPe/lyrPe/pb 为等权算术平均，对银行为主的指数虚高）。
 // pe 主取 addTtmPe、全 0/缺才回退 addLyrPe（恒指场景）；pb 取 addPb。
-func NormalizeIndexValuationHTTP(rows []map[string]any, indicator, period string) []model.ValuationPoint {
+func NormalizeIndexValuationHTTP(rows []raw.LeguRow, indicator, period string) []model.ValuationPoint {
 	if indicator == "pb" {
 		return clipPositive(rows, "addPb", period)
 	}

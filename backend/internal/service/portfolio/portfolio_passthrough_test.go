@@ -13,6 +13,7 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
@@ -50,8 +51,11 @@ func openPortfolioFull(t *testing.T, hkdRate *float64) (*Service, *holdings.Serv
 			_ = sqlDB.Close()
 		}
 	})
+	codes := marketcode.New()
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
+	h.Codes = codes
 	live := valuation.NewLive(g, nil)
+	live.Codes = codes
 	var fx FxGetter
 	if hkdRate != nil {
 		rate := *hkdRate
@@ -67,6 +71,7 @@ func openPortfolioFull(t *testing.T, hkdRate *float64) (*Service, *holdings.Serv
 	idx := indices.New(g, nil, nil)
 	s := New(g, h, live, &fakeQuote{}, fx, cache, idx)
 	s.Cal = calendar.New(g)
+	s.Codes = codes
 	return s, h, g, cache
 }
 
@@ -141,10 +146,10 @@ func TestPassthroughPortfolioCNY(t *testing.T) {
 func TestPassthroughPortfolioHKD(t *testing.T) {
 	rate := 0.9
 	s, h, g, _ := openPortfolioFull(t, &rate)
-	insertStock(g, "00700", "腾讯控股", "hk", "HKD")
-	buyStock(t, h, "00700", 100, "2026-01-01")
+	insertStock(g, "00700.HK", "腾讯控股", "hk", "HKD")
+	buyStock(t, h, "00700.HK", 100, "2026-01-01")
 	// 财务已是人民币：netProfit 100, netAssets 200, totalShares 1000 → ratio=0.1
-	seedFinancial(g, "00700", 1000, 100, 200)
+	seedFinancial(g, "00700.HK", 1000, 100, 200)
 
 	pf := portfolioPePf(t, s)
 	// value_cny = 100*10*0.9 = 900
@@ -533,26 +538,26 @@ func portfolioWeights(t *testing.T, s *Service) (map[string]float64, map[string]
 func TestFundflowHKParticipation(t *testing.T) {
 	s, h, g, _ := openPortfolioFull(t, fptr(0.9))
 	insertStock(g, "600519", "贵州茅台", "sh", "CNY")
-	insertStock(g, "00700", "腾讯控股", "hk", "HKD")
+	insertStock(g, "00700.HK", "腾讯控股", "hk", "HKD")
 	// as-of 锚点（weekday），避免测试依赖今天开盘
 	tradeDay, _ := s.resolveTradeDay("2026-07-15")
 
 	if _, _, err := h.RecordTrade("600519", "buy", 10, 500, 0, "2026-07-01 10:00:00", "", nil, false); err != nil {
 		t.Fatalf("buy A: %v", err)
 	}
-	if _, _, err := h.RecordTrade("00700", "buy", 50, 1000, 0, "2026-07-01 10:00:00", "", nil, false); err != nil {
+	if _, _, err := h.RecordTrade("00700.HK", "buy", 50, 1000, 0, "2026-07-01 10:00:00", "", nil, false); err != nil {
 		t.Fatalf("buy HK: %v", err)
 	}
 	// 分时五档：A股 main_net 100、港股 main_net 50 → 组合 150（港股参与求和）
 	_ = g.Exec(`INSERT INTO fundflow_15m_cache(code,trade_date,ts,main_net,super_large_net,large_net,medium_net,small_net,buy_amount,sell_amount,price)
 		VALUES('600519','` + tradeDay + `','09:35',100,50,30,20,0,200,50,10)`).Error
 	_ = g.Exec(`INSERT INTO fundflow_15m_cache(code,trade_date,ts,main_net,super_large_net,large_net,medium_net,small_net,buy_amount,sell_amount,price)
-		VALUES('00700','` + tradeDay + `','09:35',50,20,10,10,10,80,30,50)`).Error
+		VALUES('00700.HK','` + tradeDay + `','09:35',50,20,10,10,10,80,30,50)`).Error
 	// 当日五档汇总：A股 100 + 港股 50
 	_ = g.Exec(`INSERT INTO daily_fundflow_cache(code,trade_date,netamount,main_net,super_large_net,large_net,medium_net,small_net,xs_net,buy_amount,sell_amount)
 		VALUES('600519','` + tradeDay + `',80,100,60,40,20,-10,0,200,50)`).Error
 	_ = g.Exec(`INSERT INTO daily_fundflow_cache(code,trade_date,netamount,main_net,super_large_net,large_net,medium_net,small_net,xs_net,buy_amount,sell_amount)
-		VALUES('00700','` + tradeDay + `',40,50,30,20,10,-5,0,80,30)`).Error
+		VALUES('00700.HK','` + tradeDay + `',40,50,30,20,10,-5,0,80,30)`).Error
 
 	out := s.Fundflow(nil, "2026-07-15")
 	if out["covered"] != 2 {

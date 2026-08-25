@@ -49,10 +49,14 @@ func (m *Manager) FXRate(ctx context.Context) (*float64, error) {
 
 // ListAshare A股全列表
 func (m *Manager) ListAshare(ctx context.Context) ([]raw.MarketCode, error) {
+	type lister interface {
+		Name() string
+		ListAshare(ctx context.Context) ([]raw.MarketCode, error)
+	}
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
-		src, ok := s.(MarketListSource)
+		src, ok := s.(lister)
 		if !ok {
 			continue
 		}
@@ -79,10 +83,14 @@ func (m *Manager) ListAshare(ctx context.Context) ([]raw.MarketCode, error) {
 
 // ListETF ETF 列表
 func (m *Manager) ListETF(ctx context.Context) ([]raw.MarketCode, error) {
+	type lister interface {
+		Name() string
+		ListETF(ctx context.Context) ([]raw.MarketCode, error)
+	}
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
-		src, ok := s.(MarketListSource)
+		src, ok := s.(lister)
 		if !ok {
 			continue
 		}
@@ -109,10 +117,14 @@ func (m *Manager) ListETF(ctx context.Context) ([]raw.MarketCode, error) {
 
 // ListHK 港股列表
 func (m *Manager) ListHK(ctx context.Context) ([]raw.MarketCode, error) {
+	type lister interface {
+		Name() string
+		ListHK(ctx context.Context) ([]raw.MarketCode, error)
+	}
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {
-		src, ok := s.(MarketListSource)
+		src, ok := s.(lister)
 		if !ok {
 			continue
 		}

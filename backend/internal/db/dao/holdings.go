@@ -47,7 +47,7 @@ func NewHoldingsDAO(g *gorm.DB) *HoldingsDAO { return &HoldingsDAO{DB: g} }
 // CurrencyOf 该股币种（默认 CNY）
 func (d *HoldingsDAO) CurrencyOf(code string) string {
 	var cur string
-	d.DB.Raw("SELECT COALESCE(currency,'CNY') FROM stocks WHERE code=?", code).Scan(&cur)
+	d.DB.Raw("SELECT COALESCE(currency,'CNY') FROM stocks WHERE code IN ?", codeCandidates(code)).Scan(&cur)
 	if cur == "" {
 		return "CNY"
 	}
@@ -57,7 +57,7 @@ func (d *HoldingsDAO) CurrencyOf(code string) string {
 // TradesByCode 按录入顺序（id）取全部交易
 func (d *HoldingsDAO) TradesByCode(code string) []Trade {
 	var rows []Trade
-	d.DB.Where("code = ?", code).Order("id").Find(&rows)
+	d.DB.Where("code IN ?", codeCandidates(code)).Order("id").Find(&rows)
 	return rows
 }
 

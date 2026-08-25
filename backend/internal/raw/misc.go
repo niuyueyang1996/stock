@@ -1,7 +1,7 @@
 package raw
 
-// 百度股市通估值历史 + 雪球公司资料 + 巨潮分红 + 东财新闻原始接口。
-// 对齐 app/data/raw/raw_baidu.py / raw_news.py 及 akshare 封装源码。
+// 雪球公司资料 + 巨潮分红 + 东财新闻原始接口。
+// 对齐 app/data/raw/raw_news.py 及 akshare 封装源码。
 
 import (
 	"context"
@@ -9,92 +9,11 @@ import (
 	"crypto/cipher"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
-
-// ============ 百度股市通 ============
-
-// Baidu 百度客户端
-type Baidu struct{ c *Client }
-
-func NewBaidu() *Baidu { return &Baidu{c: NewClient()} }
-
-// ValuationPoint 估值历史点 {date: 'YYYY-MM-DD', value}
-type ValuationPoint struct {
-	Date  string
-	Value float64
-}
-
-// ValuationHist 百度股市通估值历史（gushitong.opendata）。
-// market: ab=A股 / hk=港股；indicator 如 '市盈率(TTM)'/'市净率'/'总市值'；period 如 '近一年'。
-// 失败/空返回 nil。
-func (b *Baidu) ValuationHist(ctx context.Context, code, market, indicator, period string) []ValuationPoint {
-	bts, err := b.c.Get(ctx, "https://gushitong.baidu.com/opendata", url.Values{
-		"openapi":         {"1"},
-		"dspName":         {"iphone"},
-		"tn":              {"tangram"},
-		"client":          {"app"},
-		"query":           {indicator},
-		"code":            {code},
-		"word":            {""},
-		"resource_id":     {"51171"},
-		"market":          {market},
-		"tag":             {indicator},
-		"chart_select":    {period},
-		"industry_select": {""},
-		"skip_industry":   {"1"},
-		"finClientType":   {"pc"},
-	})
-	if err != nil {
-		return nil
-	}
-	var data struct {
-		Result []struct {
-			DisplayData struct {
-				ResultData struct {
-					TplData struct {
-						Result struct {
-							ChartInfo []struct {
-								Body [][]any `json:"body"`
-							} `json:"chartInfo"`
-						} `json:"result"`
-					} `json:"tplData"`
-				} `json:"resultData"`
-			} `json:"DisplayData"`
-		} `json:"Result"`
-	}
-	if err := json.Unmarshal(bts, &data); err != nil {
-		return nil
-	}
-	if len(data.Result) == 0 || len(data.Result[0].DisplayData.ResultData.TplData.Result.ChartInfo) == 0 {
-		return nil
-	}
-	body := data.Result[0].DisplayData.ResultData.TplData.Result.ChartInfo[0].Body
-	var out []ValuationPoint
-	for _, row := range body {
-		if len(row) < 2 {
-			continue
-		}
-		dateS := strings.TrimPrefix(fmt.Sprintf("%v", row[0]), "Date(")
-		dateS = strings.TrimSuffix(dateS, ")")
-		if ts, err := strconv.ParseInt(dateS, 10, 64); err == nil && ts > 0 {
-			dateS = time.UnixMilli(ts).Format("2006-01-02")
-		}
-		val, err := strconv.ParseFloat(fmt.Sprintf("%v", row[1]), 64)
-		if err != nil {
-			continue
-		}
-		out = append(out, ValuationPoint{Date: dateS, Value: val})
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
 
 // ============ 雪球 ============
 
@@ -106,10 +25,70 @@ func NewXueqiu() *Xueqiu {
 	return x
 }
 
+// XueqiuCompanyInfo 雪球公司基本资料类型化返回（替代 map[string]any）。
+// 仅暴露常用字段，其余通过 Extra 透传原始 JSON 片段以保持向前兼容。
+type XueqiuCompanyInfo struct {
+	Symbol    string                     `json:"symbol"`
+	Name      string                     `json:"company_name"`
+	FullName  string                     `json:"gssw"`
+	Extra     map[string]json.RawMessage `json:"-"`
+	RawJSON   json.RawMessage            `json:"-"`
+}
+
+// UnmarshalJSON 保留全量字段至 Extra，并提取常用字段。
+func (x *XueqiuCompanyInfo) UnmarshalJSON(b []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	x.Extra = m
+	x.RawJSON = json.RawMessage(b)
+	// 尝试提取常用字段（大小写不敏感兼容）
+	var tmp struct {
+		Symbol string `json:"symbol"`
+		Name   string `json:"company_name"`
+		Gssw   string `json:"gssw"`
+	}
+	_ = json.Unmarshal(b, &tmp)
+	x.Symbol = tmp.Symbol
+	x.Name = tmp.Name
+	x.FullName = tmp.Gssw
+	// 兼容旧字段名 org_name_cn
+	if x.Name == "" {
+		var alt struct {
+			Name string `json:"org_name_cn"`
+		}
+		_ = json.Unmarshal(b, &alt)
+		x.Name = alt.Name
+	}
+	return nil
+}
+
+// Get 按原始键取字段（json.RawMessage）
+func (x *XueqiuCompanyInfo) Get(key string) (json.RawMessage, bool) {
+	if x == nil || x.Extra == nil {
+		return nil, false
+	}
+	v, ok := x.Extra[key]
+	return v, ok
+}
+
+// StringField 取字符串字段值
+func (x *XueqiuCompanyInfo) StringField(key string) string {
+	raw, ok := x.Get(key)
+	if !ok {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return strings.Trim(string(raw), `"`)
+}
+
 // CompanyInfo 雪球公司基本资料（f10/cn/company.json）。symbol 如 'SH601127'/'00700'。
-// 返回原始 data map；失败返回 nil。
-func (x *Xueqiu) CompanyInfo(ctx context.Context, symbol string) map[string]any {
-	// 先访问主页拿 cookie（雪球接口要求）
+// 失败返回 nil，成功返回类型化结构。
+func (x *Xueqiu) CompanyInfo(ctx context.Context, symbol string) *XueqiuCompanyInfo {
 	_, _ = x.c.Get(ctx, "https://xueqiu.com/", nil)
 	b, err := x.c.Get(ctx, "https://stock.xueqiu.com/v5/stock/f10/cn/company.json", url.Values{
 		"symbol": {symbol},
@@ -118,12 +97,12 @@ func (x *Xueqiu) CompanyInfo(ctx context.Context, symbol string) map[string]any 
 		return nil
 	}
 	var data struct {
-		Data map[string]any `json:"data"`
+		Data XueqiuCompanyInfo `json:"data"`
 	}
 	if err := json.Unmarshal(b, &data); err != nil {
 		return nil
 	}
-	return data.Data
+	return &data.Data
 }
 
 // ============ 巨潮 ============
@@ -219,19 +198,50 @@ func NewEMNews() *EMNews {
 	return &EMNews{c: c}
 }
 
+// emNewsRequest 东财新闻搜索请求体（类型化替代 map[string]any）
+type emNewsRequest struct {
+	UID           string                 `json:"uid"`
+	Keyword       string                 `json:"keyword"`
+	Type          []string               `json:"type"`
+	Client        string                 `json:"client"`
+	ClientType    string                 `json:"clientType"`
+	ClientVersion string                 `json:"clientVersion"`
+	Param         emNewsParamOuter       `json:"param"`
+}
+
+type emNewsParamOuter struct {
+	CmsArticleWebOld emNewsParam `json:"cmsArticleWebOld"`
+}
+
+type emNewsParam struct {
+	SearchScope string `json:"searchScope"`
+	Sort        string `json:"sort"`
+	PageIndex   int    `json:"pageIndex"`
+	PageSize    int    `json:"pageSize"`
+	PreTag      string `json:"preTag"`
+	PostTag     string `json:"postTag"`
+}
+
 // StockNews 个股近期新闻（search-api-web jsonp）。symbol 为裸代码。失败/空返回 nil。
 func (n *EMNews) StockNews(ctx context.Context, symbol string, limit int) []NewsItem {
 	if limit <= 0 {
 		limit = 20
 	}
-	inner := map[string]any{
-		"uid": "", "keyword": symbol, "type": []string{"cmsArticleWebOld"},
-		"client": "web", "clientType": "web", "clientVersion": "curr",
-		"param": map[string]any{
-			"cmsArticleWebOld": map[string]any{
-				"searchScope": "default", "sort": "default",
-				"pageIndex": 1, "pageSize": 10,
-				"preTag": "<em>", "postTag": "</em>",
+	inner := emNewsRequest{
+		UID:           "",
+		Keyword:       symbol,
+		Type:          []string{"cmsArticleWebOld"},
+		Client:        "web",
+		ClientType:    "web",
+		ClientVersion: "curr",
+		Param: emNewsParamOuter{
+			CmsArticleWebOld: emNewsParam{
+				SearchScope: "default",
+				Sort:        "default",
+				PageIndex:   1,
+				PageSize:    10,
+				PreTag:      "<em>",
+				PostTag:     "</em>",
 			},
 		},
 	}
@@ -245,7 +255,6 @@ func (n *EMNews) StockNews(ctx context.Context, symbol string, limit int) []News
 		return nil
 	}
 	text := string(b)
-	// jsonp: cb_stock_news({...})
 	i := strings.Index(text, "(")
 	j := strings.LastIndex(text, ")")
 	if i < 0 || j <= i {

@@ -19,7 +19,7 @@ func New(sources ...DividendSource) *Manager { return &Manager{sources: sources}
 
 // LatestDividend 最新已除权派息（逐源尝试）
 func (m *Manager) LatestDividend(ctx context.Context, code string) (*LatestDividend, error) {
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(nil, code)
 	var errs []error
 	var tried []string
 	for _, s := range m.sources {

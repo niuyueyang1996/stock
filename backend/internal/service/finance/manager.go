@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"stockanalyzer/internal/service/managerlog"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -57,6 +58,7 @@ func (m *MockFinance) DividendPerShare(ctx context.Context, code string) (*float
 // 逐源尝试，失败/不支持切下一个；全部失败返回聚合错误。
 type FinanceManager struct {
 	Fx     FxProvider // 当日 HKD→CNY（nil=缺汇率）
+	Codes  *marketcode.Registry
 	ashare []FinanceSource
 	hk     []FinanceSource
 }
@@ -67,9 +69,11 @@ func NewFinanceManager(fx FxProvider, ashare, hk []FinanceSource) *FinanceManage
 }
 
 // Financials 标准财务（人民币口径）。港股链内部注入汇率。
+// 入参为 fullCode（如 600519.SH / 00700.HK），按后缀选链，透传 fullCode 给 Provider（Provider 内部 Bare 查库、fullCode 调接口）。
+// 兼容裸码（测试/旧调用）：Bare 5位纯数字亦视为港股
 func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Financials, error) {
 	var chain []FinanceSource
-	if isHKCode(code) {
+	if m.isFinanceHK(code) {
 		chain = m.hk
 	} else {
 		chain = m.ashare
@@ -78,7 +82,7 @@ func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Fi
 	if m.Fx != nil {
 		fx = m.Fx()
 	}
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(m.Codes, code)
 	var errs []error
 	var tried []string
 	for _, s := range chain {
@@ -102,14 +106,15 @@ func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Fi
 }
 
 // DividendPerShare 最近年报每股股息(元，人民币口径)
+// 入参为 fullCode，透传 fullCode 给 Provider。兼容裸码
 func (m *FinanceManager) DividendPerShare(ctx context.Context, code string) (*float64, error) {
 	var chain []FinanceSource
-	if isHKCode(code) {
+	if m.isFinanceHK(code) {
 		chain = m.hk
 	} else {
 		chain = m.ashare
 	}
-	label := managerlog.FormatCode(code)
+	label := managerlog.FormatCode(m.Codes, code)
 	var errs []error
 	var tried []string
 	for _, s := range chain {
@@ -130,4 +135,12 @@ func (m *FinanceManager) DividendPerShare(ctx context.Context, code string) (*fl
 	}
 	log.Printf("[财务] 股息 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
+}
+
+// isFinanceHK 港股判定（委托 Codes，兼容全局回退）
+func (m *FinanceManager) isFinanceHK(code string) bool {
+	if m.Codes != nil {
+		return m.Codes.IsHK(code)
+	}
+	return marketcode.Suffix(code) == "HK"
 }

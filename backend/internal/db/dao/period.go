@@ -18,7 +18,7 @@ const (
 // GetPeriodPrices 周期K（[start,end]，升序）
 func (d *CacheDAO) GetPeriodPrices(table PeriodTable, code, start, end string) []db.PeriodPrice {
 	rows := []db.PeriodPrice{}
-	q := d.DB.Table(string(table)).Where("code = ?", code)
+	q := d.DB.Table(string(table)).Where("code IN ?", codeCandidates(code))
 	if start != "" {
 		q = q.Where("trade_date >= ?", start)
 	}

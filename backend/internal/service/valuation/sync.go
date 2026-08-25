@@ -24,6 +24,7 @@ var baiduIndicators = []struct{ Key, CN string }{
 func (s *Service) SetDao(d *dao.CacheDAO) { s.dao = d }
 
 // SyncSeries 拉取估值历史序列（1y/3y/5y 的 PE/PB）并缓存（照 Python sync_series）。
+// code 兼容 fullCode（如 600519.SH/00700.HK），内部 Bare 落库；market 按 fullCode 判港股。
 // 返回拉取统计 {"pe": n, "pb": n}（各周期成功数）。单源失败不中断。
 func (s *Service) SyncSeries(ctx context.Context, code string, bd *raw.Baidu) map[string]any {
 	stat := map[string]any{"pe": 0, "pb": 0}
@@ -54,6 +55,7 @@ func (s *Service) SyncSeries(ctx context.Context, code string, bd *raw.Baidu) ma
 }
 
 // ComputeQuantiles 全量估值（照 Python compute_quantiles）：
+// code 兼容 fullCode，Bare 落库/取值，fullCode 透传 ComputeLive 以正确折算汇率。
 // 拉序列缓存 → 实时值算 1y/3y/5y 分位落库 → 落库当日实时估值。
 // 返回 {"periods": {1y/3y/5y: {pe_pct,pb_pct,sample_days}}, "live": {...}}。
 func (s *Service) ComputeQuantiles(ctx context.Context, code string, now time.Time, price *float64, bd *raw.Baidu) map[string]any {

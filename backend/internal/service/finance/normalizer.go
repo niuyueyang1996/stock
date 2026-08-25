@@ -4,12 +4,12 @@ package finance
 // 对齐 app/data/normalizers.py：_ttm_from_rows / _detect_reporting_currency / normalize_financials_hk。
 
 import (
-	"fmt"
 	"log"
 	"math"
 	"strconv"
 	"strings"
 
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -64,15 +64,15 @@ func isAnnual(dateStr string) bool {
 }
 
 // ttmFromRows 近 9 期累计归母净利（降序）→ TTM：去年年报 + 最新累计 − 去年同期同月累计
-func ttmFromRows(rows []map[string]any) *float64 {
+func ttmFromRows(rows []raw.HKMultiRow) *float64 {
 	type seqItem struct {
 		d string
 		v *float64
 	}
 	var seq []seqItem
 	for _, r := range rows {
-		d := fd(fmt.Sprintf("%v", r["REPORT_DATE"]))
-		v := num(r["HOLDER_PROFIT"])
+		d := fd(r.ReportDate)
+		v := r.HolderProfit
 		if d != "" && v != nil {
 			seq = append(seq, seqItem{d, v})
 		}
@@ -149,25 +149,27 @@ func detectReportingCurrency(mvHKD, ttm, netAssets, emPE, emPB *float64, fxHKDCN
 }
 
 // NormalizeFinancialsHK 东财港股 F10（多期 + 主指标 MAX）→ Financials（统一人民币口径）
-func NormalizeFinancialsHK(multiRows []map[string]any, maxRow map[string]any, fxHKDCNY *float64) *model.Financials {
+func NormalizeFinancialsHK(multiRows []raw.HKMultiRow, maxRow *raw.HKMaxRow, fxHKDCNY *float64) *model.Financials {
 	if len(multiRows) == 0 {
 		return nil
 	}
 	latest := multiRows[0]
-	var annual map[string]any
-	for _, r := range multiRows {
-		if isAnnual(fmt.Sprintf("%v", r["REPORT_DATE"])) {
-			annual = r
+	var annual *raw.HKMultiRow
+	for i := range multiRows {
+		if isAnnual(multiRows[i].ReportDate) {
+			annual = &multiRows[i]
 			break
 		}
 	}
 	mx := maxRow
-	if mx == nil {
-		mx = map[string]any{}
-	}
 
-	shares := num(mx["ISSUED_COMMON_SHARES"])
-	bps := num(latest["BPS"])
+	shares := func() *float64 {
+		if mx == nil {
+			return nil
+		}
+		return mx.IssuedCommonShares
+	}()
+	bps := latest.BPS
 	var netAssets *float64
 	if bps != nil && shares != nil {
 		v := round2(*bps * *shares)
@@ -175,7 +177,7 @@ func NormalizeFinancialsHK(multiRows []map[string]any, maxRow map[string]any, fx
 	}
 	var annualBPS *float64
 	if annual != nil {
-		annualBPS = num(annual["BPS"])
+		annualBPS = annual.BPS
 	}
 	var lastYearNetAssets *float64
 	if annualBPS != nil && shares != nil {
@@ -184,9 +186,15 @@ func NormalizeFinancialsHK(multiRows []map[string]any, maxRow map[string]any, fx
 	}
 	ttm := ttmFromRows(multiRows)
 
+	var mvHKD, emPE, emPB *float64
+	if mx != nil {
+		mvHKD = mx.TotalMarketCap
+		emPE = mx.PETTM
+		emPB = mx.PBTM
+	}
 	currency := detectReportingCurrency(
-		num(mx["TOTAL_MARKET_CAP"]), ttm, netAssets,
-		num(mx["PE_TTM"]), num(mx["PB_TTM"]), fxHKDCNY,
+		mvHKD, ttm, netAssets,
+		emPE, emPB, fxHKDCNY,
 	)
 	if currency == nil || (*currency == "HKD" && fxHKDCNY == nil) {
 		return nil
@@ -205,17 +213,17 @@ func NormalizeFinancialsHK(multiRows []map[string]any, maxRow map[string]any, fx
 
 	var profitSeries, revenueSeries []map[string]any
 	for _, r := range multiRows {
-		rd := fd(fmt.Sprintf("%v", r["REPORT_DATE"]))
+		rd := fd(r.ReportDate)
 		if rd == "" {
 			continue
 		}
-		hp := num(r["HOLDER_PROFIT"])
+		hp := r.HolderProfit
 		if hp != nil {
 			profitSeries = append(profitSeries, map[string]any{
-				"report_date": rd, "net_profit": round2(*hp * k), "profit_yoy": num(r["HOLDER_PROFIT_YOY"]),
+				"report_date": rd, "net_profit": round2(*hp * k), "profit_yoy": r.HolderProfitYoY,
 			})
 		}
-		rev := num(r["OPERATE_INCOME"])
+		rev := r.OperateIncome
 		if rev != nil {
 			revenueSeries = append(revenueSeries, map[string]any{
 				"report_date": rd, "revenue": round2(*rev * k),
@@ -225,24 +233,30 @@ func NormalizeFinancialsHK(multiRows []map[string]any, maxRow map[string]any, fx
 
 	var annualHP, annualEPS, annualROE, annualRYoy, annualPYoy *float64
 	if annual != nil {
-		annualHP = num(annual["HOLDER_PROFIT"])
-		annualEPS = num(annual["BASIC_EPS"])
-		annualROE = num(annual["ROE_AVG"])
-		annualRYoy = num(annual["OPERATE_INCOME_YOY"])
-		annualPYoy = num(annual["HOLDER_PROFIT_YOY"])
+		annualHP = annual.HolderProfit
+		annualEPS = annual.BasicEPS
+		annualROE = annual.ROEAvg
+		annualRYoy = annual.OperateIncomeYoY
+		annualPYoy = annual.HolderProfitYoY
+	}
+
+	var dvPerShare, payoutRatio *float64
+	if mx != nil {
+		dvPerShare = cny(mx.DividendTTM)
+		payoutRatio = mx.DiviRatio
 	}
 
 	return &model.Financials{
-		ReportDate:        fd(fmt.Sprintf("%v", latest["REPORT_DATE"])),
-		Roe:               num(latest["ROE_AVG"]),
-		Roa:               num(latest["ROA"]),
-		RevenueYoy:        num(latest["OPERATE_INCOME_YOY"]),
-		ProfitYoy:         num(latest["HOLDER_PROFIT_YOY"]),
+		ReportDate:        fd(latest.ReportDate),
+		Roe:               latest.ROEAvg,
+		Roa:               latest.ROA,
+		RevenueYoy:        latest.OperateIncomeYoY,
+		ProfitYoy:         latest.HolderProfitYoY,
 		NetProfit:         cny(annualHP),
 		NetAssets:         cny(netAssets),
 		Eps:               cny(annualEPS),
-		DvPerShare:        cny(num(mx["DIVIDEND_TTM"])),
-		PayoutRatio:       num(mx["DIVI_RATIO"]),
+		DvPerShare:        dvPerShare,
+		PayoutRatio:       payoutRatio,
 		ProfitSeries:      profitSeries,
 		RevenueSeries:     revenueSeries,
 		TotalShares:       shares,

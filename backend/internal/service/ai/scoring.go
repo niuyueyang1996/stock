@@ -5,6 +5,7 @@ package ai
 
 import (
 	"crypto/md5"
+	"stockanalyzer/internal/service/marketcode"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -475,23 +476,13 @@ func autoTag(code, name string) string {
 	return "个股"
 }
 
-// isHKCodeL 是否港股代码（5 位纯数字）
-func isHKCodeL(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
-}
+// isHKCodeL 是否港股代码（fullCode 纯后缀判定）
+func isHKCodeL(code string) bool { return marketcode.Suffix(code) == "HK" }
 
-// isETFCodeL 是否场内基金代码前缀（51/56/58/15/16）
+// isETFCodeL 是否场内基金代码（Bare 前缀判定，无需注册表）
 func isETFCodeL(code string) bool {
-	return strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
-		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
+	bare := marketcode.Bare(code)
+	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
 }
 
 // slicesEq 两个字符串切片顺序、逐元素是否相等

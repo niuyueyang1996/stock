@@ -102,7 +102,7 @@ func TestTechManager_Kline(t *testing.T) {
 }
 
 func TestTechManager_HKIntraday(t *testing.T) {
-	days := []raw.HKIntradayDay{{Date: "2026-01-02", Prec: 10, Points: [][4]any{{"09:30", 10.0, 100.0, 1000.0}}}}
+	days := []raw.HKIntradayDay{{Date: "2026-01-02", Prec: 10, Points: []raw.HKIntradayPoint{{Time: "09:30", Price: 10.0, CumVol: 100.0, CumAmt: 1000.0}}}}
 	hit := &MockHKIntraday{Days: days}
 	if got, err := New(hit).HKIntraday(context.Background(), "00700"); err != nil || len(got) != 1 {
 		t.Fatalf("HKIntraday hit: %v %v", got, err)
@@ -117,7 +117,7 @@ func TestTechManager_HKIntraday(t *testing.T) {
 }
 
 func TestTechManager_IndexMinKline(t *testing.T) {
-	rows := [][]any{{"20260102_0930", "10", "11"}}
+	rows := []raw.IndexMinKlineRow{{Time: "20260102_0930", Open: 10, Close: 11}}
 	hit := &MockIndexMinKline{Rows: rows}
 	if got, err := New(hit).IndexMinKline(context.Background(), "sh000001", 320); err != nil || len(got) != 1 {
 		t.Fatalf("IndexMinKline hit: %v %v", got, err)

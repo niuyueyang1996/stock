@@ -77,16 +77,16 @@ func (s *Service) GetIndexDefs() []db.IndexDef {
 	return rows
 }
 
-// GetIndexDef 单指数
+// GetIndexDef 单指数（严格 fullCode：000300.SH）
 func (s *Service) GetIndexDef(code string) *db.IndexDef {
 	var r db.IndexDef
-	if err := s.DB.Where("code = ?", code).First(&r).Error; err != nil {
-		return nil
+	if err := s.DB.Where("code = ?", code).First(&r).Error; err == nil {
+		return &r
 	}
-	return &r
+	return nil
 }
 
-// UpdateIndexDef 更新指数定义（code 不变）
+// UpdateIndexDef 更新指数定义（code 不变，严格 fullCode）
 func (s *Service) UpdateIndexDef(code string, fields map[string]any) error {
 	return s.DB.Model(&db.IndexDef{}).Where("code = ?", code).Updates(fields).Error
 }
@@ -207,10 +207,10 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 	if def.LeguCode != nil && *def.LeguCode != "" && def.PeSource == "legu" {
 		rows := s.Lg.IndexPEHist(ctx, *def.LeguCode)
 		for _, r := range rows {
-			d, _ := r["date"].(string)
-			v := numV(r["addTtmPe"])
+			d := r.Date
+			v := r.AddTtmPe
 			if v == nil {
-				v = numV(r["addLyrPe"])
+				v = r.AddLyrPe
 			}
 			if d == "" || v == nil {
 				continue
@@ -220,8 +220,8 @@ func (s *Service) RefreshOne(ctx context.Context, code string) error {
 		}
 		if pbRows := s.Lg.IndexPBHist(ctx, *def.LeguCode); len(pbRows) > 0 {
 			for _, r := range pbRows {
-				d, _ := r["date"].(string)
-				v := numV(r["addPb"])
+				d := r.Date
+				v := r.AddPb
 				if d == "" || v == nil {
 					continue
 				}

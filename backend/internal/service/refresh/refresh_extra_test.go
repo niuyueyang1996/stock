@@ -451,6 +451,6 @@ func TestSyncRealtimeQuote(t *testing.T) {
 // TestSyncPeriodKlineNilTencent Tencent 未装配 → 直接返回不 panic、不写库
 func TestSyncPeriodKlineNilTencent(t *testing.T) {
 	s, _, _ := openRefreshBatch(t)
-	s.Tencent = nil
+	s.Tech = nil
 	s.SyncPeriodKline("600519", false) // 不应 panic
 }

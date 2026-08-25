@@ -34,7 +34,6 @@ type TickRow struct {
 // Tencent 腾讯客户端
 type Tencent struct {
 	c *Client
-	// 分笔快照与游标（进程内缓存，重启失效）。key = code + "|" + date
 	mu       sync.Mutex
 	snapshot map[string][]TickRow
 	cursor   map[string]tickCursor
@@ -121,8 +120,6 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 		startPage = cur.page
 		afterTS = cur.ts
 	}
-
-	// 自愈：游标末笔时间超前于当前时刻 → 昨日残留，重置快照全量重拉
 	if afterTS != "" && afterTS[:5] > time.Now().Format("15:04") {
 		t.mu.Lock()
 		delete(t.snapshot, key)
@@ -156,7 +153,7 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 				}
 			}
 			if _, ok := rowsByPage[p+tickBatch-1]; !ok {
-				break // 批尾为空页 → 翻完
+				break
 			}
 			p += tickBatch
 		}
@@ -214,7 +211,6 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// 防同股并发：已有线程把游标推进到本次末页之后 → 本次结果已被合并
 	if cur, ok := t.cursor[key]; ok && cur.page >= lastPage+1 {
 		snap := t.snapshot[key]
 		log.Printf("[tencent] 分笔 %s 网络 0页(并发已合并) 快照 %d笔", code, len(snap))
@@ -228,8 +224,9 @@ func (t *Tencent) FetchTicks(ctx context.Context, code string) []TickRow {
 	return snap
 }
 
-// QuoteRaw 腾讯实时行情原始字段（qt.gtimg.cn，~分隔）。失败返回 nil。
-func (t *Tencent) QuoteRaw(ctx context.Context, symbol string) []string {
+// QuoteRaw 腾讯实时行情原始字段（qt.gtimg.cn，~分隔）。失败返回 nil。入参为 fullCode（如 600519.SH / 00700.HK）。
+func (t *Tencent) QuoteRaw(ctx context.Context, fullCode string) []string {
+	symbol := toSymbol(fullCode)
 	text, err := t.c.GetGBK(ctx, "https://qt.gtimg.cn/q="+symbol, nil)
 	if err != nil {
 		return nil
@@ -241,16 +238,58 @@ func (t *Tencent) QuoteRaw(ctx context.Context, symbol string) []string {
 	return strings.Split(strings.Trim(strings.Trim(text[eq+1:], "\";"), ";"), "~")
 }
 
-// HKQuoteRaw 港股实时行情原始字段
-func (t *Tencent) HKQuoteRaw(ctx context.Context, code string) []string {
-	return t.QuoteRaw(ctx, "hk"+code)
+// HKQuoteRaw 港股实时行情原始字段 入参为 fullCode（如 00700.HK）
+func (t *Tencent) HKQuoteRaw(ctx context.Context, fullCode string) []string {
+	return t.QuoteRaw(ctx, fullCode)
 }
 
-// IndexMinKline 指数分钟K线（ifzq mkline，m1 粒度）。每行 [时间戳YYYYMMDDHHMM, 开, 收, 高, 低, 量(手), {}, 涨跌幅]
-func (t *Tencent) IndexMinKline(ctx context.Context, symbol string, count int) [][]any {
+// IndexMinKlineRow 指数分钟K线类型化单行（避免 [][]any）
+type IndexMinKlineRow struct {
+	Time   string
+	Open   float64
+	Close  float64
+	High   float64
+	Low    float64
+	Volume float64
+	Amount float64
+}
+
+// parseFloatRaw 将 json.RawMessage 解析为 float64（兼容数值与字符串数值）
+func parseFloatRaw(raw json.RawMessage) float64 {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+	s := strings.TrimSpace(string(raw))
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = strings.TrimSpace(s[1 : len(s)-1])
+	}
+	if s == "" {
+		return 0
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f
+	}
+	return 0
+}
+
+// parseStringRaw 将 json.RawMessage 解析为字符串（去引号）
+func parseStringRaw(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return strings.Trim(string(raw), `"`)
+}
+
+// IndexMinKline 指数分钟K线（ifzq mkline，m1 粒度）。每行含 时间/开高低收/量额。入参为 fullCode
+func (t *Tencent) IndexMinKline(ctx context.Context, fullCode string, count int) []IndexMinKlineRow {
 	if count <= 0 {
 		count = 320
 	}
+	symbol := toSymbol(fullCode)
 	b, err := t.c.GetRaw(ctx, "https://ifzq.gtimg.cn/appstock/app/kline/mkline", fmt.Sprintf("param=%s,m1,,%d", symbol, count))
 	if err != nil {
 		return nil
@@ -265,26 +304,59 @@ func (t *Tencent) IndexMinKline(ctx context.Context, symbol string, count int) [
 	if !ok {
 		return nil
 	}
-	var m1 [][]any
-	if raw, ok := node["m1"]; ok {
-		_ = json.Unmarshal(raw, &m1)
+	raw, ok := node["m1"]
+	if !ok {
+		return nil
 	}
-	return m1
+	var rawRows [][]json.RawMessage
+	if err := json.Unmarshal(raw, &rawRows); err != nil {
+		return nil
+	}
+	out := make([]IndexMinKlineRow, 0, len(rawRows))
+	for _, r := range rawRows {
+		if len(r) == 0 {
+			continue
+		}
+		row := IndexMinKlineRow{}
+		row.Time = parseStringRaw(r[0])
+		if len(r) > 1 {
+			row.Open = parseFloatRaw(r[1])
+		}
+		if len(r) > 2 {
+			row.Close = parseFloatRaw(r[2])
+		}
+		if len(r) > 3 {
+			row.High = parseFloatRaw(r[3])
+		}
+		if len(r) > 4 {
+			row.Low = parseFloatRaw(r[4])
+		}
+		if len(r) > 5 {
+			row.Volume = parseFloatRaw(r[5])
+		}
+		if len(r) > 6 {
+			row.Amount = parseFloatRaw(r[6])
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
-// IndexDaily 指数日K（腾讯 fqkline，qfq）。start/end 为空拉全量（约 400 根）。
-func (t *Tencent) IndexDaily(ctx context.Context, symbol, start, end string) [][]string {
+// IndexDaily 指数日K（腾讯 fqkline，qfq）。start/end 为空拉全量（约 400 根）。入参为 fullCode
+func (t *Tencent) IndexDaily(ctx context.Context, fullCode, start, end string) [][]string {
+	symbol := toSymbol(fullCode)
 	return t.fqkline(ctx, symbol, "day", start, end, 400, true)
 }
 
-// Kline 腾讯 fqkline K线（qfq），period ∈ day/week/month，非东财源。
-func (t *Tencent) Kline(ctx context.Context, symbol, period, start, end string, count int) [][]string {
+// Kline 腾讯 fqkline K线（qfq），period ∈ day/week/month，非东财源。入参为 fullCode
+func (t *Tencent) Kline(ctx context.Context, fullCode, period, start, end string, count int) [][]string {
 	if period == "" {
 		period = "day"
 	}
 	if count <= 0 {
 		count = 800
 	}
+	symbol := toSymbol(fullCode)
 	return t.fqkline(ctx, symbol, period, start, end, count, false)
 }
 
@@ -305,31 +377,31 @@ func (t *Tencent) fqkline(ctx context.Context, symbol, period, start, end string
 	if !ok {
 		return nil
 	}
-	var rows [][]any
+	var rawRows [][]json.RawMessage
 	if indexOnly {
 		if raw, ok := node["qfqday"]; ok {
-			_ = json.Unmarshal(raw, &rows)
+			_ = json.Unmarshal(raw, &rawRows)
 		}
-		if len(rows) == 0 {
+		if len(rawRows) == 0 {
 			if raw, ok := node["day"]; ok {
-				_ = json.Unmarshal(raw, &rows)
+				_ = json.Unmarshal(raw, &rawRows)
 			}
 		}
 	} else {
 		if raw, ok := node["qfq"+period]; ok {
-			_ = json.Unmarshal(raw, &rows)
+			_ = json.Unmarshal(raw, &rawRows)
 		}
-		if len(rows) == 0 {
+		if len(rawRows) == 0 {
 			if raw, ok := node[period]; ok {
-				_ = json.Unmarshal(raw, &rows)
+				_ = json.Unmarshal(raw, &rawRows)
 			}
 		}
 	}
-	if len(rows) == 0 {
+	if len(rawRows) == 0 {
 		return nil
 	}
-	out := make([][]string, 0, len(rows))
-	for _, r := range rows {
+	out := make([][]string, 0, len(rawRows))
+	for _, r := range rawRows {
 		if len(r) == 0 {
 			continue
 		}
@@ -338,23 +410,38 @@ func (t *Tencent) fqkline(ctx context.Context, symbol, period, start, end string
 			if i >= 6 {
 				break
 			}
-			row = append(row, fmt.Sprintf("%v", v))
+			row = append(row, parseStringRaw(v))
+			if row[len(row)-1] == "" {
+				// 兜底：数值转字符串
+				row[len(row)-1] = fmt.Sprintf("%v", parseFloatRaw(v))
+				if row[len(row)-1] == "0" && strings.TrimSpace(string(v)) == "null" {
+					row[len(row)-1] = ""
+				}
+			}
 		}
 		out = append(out, row)
 	}
 	return out
 }
 
+// HKIntradayPoint 港股分时单点（类型化替代 [4]any）
+type HKIntradayPoint struct {
+	Time   string
+	Price  float64
+	CumVol float64
+	CumAmt float64
+}
+
 // HKIntradayDay 港股单日分时
 type HKIntradayDay struct {
 	Date   string
 	Prec   float64
-	Points [][4]any // time, price, cum_vol, cum_amount
+	Points []HKIntradayPoint
 }
 
-// HKIntraday 港股近5个交易日分时（appstock/app/day/query）。最新在前。
-func (t *Tencent) HKIntraday(ctx context.Context, code string) []HKIntradayDay {
-	symbol := "hk" + code
+// HKIntraday 港股近5个交易日分时（appstock/app/day/query）。最新在前。入参为 fullCode（如 00700.HK）
+func (t *Tencent) HKIntraday(ctx context.Context, fullCode string) []HKIntradayDay {
+	symbol := toSymbol(fullCode)
 	b, err := t.c.Get(ctx, "https://web.ifzq.gtimg.cn/appstock/app/day/query", url.Values{
 		"code": {symbol},
 	})
@@ -373,24 +460,29 @@ func (t *Tencent) HKIntraday(ctx context.Context, code string) []HKIntradayDay {
 	}
 	var node struct {
 		Data []struct {
-			Date string   `json:"date"`
-			Prec any      `json:"prec"`
-			Data []string `json:"data"`
+			Date string          `json:"date"`
+			Prec json.RawMessage `json:"prec"`
+			Data []string        `json:"data"`
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(nodeRaw, &node)
 	var out []HKIntradayDay
 	for _, item := range node.Data {
-		d := fmt.Sprintf("%v", item.Date)
+		d := item.Date
+		// 兼容数值日期
+		if len(d) == 0 {
+			d = parseStringRaw(item.Prec) // fallback, not correct but avoid panic
+		}
 		if len(d) != 8 {
-			continue
+			// 尝试从 RawMessage 解析
+			d = strings.Trim(string(item.Date), `"`)
+			if len(d) != 8 {
+				continue
+			}
 		}
 		dateS := d[0:4] + "-" + d[4:6] + "-" + d[6:8]
-		prec := 0.0
-		if f, err := strconv.ParseFloat(fmt.Sprintf("%v", item.Prec), 64); err == nil {
-			prec = f
-		}
-		var points [][4]any
+		prec := parseFloatRaw(item.Prec)
+		var points []HKIntradayPoint
 		for _, row := range item.Data {
 			f := strings.Fields(row)
 			if len(f) < 4 {
@@ -402,7 +494,7 @@ func (t *Tencent) HKIntraday(ctx context.Context, code string) []HKIntradayDay {
 			if err1 != nil || err2 != nil || err3 != nil {
 				continue
 			}
-			points = append(points, [4]any{f[0], price, cumVol, cumAmt})
+			points = append(points, HKIntradayPoint{Time: f[0], Price: price, CumVol: cumVol, CumAmt: cumAmt})
 		}
 		if len(points) > 0 {
 			out = append(out, HKIntradayDay{Date: dateS, Prec: prec, Points: points})
@@ -411,9 +503,24 @@ func (t *Tencent) HKIntraday(ctx context.Context, code string) []HKIntradayDay {
 	return out
 }
 
-// toSymbol 代码→行情符号（对齐 app/data/base.py to_symbol）
+// toSymbol 代码→行情符号（兼容 fullCode：000001.SH/SZ/HK 先按后缀，裸码按前缀）
+// 严格 fullCode 优先：含后缀时按后缀定市场，裸码才走前缀/5位港股兜底
 func toSymbol(code string) string {
-	// 对齐 Python to_symbol：沪 60/68/90/50/51/56/58；深 00/30/39/15/16/20；北 43/82/83/87/92
+	if idx := lastDot(code); idx >= 0 {
+		bare := code[:idx]
+		suf := code[idx+1:]
+		switch suf {
+		case "HK":
+			return "hk" + bare
+		case "BJ":
+			return "bj" + bare
+		case "SH":
+			return "sh" + bare
+		case "SZ":
+			return "sz" + bare
+		}
+		code = bare
+	}
 	if isHKCode(code) {
 		return "hk" + code
 	}
@@ -434,8 +541,11 @@ func toSymbol(code string) string {
 	return code
 }
 
-// isHKCode 五位纯数字代码为港股（对齐 base.py）
+// isHKCode 港股判定（兼容 fullCode：00700.HK 先剥后缀）
 func isHKCode(code string) bool {
+	if idx := lastDot(code); idx >= 0 {
+		code = code[:idx]
+	}
 	if len(code) != 5 {
 		return false
 	}
@@ -447,8 +557,18 @@ func isHKCode(code string) bool {
 	return true
 }
 
+// lastDot 兼容 fullCode 的后缀剥离（00700.HK → 00700）
+func lastDot(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '.' {
+			return i
+		}
+	}
+	return -1
+}
+
 // HKNames 腾讯批量港股中文名（qt.gtimg.cn v_hk 段，50 个一批，GBK；
-// 对齐 Python _fetch_hk_names）。批间并发（8 路），返回 code→中文名，单批失败跳过。
+// 对齐 Python _fetch_hk_names）。批间并发（8 路），返回 code→中文名，单批失败跳过。入参为 fullCode
 func (t *Tencent) HKNames(ctx context.Context, codes []string) map[string]string {
 	names := map[string]string{}
 	const (
@@ -467,7 +587,7 @@ func (t *Tencent) HKNames(ctx context.Context, codes []string) map[string]string
 		}
 		syms := make([]string, 0, end-i)
 		for _, c := range codes[i:end] {
-			syms = append(syms, "hk"+c)
+			syms = append(syms, toSymbol(c))
 		}
 		chunks = append(chunks, chunk{idx: i, syms: syms})
 	}

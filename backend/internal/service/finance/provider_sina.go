@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -41,14 +42,9 @@ type sinaMatrix struct {
 }
 
 // fetchMatrix 拉取新浪财务摘要(gjzb)并按"指标→报告期→值"重组为矩阵
+// 入参为 fullCode（如 600519.SH / 000001.SZ），直接透传 fullCode 给 raw 层
 func (a *AshareFinance) fetchMatrix(ctx context.Context, code string) (*sinaMatrix, error) {
-	paper := code
-	if strings.HasPrefix(code, "6") {
-		paper = "sh" + code
-	} else {
-		paper = "sz" + code
-	}
-	data, err := a.sina.FinanceReport(ctx, paper, "gjzb")
+	data, err := a.sina.FinanceReport(ctx, code, "gjzb")
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +58,8 @@ func (a *AshareFinance) fetchMatrix(ctx context.Context, code string) (*sinaMatr
 			continue
 		}
 		m.periods = append(m.periods, p)
-		if list, ok := data.ReportList[p]; ok {
-			for _, item := range list.Data {
+		if entry, ok := data.ReportEntry(p); ok {
+			for _, item := range entry.Data {
 				title := item.ItemTitle
 				if m.cells[title] == nil {
 					m.cells[title] = map[string]any{}
@@ -87,8 +83,9 @@ func (m *sinaMatrix) cell(indicator string, period string) *float64 {
 }
 
 // totalShares 总股本(股)：优先腾讯实时「总市值(亿元)×1e8 ÷ 现价」，送转次日即正确
+// 入参为 fullCode，直接透传 fullCode 给 raw 层
 func (a *AshareFinance) totalShares(ctx context.Context, code string) *float64 {
-	parts := a.tx.QuoteRaw(ctx, toSymbol(code))
+	parts := a.tx.QuoteRaw(ctx, code)
 	if parts != nil && len(parts) > 45 {
 		mcap := num(parts[45])
 		price := num(parts[3])
@@ -101,6 +98,7 @@ func (a *AshareFinance) totalShares(ctx context.Context, code string) *float64 {
 }
 
 // dividendInfo 最近财年每股总股息 + 报告期（东财 RPT_SHAREBONUS_DET，按 REPORT_DATE 年份累加/10 的静态财年）
+// 入参为 fullCode，Bare 用于 DB 过滤（SECURITY_CODE），fullCode 用于 API 区分
 // 可用财年 2025 → 该年 REPORT 年=2025 的所有 PRETAX_BONUS_RMB 之和/10；东财不可用返回 nil。
 func (a *AshareFinance) dividendInfo(ctx context.Context, code string) (*float64, *string) {
 	if a.em != nil {
@@ -176,8 +174,9 @@ func atoiYear(s string) (int, error) {
 func formatYear(n int) string { return fmt.Sprintf("%04d", n) }
 
 // Financials 拉取 A 股标准财务（人民币口径）：财务摘要矩阵 + 实时总股本 + 东财分红
+// 入参为 fullCode（000001.SZ/SH 区分），Bare 用于 DB 侧，fullCode 用于 API 层面；兼容裸码
 func (a *AshareFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
-	if isHKCode(code) {
+	if marketcode.Suffix(code) == "HK" {
 		return nil, ErrNotSupported
 	}
 	m, err := a.fetchMatrix(ctx, code)
@@ -189,8 +188,9 @@ func (a *AshareFinance) Financials(ctx context.Context, code string, fxHKDCNY *f
 }
 
 // DividendPerShare 最近年报每股股息（元，人民币口径）
+// 入参为 fullCode；兼容裸码
 func (a *AshareFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
-	if isHKCode(code) {
+	if marketcode.Suffix(code) == "HK" {
 		return nil, ErrNotSupported
 	}
 	dv, _ := a.dividendInfo(ctx, code)
@@ -309,13 +309,3 @@ func availableFiscalYear(now time.Time) string {
 	}
 	return fmt.Sprintf("%04d", y-1)
 }
-
-// toSymbol 代码→行情符号
-func toSymbol(code string) string {
-	if strings.HasPrefix(code, "6") {
-		return "sh" + code
-	}
-	return "sz" + code
-}
-
-var _ = fmt.Sprintf

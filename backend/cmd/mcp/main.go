@@ -18,6 +18,7 @@ import (
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/datamanage"
@@ -104,6 +105,9 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	infraMgr := service.InfraManager(rc)
 
 	fxSvc := fx.New(infraMgr, dao.NewFxDAO(gdb), holdingsDAO)
+	codes := marketcode.New()
+	codes.StartupLoad(gdb, cfg.DataDir)
+	isIndex := codes.IsIndex
 	holdSvc := holdings.New(holdingsDAO, func(currency, rateDate string) *float64 {
 		if currency == "CNY" {
 			one := 1.0
@@ -111,8 +115,10 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 		}
 		return fxSvc.EnsureFxForDate(context.Background(), currency, rateDate)
 	})
+	holdSvc.Codes = codes
 
 	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
+	fm.Codes = codes
 	leguCode := func(code string) *string {
 		var c string
 		gdb.Raw("SELECT legu_code FROM index_defs WHERE code=?", code).Scan(&c)
@@ -123,16 +129,13 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	}
 	vm := service.NewValuationManager(rc, leguCode)
 	liveSvc := valuation.NewLive(gdb, fxSvc.GetFxRateCNY)
+	liveSvc.Codes = codes
 	jm := jobs.New()
 	calSvc := calendar.New(gdb)
 	settingsSvc := settings.New(cfgDAO)
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
-	isIndex := func(code string) bool {
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", code).Scan(&n)
-		return n > 0
-	}
+	quoteSvc.Codes = codes
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
 	techMgr := service.TechManager(rc, isIndex)
@@ -140,6 +143,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	rfSvc.Baidu = bd
 	rfSvc.Tech = techMgr
 	rfSvc.Cal = calSvc
+	rfSvc.Codes = codes
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = isIndex
 	holdings.SetIndexChecker(rfSvc.IsIndex)
@@ -147,6 +151,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	idxSvc.Cache = cacheDAO
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY, cacheDAO, idxSvc)
 	portSvc.Cal = calSvc
+	portSvc.Codes = codes
 	aiSvc := ai.New(gdb, ai.NewOpenAICompatClient(), cfgDAO, cacheDAO,
 		dao.NewAIModelDAO(gdb), dao.NewAIReportDAO(gdb), dao.NewTagPrefDAO(gdb),
 		quoteSvc, liveSvc, portSvc, fxSvc)
@@ -169,11 +174,10 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	detailSvc := &detail.Service{
 		Cache: cacheDAO, Quote: quoteSvc, Live: liveSvc, Fx: fxSvc.GetFxRateCNY,
 		Indices: idxSvc, IsIndex: rfSvc.IsIndex, Cal: calSvc, Stocks: holdingsDAO, DataDir: cfg.DataDir,
+		Codes: codes,
 	}
 	stockMetaSvc := stockmeta.New(gdb)
 	dataManageSvc := datamanage.New(gdb, holdSvc)
-	rfSvc.Tencent = tx
-	rfSvc.Sina = sina
 	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }

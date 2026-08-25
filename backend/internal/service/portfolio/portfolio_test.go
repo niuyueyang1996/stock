@@ -9,6 +9,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/service/holdings"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/valuation"
 )
@@ -38,9 +39,13 @@ func openPortfolio(t *testing.T) (*Service, *holdings.Service, *gorm.DB) {
 			_ = sqlDB.Close()
 		}
 	})
+	codes := marketcode.New()
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
+	h.Codes = codes
 	live := valuation.NewLive(g, nil)
+	live.Codes = codes
 	s := New(g, h, live, &fakeQuote{}, nil, nil, nil)
+	s.Codes = codes
 	return s, h, g
 }
 

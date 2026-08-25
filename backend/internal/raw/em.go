@@ -15,6 +15,41 @@ import (
 	"sync"
 )
 
+// HKMultiRow 港股多期主要指标单行（RPT_HKF10_FN_MAININDICATOR，9 期降序）
+type HKMultiRow struct {
+	ReportDate       string   `json:"REPORT_DATE"`
+	BPS              *float64 `json:"BPS"`
+	BasicEPS         *float64 `json:"BASIC_EPS"`
+	HolderProfit     *float64 `json:"HOLDER_PROFIT"`
+	HolderProfitYoY  *float64 `json:"HOLDER_PROFIT_YOY"`
+	OperateIncome    *float64 `json:"OPERATE_INCOME"`
+	OperateIncomeYoY *float64 `json:"OPERATE_INCOME_YOY"`
+	ROEAvg           *float64 `json:"ROE_AVG"`
+	ROA              *float64 `json:"ROA"`
+	EPSTTM           *float64 `json:"EPS_TTM"`
+	ROEYearly        *float64 `json:"ROE_YEARLY"`
+}
+
+// HKMaxRow 港股主指标 MAX 单行（RPT_CUSTOM_HKF10_FN_MAININDICATORMAX，仅最新 1 期）
+type HKMaxRow struct {
+	ReportDate         string   `json:"REPORT_DATE"`
+	BasicEPS           *float64 `json:"BASIC_EPS"`
+	BPS                *float64 `json:"BPS"`
+	IssuedCommonShares *float64 `json:"ISSUED_COMMON_SHARES"`
+	TotalMarketCap     *float64 `json:"TOTAL_MARKET_CAP"`
+	DividendTTM        *float64 `json:"DIVIDEND_TTM"`
+	DiviRatio          *float64 `json:"DIVI_RATIO"`
+	DividendRate       *float64 `json:"DIVIDEND_RATE"`
+	ROEAvg             *float64 `json:"ROE_AVG"`
+	ROA                *float64 `json:"ROA"`
+	PETTM              *float64 `json:"PE_TTM"`
+	PBTM               *float64 `json:"PB_TTM"`
+}
+
+// Backward compat: 旧 map 形态别名（渐进迁移用，已废弃）
+type HKMultiRowMap = map[string]any
+type HKMaxRowMap = map[string]any
+
 const (
 	emBase      = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
 	emUT        = "fa5fd1943c7b386f172d6893dbfba10b"
@@ -65,23 +100,39 @@ func (e *EM) getDC(ctx context.Context, params url.Values) ([]map[string]any, er
 }
 
 // FinancialsHKMulti 港股多期主要指标（9 报告期累计值），降序。
-func (e *EM) FinancialsHKMulti(ctx context.Context, code string) ([]map[string]any, error) {
-	return e.getDC(ctx, url.Values{
+// 入参兼容 fullCode（如 00700.HK），内部 Bare 用于 DB 过滤
+func (e *EM) FinancialsHKMulti(ctx context.Context, code string) ([]HKMultiRow, error) {
+	bare := emBare(code)
+	b, err := e.dc.Get(ctx, emBase, url.Values{
 		"reportName": {"RPT_HKF10_FN_MAININDICATOR"},
 		"columns":    {"REPORT_DATE,BPS,BASIC_EPS,HOLDER_PROFIT,HOLDER_PROFIT_YOY,OPERATE_INCOME,OPERATE_INCOME_YOY,ROE_AVG,ROA,EPS_TTM,ROE_YEARLY"},
-		"filter":     {fmt.Sprintf("(SECUCODE=\"%s.HK\")", code)},
+		"filter":     {fmt.Sprintf("(SECUCODE=\"%s.HK\")", bare)},
 		"pageNumber": {"1"}, "pageSize": {"9"},
 		"sortTypes": {"-1"}, "sortColumns": {"STD_REPORT_DATE"},
 		"source": {"F10"}, "client": {"PC"},
 	})
+	if err != nil {
+		return nil, err
+	}
+	var data struct {
+		Result struct {
+			Data []HKMultiRow `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+	return data.Result.Data, nil
 }
 
 // FinancialsHKMax 港股主指标 MAX（仅最新 1 期）。EM 自算 PE_TTM/PB_TTM（功能货币判定锚点）。
-func (e *EM) FinancialsHKMax(ctx context.Context, code string) (map[string]any, error) {
-	rows, err := e.getDC(ctx, url.Values{
+// 入参兼容 fullCode，内部 Bare
+func (e *EM) FinancialsHKMax(ctx context.Context, code string) (*HKMaxRow, error) {
+	bare := emBare(code)
+	b, err := e.dc.Get(ctx, emBase, url.Values{
 		"reportName": {"RPT_CUSTOM_HKF10_FN_MAININDICATORMAX"},
 		"columns":    {"REPORT_DATE,BASIC_EPS,BPS,ISSUED_COMMON_SHARES,TOTAL_MARKET_CAP,DIVIDEND_TTM,DIVI_RATIO,DIVIDEND_RATE,ROE_AVG,ROA,PE_TTM,PB_TTM"},
-		"filter":     {fmt.Sprintf("(SECUCODE=\"%s.HK\")", code)},
+		"filter":     {fmt.Sprintf("(SECUCODE=\"%s.HK\")", bare)},
 		"pageNumber": {"1"}, "pageSize": {"1"},
 		"sortTypes": {"-1"}, "sortColumns": {"REPORT_DATE"},
 		"source": {"F10"}, "client": {"PC"},
@@ -89,10 +140,18 @@ func (e *EM) FinancialsHKMax(ctx context.Context, code string) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	var data struct {
+		Result struct {
+			Data []HKMaxRow `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &data); err != nil {
+		return nil, err
+	}
+	if len(data.Result.Data) == 0 {
 		return nil, nil
 	}
-	return rows[0], nil
+	return &data.Result.Data[0], nil
 }
 
 // fflowKlines 请求东财 fflow 接口，返回原始 klines 字符串行列表（反爬偶发空返回，重试一次）
@@ -186,7 +245,9 @@ type DividendRowEM struct {
 }
 
 // DividendDetail 东财分红送配详情（RPT_SHAREBONUS_DET，按报告期降序）。失败返回 nil。
+// 入参兼容 fullCode，内部 Bare 用于 DB 过滤
 func (e *EM) DividendDetail(ctx context.Context, code string) []DividendRowEM {
+	bare := emBare(code)
 	b, err := e.dc.Get(ctx, "https://datacenter-web.eastmoney.com/api/data/v1/get", url.Values{
 		"sortColumns":  {"REPORT_DATE"},
 		"sortTypes":    {"-1"},
@@ -197,7 +258,7 @@ func (e *EM) DividendDetail(ctx context.Context, code string) []DividendRowEM {
 		"quoteColumns": {""},
 		"source":       {"WEB"},
 		"client":       {"WEB"},
-		"filter":       {fmt.Sprintf("(SECURITY_CODE=\"%s\")", code)},
+		"filter":       {fmt.Sprintf("(SECURITY_CODE=\"%s\")", bare)},
 	})
 	if err != nil {
 		return nil
@@ -328,14 +389,28 @@ func (e *EM) clistPage(ctx context.Context, fs string, pn, pageSize int) ([]Mark
 	return out, resp.Data.Total, nil
 }
 
-// ListAshare 沪深京 A 股全列表（代码名对）
+// ListAshare 沪深京 A 股全列表（代码名对） 返回 fullCode（如 600000.SH / 000001.SZ）
 func (e *EM) ListAshare(ctx context.Context) ([]MarketCode, error) {
-	return e.listCodes(ctx, fsAshare)
+	codes, err := e.listCodes(ctx, fsAshare)
+	if err != nil {
+		return nil, err
+	}
+	for i := range codes {
+		codes[i].Code = emBareToFull(codes[i].Code, "")
+	}
+	return codes, nil
 }
 
-// ListETF 场内 ETF 全列表（实时行情源；缺债券 ETF 511010-5115xx，由 FundETFDaily 补并集）
+// ListETF 场内 ETF 全列表（实时行情源；缺债券 ETF 511010-5115xx，由 FundETFDaily 补并集） 返回 fullCode
 func (e *EM) ListETF(ctx context.Context) ([]MarketCode, error) {
-	return e.listCodes(ctx, fsETF)
+	codes, err := e.listCodes(ctx, fsETF)
+	if err != nil {
+		return nil, err
+	}
+	for i := range codes {
+		codes[i].Code = emBareToFull(codes[i].Code, "etf")
+	}
+	return codes, nil
 }
 
 // FundETFDaily 天天基金「场内交易基金」日行情页（对齐 akshare fund_etf_fund_daily_em：
@@ -370,10 +445,53 @@ func (e *EM) FundETFDaily(ctx context.Context) ([]MarketCode, error) {
 			continue
 		}
 		seen[code] = true
-		out = append(out, MarketCode{Code: code, Name: name})
+		out = append(out, MarketCode{Code: emBareToFull(code, "etf"), Name: name})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("天天基金页解析为空")
 	}
 	return out, nil
+}
+
+// emBare 裸码提取（兼容 fullCode 如 00700.HK / 600519.SH → 00700 / 600519）
+func emBare(code string) string {
+	if idx := strings.LastIndex(code, "."); idx >= 0 {
+		return code[:idx]
+	}
+	return code
+}
+
+// emBareToFull 裸码转 fullCode（仅 raw 层转换，统一标准化）
+func emBareToFull(bare, market string) string {
+	if strings.Contains(bare, ".") {
+		return strings.ToUpper(bare)
+	}
+	if market == "etf" {
+		if len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58") {
+			return bare + ".SH"
+		}
+		return bare + ".SZ"
+	}
+	if len(bare) == 5 {
+		allDigit := true
+		for _, ch := range bare {
+			if ch < '0' || ch > '9' {
+				allDigit = false
+				break
+			}
+		}
+		if allDigit {
+			return bare + ".HK"
+		}
+	}
+	if len(bare) >= 2 {
+		p2 := bare[:2]
+		if p2 == "43" || p2 == "82" || p2 == "83" || p2 == "87" || p2 == "92" {
+			return bare + ".BJ"
+		}
+		if p2 == "60" || p2 == "68" || p2 == "90" || p2 == "50" || p2 == "51" || p2 == "56" || p2 == "58" {
+			return bare + ".SH"
+		}
+	}
+	return bare + ".SZ"
 }

@@ -14,11 +14,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/infra"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // 列表缓存文件名（quote.Search 同款读取约定）与新鲜度（天）
@@ -181,7 +183,14 @@ func (s *Service) loadHK(ctx context.Context) ([]map[string]any, error) {
 			return all
 		}()); nerr == nil && len(names) > 0 {
 			for _, r := range rows {
-				if n, ok := names[r["code"].(string)]; ok {
+				full, _ := r["code"].(string)
+				bare := full
+				if idx := strings.LastIndex(full, "."); idx >= 0 {
+					bare = full[:idx]
+				}
+				if n, ok := names[bare]; ok {
+					r["name"] = n
+				} else if n, ok := names[full]; ok {
 					r["name"] = n
 				}
 			}
@@ -194,7 +203,14 @@ func (s *Service) loadHK(ctx context.Context) ([]map[string]any, error) {
 		names := s.Tencent.HKNames(ctx, all)
 		if len(names) > 0 {
 			for _, r := range rows {
-				if n, ok := names[r["code"].(string)]; ok {
+				full, _ := r["code"].(string)
+				bare := full
+				if idx := strings.LastIndex(full, "."); idx >= 0 {
+					bare = full[:idx]
+				}
+				if n, ok := names[bare]; ok {
+					r["name"] = n
+				} else if n, ok := names[full]; ok {
 					r["name"] = n
 				}
 			}
@@ -212,11 +228,11 @@ func (s *Service) fresh(name string, days int) bool {
 	return time.Since(st.ModTime()) < time.Duration(days)*24*time.Hour
 }
 
-// toRows MarketCode → [{"code","name"(,"market")}]（对齐 Python 生成格式）
+// toRows MarketCode → [{"code","name","full_code"(,"market")}]（对齐 Python 生成格式，新增 full_code 供前端直接展示）
 func toRows(codes []raw.MarketCode, market string) []map[string]any {
 	rows := make([]map[string]any, 0, len(codes))
 	for _, c := range codes {
-		row := map[string]any{"code": c.Code, "name": c.Name}
+		row := map[string]any{"code": c.Code, "name": c.Name, "full_code": marketcode.Full(c.Code, false)}
 		if market != "" {
 			row["market"] = market
 		}

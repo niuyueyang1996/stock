@@ -8,6 +8,7 @@ import (
 
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 func openSvc(t *testing.T) (*Service, *gorm.DB) {
@@ -23,7 +24,9 @@ func openSvc(t *testing.T) (*Service, *gorm.DB) {
 			_ = sqlDB.Close()
 		}
 	})
-	return New(dao.NewHoldingsDAO(g), nil), g
+	svc := New(dao.NewHoldingsDAO(g), nil)
+	svc.Codes = marketcode.New()
+	return svc, g
 }
 
 func TestReplayBuySell(t *testing.T) {

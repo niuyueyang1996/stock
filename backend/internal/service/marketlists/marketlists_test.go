@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/infra"
 )
 
 // ---------- 纯逻辑：fresh 新鲜度 ----------
@@ -75,7 +76,7 @@ func TestFreshBoundary(t *testing.T) {
 
 // TestToRowsFormat 验证 toRows 的 market 字段：A股无、ETF=etf、港股=hk。
 func TestToRowsFormat(t *testing.T) {
-	codes := []raw.MarketCode{{Code: "600000", Name: "浦发银行"}, {Code: "000001", Name: "平安银行"}}
+	codes := []raw.MarketCode{{Code: "600000.SH", Name: "浦发银行"}, {Code: "000001.SZ", Name: "平安银行"}}
 
 	ashare := toRows(codes, "")
 	if len(ashare) != 2 {
@@ -84,7 +85,7 @@ func TestToRowsFormat(t *testing.T) {
 	if _, ok := ashare[0]["market"]; ok {
 		t.Fatalf("A 股行不应有 market 字段: %v", ashare[0])
 	}
-	if ashare[0]["code"] != "600000" || ashare[0]["name"] != "浦发银行" {
+	if ashare[0]["code"] != "600000.SH" || ashare[0]["name"] != "浦发银行" {
 		t.Fatalf("行内容错: %v", ashare[0])
 	}
 
@@ -240,7 +241,7 @@ func TestDownloadFreshSkipsNetwork(t *testing.T) {
 	tx := raw.NewTencent()
 	tx.AttachTestTransport(count)
 
-	s := &Service{DataDir: dir, Em: em, Sina: sina, Tencent: tx}
+	s := &Service{DataDir: dir, Infra: infra.New(infra.NewEMMarketList(em), infra.NewSinaMarketList(sina), infra.NewTencentMarketList(tx))}
 	if err := s.Download(context.Background()); err != nil {
 		t.Fatalf("幂等下载不应报错: %v", err)
 	}
@@ -276,14 +277,14 @@ func TestDownloadFullSuccess(t *testing.T) {
 		return "汇丰控股"
 	}))
 
-	s := &Service{DataDir: dir, Em: em, Sina: sina, Tencent: tx}
+	s := &Service{DataDir: dir, Infra: infra.New(infra.NewEMMarketList(em), infra.NewSinaMarketList(sina), infra.NewTencentMarketList(tx))}
 	if err := s.Download(context.Background()); err != nil {
 		t.Fatalf("Download 失败: %v", err)
 	}
 
 	// A股：无 market 字段
 	ashareRows := readRows(t, filepath.Join(dir, fileAshare))
-	if len(ashareRows) != 2 || ashareRows[0]["code"] != "600000" {
+	if len(ashareRows) != 2 || ashareRows[0]["code"] != "600000.SH" {
 		t.Fatalf("A股写盘错: %v", ashareRows)
 	}
 	if _, ok := ashareRows[0]["market"]; ok {
@@ -295,7 +296,7 @@ func TestDownloadFullSuccess(t *testing.T) {
 	if len(etfRows) != 4 {
 		t.Fatalf("ETF 应 4 行(spot2+daily2), got %d: %v", len(etfRows), etfRows)
 	}
-	if etfRows[0]["market"] != "etf" || etfRows[0]["code"] != "510300" {
+	if etfRows[0]["market"] != "etf" || etfRows[0]["code"] != "510300.SH" {
 		t.Fatalf("ETF market/顺序错: %v", etfRows[0])
 	}
 
@@ -327,7 +328,7 @@ func TestDownloadPartialFailure(t *testing.T) {
 		return nil, os.ErrClosed // 模拟网络失败
 	})
 
-	s := &Service{DataDir: dir, Em: em, Sina: sina}
+	s := &Service{DataDir: dir, Infra: infra.New(infra.NewEMMarketList(em), infra.NewSinaMarketList(sina))}
 	err := s.Download(context.Background())
 	if err == nil {
 		t.Fatal("港股失败时应返回错误")
@@ -376,7 +377,7 @@ func TestLoadETFUnionDedupSpotNamePriority(t *testing.T) {
 </table>`
 	em := raw.NewEM()
 	em.AttachTestTransport(emTransport(t, nil, spot, dailyHTML))
-	s := &Service{DataDir: t.TempDir(), Em: em}
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewEMMarketList(em))}
 
 	rows, err := s.loadETF(context.Background())
 	if err != nil {
@@ -385,7 +386,7 @@ func TestLoadETFUnionDedupSpotNamePriority(t *testing.T) {
 	if len(rows) != 3 { // 510300, 511010(spot 名), 511020
 		t.Fatalf("并集应有 3 行(去重且空码过滤), got %d: %v", len(rows), rows)
 	}
-	if rows[0]["code"] != "510300" || rows[0]["market"] != "etf" {
+	if rows[0]["code"] != "510300.SH" || rows[0]["market"] != "etf" {
 		t.Fatalf("首行错: %v", rows[0])
 	}
 	// 511010 名称保留 spot（优先）
@@ -400,12 +401,12 @@ func TestLoadETFSingleSourceFallback(t *testing.T) {
 	em := emOnlyDaily(t, `<table class="dbtable">
 <tr><td>0</td><td>1</td><td>2</td><td>511010</td><td>国债ETF</td></tr>
 </table>`)
-	s := &Service{DataDir: t.TempDir(), Em: em}
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewEMMarketList(em))}
 	rows, err := s.loadETF(context.Background())
 	if err != nil {
 		t.Fatalf("单源兜底不应报错: %v", err)
 	}
-	if len(rows) != 1 || rows[0]["code"] != "511010" || rows[0]["market"] != "etf" {
+	if len(rows) != 1 || rows[0]["code"] != "511010.SH" || rows[0]["market"] != "etf" {
 		t.Fatalf("兜底结果错: %v", rows)
 	}
 }
@@ -416,7 +417,7 @@ func TestLoadETFBothFail(t *testing.T) {
 	em.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
 		return nil, os.ErrClosed
 	})
-	s := &Service{DataDir: t.TempDir(), Em: em}
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewEMMarketList(em))}
 	if _, err := s.loadETF(context.Background()); err == nil {
 		t.Fatal("两源全败应报错")
 	}
@@ -439,7 +440,7 @@ func TestLoadHKTencentNameOverride(t *testing.T) {
 		return "汇丰控股"
 	}))
 
-	s := &Service{DataDir: t.TempDir(), Sina: sina, Tencent: tx}
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewSinaMarketList(sina), infra.NewTencentMarketList(tx))}
 	rows, err := s.loadHK(context.Background())
 	if err != nil {
 		t.Fatalf("loadHK err=%v", err)
@@ -459,7 +460,7 @@ func TestLoadHKNoTencentFallback(t *testing.T) {
 	sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
 		return resp200(t, sinaHKBody(t, hk)), nil
 	})
-	s := &Service{DataDir: t.TempDir(), Sina: sina} // Tencent 空
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewSinaMarketList(sina))} // Tencent 空
 	rows, err := s.loadHK(context.Background())
 	if err != nil {
 		t.Fatalf("loadHK err=%v", err)
@@ -475,7 +476,7 @@ func TestLoadHKSinaFail(t *testing.T) {
 	sina.AttachTestTransport(func(r *http.Request) (*http.Response, error) {
 		return nil, os.ErrClosed
 	})
-	s := &Service{DataDir: t.TempDir(), Sina: sina, Tencent: raw.NewTencent()}
+	s := &Service{DataDir: t.TempDir(), Infra: infra.New(infra.NewSinaMarketList(sina), infra.NewTencentMarketList(raw.NewTencent()))}
 	if _, err := s.loadHK(context.Background()); err == nil {
 		t.Fatal("Sina 失败应报错")
 	}

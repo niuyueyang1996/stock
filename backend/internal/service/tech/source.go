@@ -44,7 +44,7 @@ type HKIntradaySource interface {
 // IndexMinKlineSource 指数分钟K线
 type IndexMinKlineSource interface {
 	Name() string
-	IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error)
+	IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error)
 }
 
 // FundflowHistorySource 日级资金流历史（新浪等）
@@ -178,7 +178,7 @@ func (m *MockHKIntraday) HKIntraday(ctx context.Context, code string) ([]raw.HKI
 // MockIndexMinKline IndexMinKline mock
 type MockIndexMinKline struct {
 	NameF string
-	Rows  [][]any
+	Rows  []raw.IndexMinKlineRow
 	Err   error
 }
 
@@ -188,7 +188,7 @@ func (m *MockIndexMinKline) Name() string {
 	}
 	return "mock"
 }
-func (m *MockIndexMinKline) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
+func (m *MockIndexMinKline) IndexMinKline(ctx context.Context, symbol string, count int) ([]raw.IndexMinKlineRow, error) {
 	if m.Err != nil {
 		return nil, m.Err
 	}

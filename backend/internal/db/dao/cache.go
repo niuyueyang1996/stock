@@ -38,7 +38,7 @@ func (DailyPrice) TableName() string { return "daily_price_cache" }
 // GetLatestDailyPrice 最近一条日K
 func (d *CacheDAO) GetLatestDailyPrice(code string) *DailyPrice {
 	var r DailyPrice
-	if err := d.DB.Where("code = ?", code).Order("trade_date DESC").First(&r).Error; err != nil {
+	if err := whereCode(d.DB, code).Order("trade_date DESC").First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -47,7 +47,7 @@ func (d *CacheDAO) GetLatestDailyPrice(code string) *DailyPrice {
 // GetDailyPrice 指定日
 func (d *CacheDAO) GetDailyPrice(code, date string) *DailyPrice {
 	var r DailyPrice
-	if err := d.DB.Where("code = ? AND trade_date = ?", code, date).First(&r).Error; err != nil {
+	if err := d.DB.Where("code IN ? AND trade_date = ?", codeCandidates(code), date).First(&r).Error; err != nil {
 		return nil
 	}
 	return &r
@@ -56,7 +56,7 @@ func (d *CacheDAO) GetDailyPrice(code, date string) *DailyPrice {
 // GetDailyPrices 区间（升序）
 func (d *CacheDAO) GetDailyPrices(code, start, end string) []DailyPrice {
 	var rows []DailyPrice
-	q := d.DB.Where("code = ?", code)
+	q := whereCode(d.DB, code)
 	if start != "" {
 		q = q.Where("trade_date >= ?", start)
 	}
@@ -70,7 +70,7 @@ func (d *CacheDAO) GetDailyPrices(code, start, end string) []DailyPrice {
 // PrevClose code 在 date 之前（含）最近一条收盘
 func (d *CacheDAO) PrevClose(code, date string) *float64 {
 	var r DailyPrice
-	if err := d.DB.Where("code = ? AND trade_date < ? AND close IS NOT NULL", code, date).
+	if err := d.DB.Where("code IN ? AND trade_date < ? AND close IS NOT NULL", codeCandidates(code), date).
 		Order("trade_date DESC").First(&r).Error; err != nil {
 		return nil
 	}
@@ -165,7 +165,7 @@ func (d *CacheDAO) UpsertDailyFundflow(f *db.DailyFundflowCache) error {
 func (d *CacheDAO) GetDailyFundflowCount(code, windowStart string) (int64, string) {
 	var n int64
 	var mx string
-	row := d.DB.Raw("SELECT COUNT(*), COALESCE(MAX(trade_date),'') FROM daily_fundflow_cache WHERE code=? AND trade_date>=?", code, windowStart).Row()
+	row := d.DB.Raw("SELECT COUNT(*), COALESCE(MAX(trade_date),'') FROM daily_fundflow_cache WHERE code IN ? AND trade_date>=?", codeCandidates(code), windowStart).Row()
 	_ = row.Scan(&n, &mx)
 	return n, mx
 }

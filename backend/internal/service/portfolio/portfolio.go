@@ -3,6 +3,7 @@
 package portfolio
 
 import (
+	"stockanalyzer/internal/service/marketcode"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,7 @@ type Service struct {
 	Cache    *dao.CacheDAO
 	Indices  *indices.Service
 	Cal      *calendar.Service
+	Codes    *marketcode.Registry
 }
 
 // New 构建组合服务，注入 DB、持仓/估值服务、行情读取器、汇率函数、缓存 DAO 与指数服务。
@@ -1385,17 +1387,12 @@ func (s *Service) marketStatusStr() string {
 	return s.Cal.MarketStatusStr(time.Now())
 }
 
-// isHKCode5 港股五位纯数字代码判定（港股无资金流参与）
-func isHKCode5(code string) bool {
-	if len(code) != 5 {
-		return false
+// isHKCode5 港股判定（委托 Codes，兼容全局回退）
+func (s *Service) isHKCode5(code string) bool {
+	if s.Codes != nil {
+		return s.Codes.IsHK(code)
 	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
+	return marketcode.Suffix(code) == "HK"
 }
 
 // addDays 日期字符串加 n 个自然日
@@ -1619,7 +1616,7 @@ func (s *Service) attachPriceLine(out map[string]any, codes []string, qty map[st
 	minVal := map[string]*float64{}
 	dayVal := map[string]*float64{}
 	for _, code := range codes {
-		if isHKCode5(code) {
+		if s.isHKCode5(code) {
 			continue // 仅参与资金流的 A股/ETF
 		}
 		rows := s.Cache.GetFundflowMinute(code, tradeDay)

@@ -169,7 +169,7 @@ func (s *Service) SetStockTag(code, tag, name string) (string, error) {
 		return "", errors.New("标签不能为空")
 	}
 	mkt := "sh"
-	if isHKCode5(code) {
+	if s.isHKCode5(code) {
 		mkt = "hk"
 	}
 	if name == "" {
@@ -223,19 +223,6 @@ func trimSpace(s string) string {
 		j--
 	}
 	return s[i:j]
-}
-
-// isHKCode5 港股五位代码判定
-func isHKCode5(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, c := range code {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // roundP 指针值舍入（nil 保持 nil）

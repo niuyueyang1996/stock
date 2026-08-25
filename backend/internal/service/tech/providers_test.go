@@ -79,10 +79,10 @@ func TestTechProviders_EMTech(t *testing.T) {
 }
 
 func TestTechProviders_IsHKCode(t *testing.T) {
-	if !isHKCode("00700") {
+	if !isHKCode("00700.HK") {
 		t.Fatal("00700 should be HK")
 	}
-	if isHKCode("600519") {
+	if isHKCode("600519.SH") {
 		t.Fatal("600519 should not be HK")
 	}
 	if isHKCode("1234") || isHKCode("0070a") {

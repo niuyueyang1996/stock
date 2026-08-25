@@ -42,13 +42,13 @@ func main() {
 	e := raw.NewEM()
 	rows, err := e.FinancialsHKMulti(ctx, "00700")
 	if err == nil && len(rows) > 0 {
-		fmt.Printf("[em hk fin] %d 期，最新 REPORT_DATE=%v BPS=%v\n", len(rows), rows[0]["REPORT_DATE"], rows[0]["BPS"])
+		fmt.Printf("[em hk fin] %d 期，最新 REPORT_DATE=%v BPS=%v\n", len(rows), rows[0].ReportDate, rows[0].BPS)
 	} else {
 		fmt.Println("[em hk fin] FAIL", err)
 	}
 	max, err := e.FinancialsHKMax(ctx, "00700")
 	if err == nil && max != nil {
-		fmt.Printf("[em hk max] PE_TTM=%v PB_TTM=%v\n", max["PE_TTM"], max["PB_TTM"])
+		fmt.Printf("[em hk max] PE_TTM=%v PB_TTM=%v\n", max.PETTM, max.PBTM)
 	} else {
 		fmt.Println("[em hk max] FAIL", err)
 	}

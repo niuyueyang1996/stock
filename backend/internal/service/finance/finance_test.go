@@ -4,42 +4,43 @@ import (
 	"context"
 	"testing"
 
+	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/model"
 )
 
 // 腾讯 00700：报表货币=港元；青岛港 06198：报表货币=人民币。
 // 用 EM 锚点法判定 + 汇率折算验证。
 
-func hkMultiRows() []map[string]any {
-	return []map[string]any{
-		{"REPORT_DATE": "2026-06-30 00:00:00", "BPS": 124.78, "BASIC_EPS": 4.96,
-			"HOLDER_PROFIT": 106900000000.0, "HOLDER_PROFIT_YOY": 12.3,
-			"OPERATE_INCOME": 320000000000.0, "OPERATE_INCOME_YOY": 8.1,
-			"ROE_AVG": 16.2, "ROA": 8.5, "EPS_TTM": 19.3, "ROE_YEARLY": 21.4},
-		{"REPORT_DATE": "2026-03-31 00:00:00", "BPS": 122.1, "BASIC_EPS": 2.3,
-			"HOLDER_PROFIT": 48000000000.0, "HOLDER_PROFIT_YOY": 9.8,
-			"OPERATE_INCOME": 150000000000.0, "OPERATE_INCOME_YOY": 7.2,
-			"ROE_AVG": 15.9, "ROA": 8.2, "EPS_TTM": 18.9, "ROE_YEARLY": 21.4},
-		{"REPORT_DATE": "2025-12-31 00:00:00", "BPS": 119.5, "BASIC_EPS": 17.8,
-			"HOLDER_PROFIT": 88000000000.0, "HOLDER_PROFIT_YOY": 15.1,
-			"OPERATE_INCOME": 300000000000.0, "OPERATE_INCOME_YOY": 9.4,
-			"ROE_AVG": 21.4, "ROA": 9.1, "EPS_TTM": 17.8, "ROE_YEARLY": 21.4},
-		{"REPORT_DATE": "2025-06-30 00:00:00", "BPS": 116.8, "BASIC_EPS": 8.6,
-			"HOLDER_PROFIT": 43000000000.0, "HOLDER_PROFIT_YOY": 13.2,
-			"OPERATE_INCOME": 150000000000.0, "OPERATE_INCOME_YOY": 8.8,
-			"ROE_AVG": 20.9, "ROA": 9.0, "EPS_TTM": 17.2, "ROE_YEARLY": 21.4},
+func hkMultiRows() []raw.HKMultiRow {
+	return []raw.HKMultiRow{
+		{ReportDate: "2026-06-30 00:00:00", BPS: ptrF(124.78), BasicEPS: ptrF(4.96),
+			HolderProfit: ptrF(106900000000.0), HolderProfitYoY: ptrF(12.3),
+			OperateIncome: ptrF(320000000000.0), OperateIncomeYoY: ptrF(8.1),
+			ROEAvg: ptrF(16.2), ROA: ptrF(8.5), EPSTTM: ptrF(19.3), ROEYearly: ptrF(21.4)},
+		{ReportDate: "2026-03-31 00:00:00", BPS: ptrF(122.1), BasicEPS: ptrF(2.3),
+			HolderProfit: ptrF(48000000000.0), HolderProfitYoY: ptrF(9.8),
+			OperateIncome: ptrF(150000000000.0), OperateIncomeYoY: ptrF(7.2),
+			ROEAvg: ptrF(15.9), ROA: ptrF(8.2), EPSTTM: ptrF(18.9), ROEYearly: ptrF(21.4)},
+		{ReportDate: "2025-12-31 00:00:00", BPS: ptrF(119.5), BasicEPS: ptrF(17.8),
+			HolderProfit: ptrF(88000000000.0), HolderProfitYoY: ptrF(15.1),
+			OperateIncome: ptrF(300000000000.0), OperateIncomeYoY: ptrF(9.4),
+			ROEAvg: ptrF(21.4), ROA: ptrF(9.1), EPSTTM: ptrF(17.8), ROEYearly: ptrF(21.4)},
+		{ReportDate: "2025-06-30 00:00:00", BPS: ptrF(116.8), BasicEPS: ptrF(8.6),
+			HolderProfit: ptrF(43000000000.0), HolderProfitYoY: ptrF(13.2),
+			OperateIncome: ptrF(150000000000.0), OperateIncomeYoY: ptrF(8.8),
+			ROEAvg: ptrF(20.9), ROA: ptrF(9.0), EPSTTM: ptrF(17.2), ROEYearly: ptrF(21.4)},
 	}
 }
 
-func hkMaxRow() map[string]any {
-	return map[string]any{
-		"REPORT_DATE":          "2026-06-30 00:00:00",
-		"ISSUED_COMMON_SHARES": 9400000000.0,
-		"TOTAL_MARKET_CAP":     440000000000.0, // 港元市值 4400亿
-		"PE_TTM":               15.01,
-		"PB_TTM":               3.06,
-		"DIVIDEND_TTM":         3.4,
-		"DIVI_RATIO":           18.2,
+func hkMaxRow() *raw.HKMaxRow {
+	return &raw.HKMaxRow{
+		ReportDate:         "2026-06-30 00:00:00",
+		IssuedCommonShares: ptrF(9400000000.0),
+		TotalMarketCap:     ptrF(440000000000.0), // 港元市值 4400亿
+		PETTM:              ptrF(15.01),
+		PBTM:               ptrF(3.06),
+		DividendTTM:        ptrF(3.4),
+		DiviRatio:          ptrF(18.2),
 	}
 }
 
@@ -120,11 +121,11 @@ func TestManagerMarketSplit(t *testing.T) {
 	mockHK := &MockFinance{Handle: func(code string) bool { return isHKCode(code) }, F: &model.Financials{ReportDate: "20260630"}}
 	mockA := &MockFinance{Handle: func(code string) bool { return !isHKCode(code) }, F: &model.Financials{ReportDate: "20260331"}}
 	m := NewFinanceManager(nil, []FinanceSource{mockA}, []FinanceSource{mockHK})
-	f, err := m.Financials(context.Background(), "00700")
+	f, err := m.Financials(context.Background(), "00700.HK")
 	if err != nil || f.ReportDate != "20260630" {
 		t.Fatalf("港股链: %v %v", f, err)
 	}
-	f, err = m.Financials(context.Background(), "600519")
+	f, err = m.Financials(context.Background(), "600519.SH")
 	if err != nil || f.ReportDate != "20260331" {
 		t.Fatalf("A股链: %v %v", f, err)
 	}

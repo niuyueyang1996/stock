@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,14 +59,15 @@ type FundflowDayRow struct {
 }
 
 // FundflowDailyHistory 新浪个股/ETF 日级五档资金流历史（MoneyFlow.ssl_qsfx_lscjfb，直连非东财）。
-// 最新在前；失败/空返回 nil。count 最大 500（约两年交易日）。
-func (s *Sina) FundflowDailyHistory(ctx context.Context, symbol string, count int) []FundflowDayRow {
+// 最新在前；失败/空返回 nil。count 最大 500（约两年交易日）。入参为 fullCode（如 600519.SH）
+func (s *Sina) FundflowDailyHistory(ctx context.Context, fullCode string, count int) []FundflowDayRow {
 	if count <= 0 {
 		count = 500
 	}
 	if count > 500 {
 		count = 500
 	}
+	symbol := toSymbol(fullCode)
 	b, err := s.c.Get(ctx, "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_lscjfb", url.Values{
 		"page": {"1"}, "num": {strconv.Itoa(count)},
 		"sort": {"opendate"}, "asc": {"0"}, "daima": {symbol},
@@ -82,8 +84,9 @@ func (s *Sina) FundflowDailyHistory(ctx context.Context, symbol string, count in
 
 // FinanceReport 新浪财务摘要（CompanyFinanceService.getFinanceReport2022）。
 // source: fzb资产负债表 / lrb利润表 / llb现金流量表。
-// 返回原始结构：result.data.report_date（报告期数组）+ report_list（按报告期的报表明细）。
-func (s *Sina) FinanceReport(ctx context.Context, paperCode, source string) (*SinaFinanceData, error) {
+// 返回原始结构：result.data.report_date（报告期数组）+ report_list（按报告期的报表明细）。入参为 fullCode（如 600519.SH）
+func (s *Sina) FinanceReport(ctx context.Context, fullCode, source string) (*SinaFinanceData, error) {
+	paperCode := toSymbol(fullCode)
 	b, err := s.c.Get(ctx, "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022", url.Values{
 		"paperCode": {paperCode},
 		"source":    {source},
@@ -116,21 +119,89 @@ type SinaReportDate struct {
 	DateType        int    `json:"date_type"`
 }
 
-// SinaFinanceData 新浪财务摘要数据
+// SinaReportItem 报告期明细项
+type SinaReportItem struct {
+	ItemTitle string `json:"item_title"`
+	ItemValue any    `json:"item_value"`
+}
+
+// SinaReportEntry 单个报告期完整报表（键为报告期，如 "20231231" 存于 ReportKey）
+type SinaReportEntry struct {
+	ReportKey   string           `json:"-"`
+	Data        []SinaReportItem `json:"data"`
+	DataSource  string           `json:"data_source"`
+	IsAudit     any              `json:"is_audit"`
+	PublishDate string           `json:"publish_date"`
+	RCurrency   string           `json:"rCurrency"`
+	RType       string           `json:"rType"`
+	UpdateTime  int64            `json:"update_time"`
+}
+
+// SinaReportList 报告期列表（JSON 形态为 map[string]SinaReportEntry，按报告期键索引）
+// 自定义编解码以消除 map[string]any，调用方以强类型切片访问。
+type SinaReportList []SinaReportEntry
+
+// UnmarshalJSON 将 JSON 对象 { "20231231": {...}, "20230930": {...} } 解为有序切片
+func (l *SinaReportList) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*l = nil
+		return nil
+	}
+	var m map[string]SinaReportEntry
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	out := make(SinaReportList, 0, len(m))
+	for k, v := range m {
+		v.ReportKey = k
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ReportKey > out[j].ReportKey })
+	*l = out
+	return nil
+}
+
+// MarshalJSON 将切片还原为 JSON 对象形态，保证与上游 API 形态一致
+func (l SinaReportList) MarshalJSON() ([]byte, error) {
+	m := make(map[string]SinaReportEntry, len(l))
+	for _, e := range l {
+		m[e.ReportKey] = e
+	}
+	return json.Marshal(m)
+}
+
+// Get 按报告期键查找报表项
+func (l SinaReportList) Get(date string) (*SinaReportEntry, bool) {
+	for i := range l {
+		if l[i].ReportKey == date {
+			return &l[i], true
+		}
+	}
+	return nil, false
+}
+
+// Value 在报表项内按指标标题查找原始值
+func (e *SinaReportEntry) Value(title string) (any, bool) {
+	for _, it := range e.Data {
+		if it.ItemTitle == title {
+			return it.ItemValue, true
+		}
+	}
+	return nil, false
+}
+
+// SinaFinanceData 新浪财务摘要数据（report_list 已为强类型切片，非 map）
 type SinaFinanceData struct {
 	ReportDate []SinaReportDate `json:"report_date"`
-	ReportList map[string]struct {
-		Data []struct {
-			ItemTitle string `json:"item_title"`
-			ItemValue any    `json:"item_value"`
-		} `json:"data"`
-		DataSource  string `json:"data_source"`
-		IsAudit     any    `json:"is_audit"`
-		PublishDate string `json:"publish_date"`
-		RCurrency   string `json:"rCurrency"`
-		RType       string `json:"rType"`
-		UpdateTime  int64  `json:"update_time"`
-	} `json:"report_list"`
+	ReportList SinaReportList   `json:"report_list"`
+}
+
+// ReportEntry 快捷查找（透传至 ReportList.Get）
+func (d *SinaFinanceData) ReportEntry(date string) (*SinaReportEntry, bool) {
+	if d == nil {
+		return nil, false
+	}
+	return d.ReportList.Get(date)
 }
 
 // FXRate 新浪实时外汇 HKD/CNY：1 HKD = x CNY（买卖价中点）。失败返回 nil。
@@ -229,7 +300,7 @@ func (s *Sina) ListHK(ctx context.Context) ([]MarketCode, error) {
 	return dedup, nil
 }
 
-// hkPage 新浪港股单页
+// hkPage 新浪港股单页 返回 fullCode（如 00700.HK）
 func (s *Sina) hkPage(ctx context.Context, page, pageSize int) ([]MarketCode, error) {
 	b, err := s.c.Get(ctx,
 		"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHKStockData",
@@ -254,7 +325,13 @@ func (s *Sina) hkPage(ctx context.Context, page, pageSize int) ([]MarketCode, er
 		if code == "" {
 			continue
 		}
-		out = append(out, MarketCode{Code: code, Name: strings.TrimSpace(r.Name)})
+		full := code
+		if !strings.Contains(code, ".") {
+			full = code + ".HK"
+		} else {
+			full = strings.ToUpper(code)
+		}
+		out = append(out, MarketCode{Code: full, Name: strings.TrimSpace(r.Name)})
 	}
 	return out, nil
 }
