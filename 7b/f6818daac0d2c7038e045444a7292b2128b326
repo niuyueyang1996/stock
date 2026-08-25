@@ -1,0 +1,20 @@
+backend/internal/service/marketlists/marketlists.go
+  s_b2869fccf4a95f::t_d53091e98fe53c 22,216,220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7bf6818daac0d2c7038e045444a7292b2128b326",
+  "prompts": {},
+  "logical_commit_id": "7bf6818daac0d2c7038e045444a7292b2128b326",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
