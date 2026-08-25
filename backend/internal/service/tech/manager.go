@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/managerlog"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -15,220 +16,213 @@ type Manager struct {
 	sources []any
 }
 
-// New 构造技术面 Manager（控制层编排 chain 顺序）
 func New(sources ...any) *Manager { return &Manager{sources: sources} }
 
-// Quote 实时行情（逐源尝试）
+// Quote 实时行情
 func (m *Manager) Quote(ctx context.Context, code string) (*model.Quote, error) {
-	log.Printf("[debug][tech] Quote code=%s chain=%d", code, len(m.sources))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(QuoteSource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		q, err := src.Quote(ctx, code)
 		if err == nil && q != nil {
-			log.Printf("[debug][tech] Quote code=%s -> %s 成功 price=%.2f", code, src.Name(), q.Price)
+			log.Printf("[技术] 行情 %s 命中 %s 现价%.2f", label, src.Name(), q.Price)
 			return q, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] Quote code=%s -> %s 失败: %v", code, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] Quote code=%s -> %s 空返回", code, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] Quote code=%s 全部失败: %v", code, errs)
+		log.Printf("[技术] 行情 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] Quote code=%s 全部不支持", code)
+	log.Printf("[技术] 行情 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
 // DailyBars 日K
 func (m *Manager) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
-	log.Printf("[debug][tech] DailyBars code=%s %s~%s chain=%d", code, start, end, len(m.sources))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(DailyBarsSource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		bars, err := src.DailyBars(ctx, code, start, end)
 		if err == nil && len(bars) > 0 {
-			log.Printf("[debug][tech] DailyBars code=%s -> %s 成功 %d条", code, src.Name(), len(bars))
+			log.Printf("[技术] 日K %s %s~%s 命中 %s %d条", label, start, end, src.Name(), len(bars))
 			return bars, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] DailyBars code=%s -> %s 失败: %v", code, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] DailyBars code=%s -> %s 空", code, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] DailyBars code=%s 全部失败: %v", code, errs)
+		log.Printf("[技术] 日K %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] DailyBars code=%s 全部不支持/空", code)
+	log.Printf("[技术] 日K %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
-// Ticks 当日分笔（首个非空即返回）
+// Ticks 当日分笔
 func (m *Manager) Ticks(ctx context.Context, code string) []raw.TickRow {
-	log.Printf("[debug][tech] Ticks code=%s chain=%d", code, len(m.sources))
+	label := managerlog.FormatCode(code)
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(TicksSource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		ticks, err := src.Ticks(ctx, code)
 		if err == nil && len(ticks) > 0 {
-			log.Printf("[debug][tech] Ticks code=%s -> %s 成功 %d笔", code, src.Name(), len(ticks))
+			log.Printf("[技术] 分笔 %s 命中 %s %d笔", label, src.Name(), len(ticks))
 			return ticks
 		}
 		if err != nil {
-			log.Printf("[debug][tech] Ticks code=%s -> %s 失败: %v", code, src.Name(), err)
-		} else {
-			log.Printf("[debug][tech] Ticks code=%s -> %s 空", code, src.Name())
+			log.Printf("[技术] 分笔 %s %s 失败: %v", label, src.Name(), err)
 		}
 	}
-	log.Printf("[debug][tech] Ticks code=%s 全部空", code)
+	log.Printf("[技术] 分笔 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil
 }
 
 // Kline K线原始行
 func (m *Manager) Kline(ctx context.Context, symbol, period, start, end string, count int) ([][]string, error) {
-	log.Printf("[debug][tech] Kline %s %s %s~%s count=%d chain=%d", symbol, period, start, end, count, len(m.sources))
+	label := managerlog.FormatCode(symbol)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(KlineSource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		rows, err := src.Kline(ctx, symbol, period, start, end, count)
 		if err == nil && len(rows) > 0 {
-			log.Printf("[debug][tech] Kline %s -> %s 成功 %d行", symbol, src.Name(), len(rows))
+			log.Printf("[技术] K线 %s %s 命中 %s %d行", label, period, src.Name(), len(rows))
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] Kline %s -> %s 失败: %v", symbol, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] Kline %s -> %s 空", symbol, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] Kline %s 全部失败: %v", symbol, errs)
+		log.Printf("[技术] K线 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] Kline %s 全部不支持/空", symbol)
+	log.Printf("[技术] K线 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
 // HKIntraday 港股近5日分时
 func (m *Manager) HKIntraday(ctx context.Context, code string) ([]raw.HKIntradayDay, error) {
-	log.Printf("[debug][tech] HKIntraday code=%s chain=%d", code, len(m.sources))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(HKIntradaySource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		days, err := src.HKIntraday(ctx, code)
 		if err == nil && len(days) > 0 {
-			log.Printf("[debug][tech] HKIntraday code=%s -> %s 成功 %d日", code, src.Name(), len(days))
+			log.Printf("[技术] 港股分时 %s 命中 %s %d日", label, src.Name(), len(days))
 			return days, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] HKIntraday code=%s -> %s 失败: %v", code, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] HKIntraday code=%s -> %s 空", code, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] HKIntraday code=%s 全部失败: %v", code, errs)
+		log.Printf("[技术] 港股分时 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] HKIntraday code=%s 全部不支持/空", code)
+	log.Printf("[技术] 港股分时 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
 // IndexMinKline 指数分钟K线
 func (m *Manager) IndexMinKline(ctx context.Context, symbol string, count int) ([][]any, error) {
-	log.Printf("[debug][tech] IndexMinKline %s count=%d chain=%d", symbol, count, len(m.sources))
+	label := managerlog.FormatCode(symbol)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(IndexMinKlineSource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		rows, err := src.IndexMinKline(ctx, symbol, count)
 		if err == nil && len(rows) > 0 {
-			log.Printf("[debug][tech] IndexMinKline %s -> %s 成功 %d行", symbol, src.Name(), len(rows))
+			log.Printf("[技术] 指数分时 %s 命中 %s %d行", label, src.Name(), len(rows))
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] IndexMinKline %s -> %s 失败: %v", symbol, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] IndexMinKline %s -> %s 空", symbol, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] IndexMinKline %s 全部失败: %v", symbol, errs)
+		log.Printf("[技术] 指数分时 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] IndexMinKline %s 全部不支持/空", symbol)
+	log.Printf("[技术] 指数分时 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
 // FundflowDailyHistory 日级资金流历史
 func (m *Manager) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
-	log.Printf("[debug][tech] FundflowHistory %s count=%d chain=%d", symbol, count, len(m.sources))
+	label := managerlog.FormatCode(symbol)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
 		src, ok := s.(FundflowHistorySource)
 		if !ok {
 			continue
 		}
+		tried = append(tried, src.Name())
 		rows, err := src.FundflowDailyHistory(ctx, symbol, count)
 		if err == nil && len(rows) > 0 {
-			log.Printf("[debug][tech] FundflowHistory %s -> %s 成功 %d行", symbol, src.Name(), len(rows))
+			log.Printf("[技术] 资金流历史 %s 命中 %s %d行", label, src.Name(), len(rows))
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][tech] FundflowHistory %s -> %s 失败: %v", symbol, src.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", src.Name(), err))
-		} else {
-			log.Printf("[debug][tech] FundflowHistory %s -> %s 空", symbol, src.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][tech] FundflowHistory %s 全部失败: %v", symbol, errs)
+		log.Printf("[技术] 资金流历史 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][tech] FundflowHistory %s 全部不支持/空", symbol)
+	log.Printf("[技术] 资金流历史 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }

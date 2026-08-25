@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+
+	"stockanalyzer/internal/service/managerlog"
 )
 
 // Manager 基本面域分红 chain（EM→CNInfo→THS），复用 ErrNotSupported/Name/errors.Join 黄金模板
@@ -17,28 +19,27 @@ func New(sources ...DividendSource) *Manager { return &Manager{sources: sources}
 
 // LatestDividend 最新已除权派息（逐源尝试）
 func (m *Manager) LatestDividend(ctx context.Context, code string) (*LatestDividend, error) {
-	log.Printf("[debug][fundamental] LatestDividend code=%s chain=%d", code, len(m.sources))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range m.sources {
+		tried = append(tried, s.Name())
 		ld, err := s.LatestDividend(ctx, code)
 		if err == nil && ld != nil {
-			log.Printf("[debug][fundamental] LatestDividend code=%s -> %s 成功 ex=%s per10=%.4f src=%s", code, s.Name(), ld.ExDate, ld.Per10Share, ld.Source)
+			log.Printf("[分红] %s 命中 %s 除权%s 每10股%.4f", label, s.Name(), ld.ExDate, ld.Per10Share)
 			return ld, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
 		if err != nil {
-			log.Printf("[debug][fundamental] LatestDividend code=%s -> %s 失败: %v", code, s.Name(), err)
 			errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
-		} else {
-			log.Printf("[debug][fundamental] LatestDividend code=%s -> %s 空", code, s.Name())
 		}
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][fundamental] LatestDividend code=%s 全部失败: %v", code, errs)
+		log.Printf("[分红] %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][fundamental] LatestDividend code=%s 全部不支持/空", code)
+	log.Printf("[分红] %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }

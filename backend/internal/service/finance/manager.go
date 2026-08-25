@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 
+	"stockanalyzer/internal/service/managerlog"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -77,25 +78,26 @@ func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Fi
 	if m.Fx != nil {
 		fx = m.Fx()
 	}
-	log.Printf("[debug][finance] Financials code=%s hk=%v fx=%v chain=%d", code, isHKCode(code), fx, len(chain))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range chain {
+		tried = append(tried, s.Name())
 		f, err := s.Financials(ctx, code, fx)
 		if err == nil && f != nil {
-			log.Printf("[debug][finance] Financials code=%s -> %s 成功", code, s.Name())
+			log.Printf("[财务] %s 命中 %s", label, s.Name())
 			return f, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
-		log.Printf("[debug][finance] Financials code=%s -> %s 失败: %v", code, s.Name(), err)
 		errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][finance] Financials code=%s 全部失败: %v", code, errs)
+		log.Printf("[财务] %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][finance] Financials code=%s 全部不支持/空", code)
+	log.Printf("[财务] %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
 
@@ -107,24 +109,25 @@ func (m *FinanceManager) DividendPerShare(ctx context.Context, code string) (*fl
 	} else {
 		chain = m.ashare
 	}
-	log.Printf("[debug][finance] DividendPerShare code=%s hk=%v chain=%d", code, isHKCode(code), len(chain))
+	label := managerlog.FormatCode(code)
 	var errs []error
+	var tried []string
 	for _, s := range chain {
+		tried = append(tried, s.Name())
 		v, err := s.DividendPerShare(ctx, code)
 		if err == nil && v != nil {
-			log.Printf("[debug][finance] DividendPerShare code=%s -> %s 成功 %.4f", code, s.Name(), *v)
+			log.Printf("[财务] 股息 %s 命中 %s %.4f", label, s.Name(), *v)
 			return v, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
 			continue
 		}
-		log.Printf("[debug][finance] DividendPerShare code=%s -> %s 失败: %v", code, s.Name(), err)
 		errs = append(errs, fmt.Errorf("%s: %w", s.Name(), err))
 	}
 	if len(errs) > 0 {
-		log.Printf("[debug][finance] DividendPerShare code=%s 全部失败: %v", code, errs)
+		log.Printf("[财务] 股息 %s 未命中 %s 失败: %v", label, managerlog.JoinNames(tried), errs)
 		return nil, errors.Join(errs...)
 	}
-	log.Printf("[debug][finance] DividendPerShare code=%s 全部不支持/空", code)
+	log.Printf("[财务] 股息 %s 未命中 %s 均无数据", label, managerlog.JoinNames(tried))
 	return nil, ErrNotSupported
 }
