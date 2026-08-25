@@ -1,0 +1,20 @@
+backend/internal/service/holdings/holdings.go
+  s_b2869fccf4a95f::t_a1a86de5f62cdd 13,205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8b295d9f631a85e60803bfdaa0027d14392f3917",
+  "prompts": {},
+  "logical_commit_id": "8b295d9f631a85e60803bfdaa0027d14392f3917",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
