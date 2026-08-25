@@ -26,7 +26,6 @@ func (m *Manager) LatestDividend(ctx context.Context, code string) (*LatestDivid
 			return ld, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][fundamental] LatestDividend code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
 		if err != nil {

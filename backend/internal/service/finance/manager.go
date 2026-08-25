@@ -86,7 +86,6 @@ func (m *FinanceManager) Financials(ctx context.Context, code string) (*model.Fi
 			return f, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][finance] Financials code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
 		log.Printf("[debug][finance] Financials code=%s -> %s 失败: %v", code, s.Name(), err)
@@ -117,7 +116,6 @@ func (m *FinanceManager) DividendPerShare(ctx context.Context, code string) (*fl
 			return v, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][finance] DividendPerShare code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
 		log.Printf("[debug][finance] DividendPerShare code=%s -> %s 失败: %v", code, s.Name(), err)

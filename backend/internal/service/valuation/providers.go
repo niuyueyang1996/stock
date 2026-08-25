@@ -112,7 +112,6 @@ func (m *ValuationManager) ValuationHistory(ctx context.Context, code, indicator
 			return pts, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][valuation] ValuationHistory code=%s -> %s 跳过", code, s.Name())
 			continue
 		}
 		if err != nil {

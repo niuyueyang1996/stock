@@ -32,7 +32,6 @@ func (m *Manager) FXRate(ctx context.Context) (*float64, error) {
 			return rate, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] FXRate -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {
@@ -65,7 +64,6 @@ func (m *Manager) ListAshare(ctx context.Context) ([]raw.MarketCode, error) {
 			return codes, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] ListAshare -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {
@@ -98,7 +96,6 @@ func (m *Manager) ListETF(ctx context.Context) ([]raw.MarketCode, error) {
 			return codes, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] ListETF -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {
@@ -131,7 +128,6 @@ func (m *Manager) ListHK(ctx context.Context) ([]raw.MarketCode, error) {
 			return codes, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] ListHK -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {
@@ -164,7 +160,6 @@ func (m *Manager) HKNames(ctx context.Context, codes []string) (map[string]strin
 			return names, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] HKNames -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {
@@ -197,7 +192,6 @@ func (m *Manager) FundETFDaily(ctx context.Context) ([]raw.MarketCode, error) {
 			return codes, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][infra] FundETFDaily -> %s 跳过", src.Name())
 			continue
 		}
 		if err != nil {

@@ -11,7 +11,6 @@ import (
 )
 
 // Manager 技术面域降级链（行情/分时/资金流/K线）。
-// 能力按小接口探测：某方法仅遍历实现该能力的源，未实现者自动跳过。
 type Manager struct {
 	sources []any
 }
@@ -34,7 +33,6 @@ func (m *Manager) Quote(ctx context.Context, code string) (*model.Quote, error) 
 			return q, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] Quote code=%s -> %s 跳过(不支持)", code, src.Name())
 			continue
 		}
 		if err != nil {
@@ -67,7 +65,6 @@ func (m *Manager) DailyBars(ctx context.Context, code, start, end string) ([]mod
 			return bars, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] DailyBars code=%s -> %s 跳过", code, src.Name())
 			continue
 		}
 		if err != nil {
@@ -123,7 +120,6 @@ func (m *Manager) Kline(ctx context.Context, symbol, period, start, end string, 
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] Kline %s -> %s 跳过", symbol, src.Name())
 			continue
 		}
 		if err != nil {
@@ -156,7 +152,6 @@ func (m *Manager) HKIntraday(ctx context.Context, code string) ([]raw.HKIntraday
 			return days, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] HKIntraday code=%s -> %s 跳过", code, src.Name())
 			continue
 		}
 		if err != nil {
@@ -189,7 +184,6 @@ func (m *Manager) IndexMinKline(ctx context.Context, symbol string, count int) (
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] IndexMinKline %s -> %s 跳过", symbol, src.Name())
 			continue
 		}
 		if err != nil {
@@ -222,7 +216,6 @@ func (m *Manager) FundflowDailyHistory(ctx context.Context, symbol string, count
 			return rows, nil
 		}
 		if errors.Is(err, ErrNotSupported) {
-			log.Printf("[debug][tech] FundflowHistory %s -> %s 跳过", symbol, src.Name())
 			continue
 		}
 		if err != nil {
