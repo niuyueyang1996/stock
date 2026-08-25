@@ -1,0 +1,22 @@
+backend/internal/service/ai/client.go
+  s_b2869fccf4a95f::t_535abd0f3f3281 17,27-33,111-204,257-275,286-317,319-323,330-332
+backend/internal/service/ai/models.go
+  s_b2869fccf4a95f::t_01d1de675cdb88 87-88,103,105-117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4bfdd9a59e1080d27814d98ea2631796c0ee8f9c",
+  "prompts": {},
+  "logical_commit_id": "4bfdd9a59e1080d27814d98ea2631796c0ee8f9c",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
