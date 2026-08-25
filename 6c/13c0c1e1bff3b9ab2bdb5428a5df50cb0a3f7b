@@ -1,0 +1,22 @@
+backend/cmd/server/main.go
+  s_b2869fccf4a95f::t_139103656617a6 39,175-209
+backend/internal/service/marketcode/code.go
+  s_b2869fccf4a95f::t_abc7edf123ca79 1-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6c13c0c1e1bff3b9ab2bdb5428a5df50cb0a3f7b",
+  "prompts": {},
+  "logical_commit_id": "6c13c0c1e1bff3b9ab2bdb5428a5df50cb0a3f7b",
+  "sessions": {
+    "s_b2869fccf4a95f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dff6d12b-f8c3-41aa-9fa2-3d0ceb794eb8",
+        "model": "unknown"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
