@@ -1,0 +1,42 @@
+.claude/skills/portfolio-deep-dive/SKILL.md
+  s_fbfd538d214a1b::t_5052743e079e96 1-107
+.claude/skills/portfolio-deep-dive/assets/report_template.html
+  s_fbfd538d214a1b::t_e791a82f93da3d 1-49
+.claude/skills/portfolio-deep-dive/config.yaml
+  s_fbfd538d214a1b::t_4a7da65d695563 1-49
+.claude/skills/portfolio-deep-dive/references/dimensions.md
+  s_fbfd538d214a1b::t_45cedfa747a300 1-249
+.claude/skills/portfolio-deep-dive/references/mcp-plan.md
+  s_fbfd538d214a1b::t_a7c290775189df 1-54
+.claude/skills/portfolio-deep-dive/references/palette.md
+  s_fbfd538d214a1b::t_16900d6cfe997b 1-9
+.claude/skills/portfolio-deep-dive/references/report-outline.md
+  s_fbfd538d214a1b::t_e5141b09191d6e 1-24
+.claude/skills/portfolio-deep-dive/scripts/build_report.py
+  s_fbfd538d214a1b::t_61938035e2d0a8 1-24
+.claude/skills/portfolio-deep-dive/scripts/detect_phases.py
+  s_fbfd538d214a1b::t_5d1934b5176f6e 1-74
+.claude/skills/portfolio-deep-dive/scripts/parse_excel.py
+  s_fbfd538d214a1b::t_c8cb2837c24113 1-122
+.claude/skills/portfolio-deep-dive/scripts/validate_report.py
+  s_fbfd538d214a1b::t_8a5a08f5168cf0 1-29
+.mcp.json
+  s_fbfd538d214a1b::t_279f9031f45aa9 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7af1d7460250121b560517d0f0eaa6c6c8b93bb3",
+  "prompts": {},
+  "logical_commit_id": "7af1d7460250121b560517d0f0eaa6c6c8b93bb3",
+  "sessions": {
+    "s_fbfd538d214a1b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "226bacda-f639-4d6c-ac3b-50c40d5cda30",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
