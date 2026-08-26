@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>持仓深度解剖报告</title>
+<style>
+:root{--blue:#1a56db;--green:#0e9f6e;--red:#e02424;--yellow:#f59e0b;--gray:#6b7280;--bg:#fff;--text:#111827}
+*{box-sizing:border-box} body{margin:0;font-family:-apple-system,Helvetica,Arial,"PingFang SC",sans-serif;color:var(--text);background:var(--bg);line-height:1.6}
+.cover{padding:48px 40px;border-bottom:4px solid var(--blue)}
+.cover h1{margin:0;font-size:28px} .cover .sub{color:var(--gray);margin-top:8px}
+.cards{display:flex;gap:16px;margin-top:24px;flex-wrap:wrap} .card{flex:1;min-width:160px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+.card .v{font-size:22px;font-weight:700} .card .k{color:var(--gray);font-size:12px}
+section{padding:32px 40px;border-bottom:1px solid #e5e7eb} h2{font-size:18px;margin:0 0 8px} .conclusion{margin-top:12px;padding:10px 14px;background:#eff6ff;border-left:3px solid var(--blue);border-radius:6px;font-weight:600}
+.chart{height:320px;background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray);margin-top:12px}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px} th,td{border:1px solid #e5e7eb;padding:8px 10px;text-align:left} th{background:#f3f4f6}
+@media print{section{break-inside:avoid} .chart{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="cover">
+  <h1>持仓深度解剖报告</h1>
+  <div class="sub">报告期：<span id="period">—</span> ｜ 生成时间：<span id="gen_time">—</span></div>
+  <div class="cards">
+    <div class="card"><div class="k">总市值</div><div class="v" id="m_total">—</div></div>
+    <div class="card"><div class="k">累计盈亏</div><div class="v" id="m_pnl">—</div></div>
+    <div class="card"><div class="k">胜率 / 盈亏比</div><div class="v" id="m_win">—</div></div>
+  </div>
+</div>
+
+<section><h2>一、画像总括</h2><div class="chart" id="fig-radar">雷达图占位</div><div class="conclusion" id="c1">一句话画像占位</div></section>
+<section><h2>二、金额真相</h2><div class="chart" id="fig-amount">单笔分布/占比散点占位</div><div class="conclusion" id="c2">金额结论占位</div></section>
+<section><h2>三、形态演进</h2><div class="chart" id="fig-shape">HHI/重叠率/桑基占位</div><div class="conclusion" id="c3">形态结论占位</div></section>
+<section><h2>四、资金流三态</h2><div class="chart" id="fig-flow">三态日历占位</div><div class="conclusion" id="c4">资金流结论占位</div></section>
+<section><h2>五、换仓指纹</h2><div class="chart" id="fig-swap">换仓雷达占位</div><div class="conclusion" id="c5">换仓结论占位</div></section>
+<section><h2>六、买卖点双验</h2><div class="chart" id="fig-points">技术/估值散点 + K线标注占位</div><div class="conclusion" id="c6">买卖点结论占位</div></section>
+<section><h2>七、阶段演进</h2><div class="chart" id="fig-phases">变点时间轴占位</div><div class="conclusion" id="c7">阶段结论占位</div></section>
+<section><h2>八、归因</h2><div class="chart" id="fig-attr">归因瀑布占位</div><div class="conclusion" id="c8">归因结论占位</div></section>
+<section><h2>九、纪律与风险</h2><div class="chart" id="fig-risk">纪律四卡片占位</div><div class="conclusion" id="c9">纪律结论占位</div></section>
+<section><h2>附录：方法与阈值</h2><p style="color:var(--gray);font-size:12px">阈值与口径见 config.yaml；K线/估值覆盖率与样本说明在此列示。</p></section>
+
+<script>
+// 由 build_report.py 注入：window.REPORT_DATA = {...}
+if(window.REPORT_DATA){
+  document.getElementById('period').textContent = REPORT_DATA.period || '—';
+  document.getElementById('gen_time').textContent = REPORT_DATA.gen_time || '—';
+}
+</script>
+</body>
+</html>

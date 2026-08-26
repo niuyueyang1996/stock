@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "stockanalyzer": {
+      "type": "stdio",
+      "command": "./backend/stockanalyzer-mcp",
+      "args": [],
+      "env": {
+        "STOCK_APP_HOME": ".",
+        "STOCK_PROJECT_ROOT": "."
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+swap_threshold: 0.30
+hhi_concentrated: 0.15
+hhi_very_concentrated: 0.25
+overlap_stable: 0.60
+overlap_shuttle: 0.30
+single_big_ratio: 0.08
+small_amount: 3000
+turnover_low: 1.0
+turnover_high: 5.0
+kline_coverage_warn: 0.60
+valuation_coverage_warn: 0.60
+fundflow_coverage_warn: 0.60
+top_n_kline: 12
+change_penalty_bic: true
+
+# 分池：债当现金
+pool:
+  cash_prefixes: ["511", "159"]          # 债ETF
+  cash_codes: ["511620", "511360"]       # 货币/短融按现金
+  cash_names_contain: ["债", "货币", "短融"]
+  vol_weight_cash: 0.10                  # 汇总用波动加权
+  risk_is_default: true
+
+# 换仓（金额加权）
+swap:
+  amount_formula: "min(当日卖额, 当日买额)"
+  ranking: "累计换仓额"                  # 禁止按次数
+  intensity_formula: "换仓额/当日总额"
+
+# 阶段（三源解耦）
+phases:
+  tech_features: ["方向(买前20日涨跌)", "位置(20日分位)"]
+  fundflow_features: ["主力净流入强度"]
+  fundamental_features: ["PE分位", "PB分位", "股息分位"]
+  speed_features: ["持有天数", "亏损割肉天数"]
+  method: "多维PELT"
+  penalty_sensitivity: 0.20
+
+# Workflow（准确优先）
+workflow:
+  phase0: "D1-D4 主线程（分池+形态+三态+换仓金额加权，产出选样）"
+  phase1_groups: 4
+  phase1_per_group_codes: 3
+  phase1_output: "结构化摘要 1-2KB/组（不回 raw）"
+  phase2: "主线程聚合（D5三源锚定→D6多维变点→D7/D8→D9→PDF）"
+  max_raw_per_detail: "270KB"
+  max_raw_per_kline: "63KB"
+  budget_no_parallel: "4MB raw 堆主线程，准确性下降"
+  budget_parallel: "20KB 摘要，主线程不污染"
