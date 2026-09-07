@@ -1,0 +1,40 @@
+.claude/skills/portfolio-deep-dive/assets/report_template.html
+  s_06842fa1fd7c86::t_17824cfcbd18ca 15-16,18,20,27-29,31-38,40-71,73-81,83-119,121-370,372-374
+.claude/skills/portfolio-deep-dive/config.yaml
+  s_06842fa1fd7c86::t_f1e3fededa2215 1,4-5,10-12,16-26,29-31,33-46,48,51-73
+.claude/skills/portfolio-deep-dive/references/dimensions.md
+  s_06842fa1fd7c86::t_f7db9d098142d9 3,12,15,22-23,29,42,96-97,108,118-119,154-155,160-161,167,170,202,205,226,244
+.claude/skills/portfolio-deep-dive/references/mcp-plan.md
+  s_06842fa1fd7c86::t_d1d6f5265801b4 26,40
+.claude/skills/portfolio-deep-dive/references/report-outline.md
+  s_06842fa1fd7c86::t_09118340e038a8 1-15,22-24
+.claude/skills/portfolio-deep-dive/scripts/build_report.py
+  s_06842fa1fd7c86::t_fd92f64c601293 2-4,6-270,272-285,287-293,295
+backend/internal/service/forecast/forecast_test.go
+  s_378a90218b8db5::t_968f4182adacc9 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c8e59acb810494c022af8332e1b50b844046835c",
+  "prompts": {},
+  "logical_commit_id": "c8e59acb810494c022af8332e1b50b844046835c",
+  "sessions": {
+    "s_06842fa1fd7c86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85e76d4f-90ff-42b9-a686-2bda2896874f",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    },
+    "s_378a90218b8db5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5df83dce-8dd6-41b9-8c4b-7ae2dd7f0b0c",
+        "model": "muse-spark-1.2-contributor"
+      },
+      "human_author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
