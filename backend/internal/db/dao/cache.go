@@ -4,6 +4,7 @@ package dao
 // GET 只读缓存零网络；写入仅刷新路径。
 
 import (
+	"encoding/json"
 	"time"
 
 	"gorm.io/gorm"
@@ -163,6 +164,52 @@ func (d *CacheDAO) UpsertDailyFundflow(f *db.DailyFundflowCache) error {
 		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}},
 		DoUpdates: clause.AssignmentColumns([]string{"netamount", "main_net", "super_large_net", "large_net", "medium_net", "small_net", "main_net_pct", "p95", "xs_net", "p15", "p40", "p75", "buy_amount", "sell_amount"}),
 	}).Create(f).Error
+}
+
+// UpsertAmountHist 写单日单笔金额直方图（近5日 pooled 分档用；空分布跳过）
+func (d *CacheDAO) UpsertAmountHist(code, tradeDate string, bins []int) error {
+	total := 0
+	for _, c := range bins {
+		total += c
+	}
+	if total == 0 {
+		return nil
+	}
+	b, err := json.Marshal(bins)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	if err := d.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}},
+		DoUpdates: clause.AssignmentColumns([]string{"bins", "updated_at"}),
+	}).Create(&db.AmountHistCache{Code: code, TradeDate: tradeDate, Bins: string(b), UpdatedAt: &now}).Error; err != nil {
+		return err
+	}
+	// 滚动淘汰 45 天自然日之前的分布（7 日窗口绰绰有余，表不无限长）
+	_ = d.DB.Exec("DELETE FROM fundflow_amount_hist WHERE code = ? AND trade_date < ?",
+		code, time.Now().AddDate(0, 0, -45).Format("2006-01-02")).Error
+	return nil
+}
+
+// GetAmountHists 取某日之前最近 limit 个交易日的直方图（从新到旧；坏行跳过）
+func (d *CacheDAO) GetAmountHists(code string, limit int, before string) [][]int {
+	if limit <= 0 {
+		return nil
+	}
+	var rows []db.AmountHistCache
+	if err := d.DB.Where("code = ? AND trade_date < ?", code, before).Order("trade_date DESC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil
+	}
+	out := make([][]int, 0, len(rows))
+	for _, r := range rows {
+		var bins []int
+		if err := json.Unmarshal([]byte(r.Bins), &bins); err != nil || len(bins) == 0 {
+			continue
+		}
+		out = append(out, bins)
+	}
+	return out
 }
 
 // GetDailyFundflowCount 窗口内资金流天数与最新日

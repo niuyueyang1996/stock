@@ -58,7 +58,7 @@ func Init(gdb *gorm.DB, dbPath string) error {
 
 	// 4) 版本化迁移（建表之后，新列/数据迁移）
 	if Migrate(tx, dbPath) {
-		log.Printf("[db] 数据库已升级到 v%d", CurrentVersion)
+		log.Printf("[数据库] 数据库已升级到 v%d", CurrentVersion)
 	}
 
 	// 5) 指数注册表种子

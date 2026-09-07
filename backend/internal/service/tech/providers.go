@@ -11,15 +11,28 @@ import (
 )
 
 // TencentTech 腾讯技术面适配器（K线/分笔/港股分时/指数分时）
-type TencentTech struct{ Raw *raw.Tencent }
+// Codes 就绪时查数符号走统一实现（QuerySymbol），指数裸码得正确 symbol；
+// nil 时原样透传（raw 内老规则兜底，老单测零改动）。
+type TencentTech struct {
+	Raw   *raw.Tencent
+	Codes *marketcode.Registry
+}
 
 func NewTencentTech(r *raw.Tencent) *TencentTech { return &TencentTech{Raw: r} }
 func (t *TencentTech) Name() string              { return "tencent" }
+
+// sym 统一查数符号（全仓唯一实现在 marketcode）。
+func (t *TencentTech) sym(code string) string {
+	if t.Codes != nil {
+		return t.Codes.QuerySymbol(code)
+	}
+	return code
+}
 func (t *TencentTech) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	parts := t.Raw.QuoteRaw(ctx, code)
+	parts := t.Raw.QuoteRaw(ctx, t.sym(code))
 	if len(parts) < 5 {
 		return nil, ErrNotSupported
 	}
@@ -33,7 +46,7 @@ func (t *TencentTech) DailyBars(ctx context.Context, code, start, end string) ([
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	rows := t.Raw.Kline(ctx, code, "day", start, end, 800)
+	rows := t.Raw.Kline(ctx, t.sym(code), "day", start, end, 800)
 	if len(rows) == 0 {
 		return nil, ErrNotSupported
 	}
@@ -43,16 +56,16 @@ func (t *TencentTech) Ticks(ctx context.Context, code string) ([]raw.TickRow, er
 	if t.Raw == nil {
 		return nil, nil
 	}
-	if isHKCode(code) {
+	if t.Codes.KindOf(code) == marketcode.KindHK {
 		return nil, nil
 	}
-	return t.Raw.FetchTicks(ctx, code), nil
+	return t.Raw.FetchTicks(ctx, t.sym(code)), nil
 }
 func (t *TencentTech) Kline(ctx context.Context, symbol, period, start, end string, count int) ([][]string, error) {
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	rows := t.Raw.Kline(ctx, symbol, period, start, end, count)
+	rows := t.Raw.Kline(ctx, t.sym(symbol), period, start, end, count)
 	if len(rows) == 0 {
 		return nil, ErrNotSupported
 	}
@@ -62,7 +75,7 @@ func (t *TencentTech) HKIntraday(ctx context.Context, code string) ([]raw.HKIntr
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	days := t.Raw.HKIntraday(ctx, code)
+	days := t.Raw.HKIntraday(ctx, t.sym(code))
 	if len(days) == 0 {
 		return nil, ErrNotSupported
 	}
@@ -72,7 +85,7 @@ func (t *TencentTech) IndexMinKline(ctx context.Context, symbol string, count in
 	if t.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	rows := t.Raw.IndexMinKline(ctx, symbol, count)
+	rows := t.Raw.IndexMinKline(ctx, t.sym(symbol), count)
 	if len(rows) == 0 {
 		return nil, ErrNotSupported
 	}
@@ -81,8 +94,6 @@ func (t *TencentTech) IndexMinKline(ctx context.Context, symbol string, count in
 func (t *TencentTech) FundflowDailyHistory(ctx context.Context, symbol string, count int) ([]raw.FundflowDayRow, error) {
 	return nil, ErrNotSupported
 }
-
-func isHKCode(code string) bool { return marketcode.Suffix(code) == "HK" }
 
 // SinaTech 新浪资金流历史适配器
 type SinaTech struct{ Raw *raw.Sina }
@@ -115,8 +126,11 @@ func (s *SinaTech) FundflowDailyHistory(ctx context.Context, symbol string, coun
 	return rows, nil
 }
 
-// EMTech 东财 ETF K线适配器
-type EMTech struct{ Raw *raw.EM }
+// EMTech 东财 ETF K线适配器（Codes 就绪时 ETF 判定走统一实现）
+type EMTech struct {
+	Raw   *raw.EM
+	Codes *marketcode.Registry
+}
 
 func NewEMTech(r *raw.EM) *EMTech { return &EMTech{Raw: r} }
 func (e *EMTech) Name() string    { return "em" }
@@ -124,7 +138,7 @@ func (e *EMTech) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	return nil, ErrNotSupported
 }
 func (e *EMTech) DailyBars(ctx context.Context, code, start, end string) ([]model.Bar, error) {
-	if !isETFCode(code) {
+	if e.Codes.KindOf(code) != marketcode.KindETF {
 		return nil, ErrNotSupported
 	}
 	rows := e.Raw.ETFHist(ctx, code, "", "")
@@ -173,11 +187,6 @@ func (e *EMTech) ETFHist(ctx context.Context, symbol, start, end string) [][]str
 		return nil
 	}
 	return rows
-}
-
-func isETFCode(code string) bool {
-	bare := marketcode.Bare(code)
-	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
 }
 
 func strF(s string) float64 {

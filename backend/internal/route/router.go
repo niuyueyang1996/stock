@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/datamanage"
@@ -209,29 +210,30 @@ func Setup(r *gin.Engine, s *Services) {
 	// 估值/历史分位等；支持 query window（窗口，默认 15）。
 	api.GET("/indices/:code", func(c *gin.Context) {
 		code := normalizeCode(c.Param("code"))
-		if !requireFullCode(c, code) {
+		def := resolveIndexDef(s, code)
+		if def == nil {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
 			return
 		}
 		window := 15
 		if v := c.Query("window"); v != "" {
 			window, _ = strconv.Atoi(v)
 		}
-		status, body := s.Detail.StockDetail(code, true, window, "", false)
+		// 下游缓存/行情全按裸码主键（def.Code），传归一后的键避免缓存分裂
+		status, body := s.Detail.StockDetail(def.Code, true, window, "", false)
 		c.JSON(status, body)
 	})
 	// PUT /api/indices/:code —— 更新指数定义字段（对齐 app/api/index.py）：支持 name/symbol/legu_code/pe_source/pb_source；
 	// 指数不存在 404、无有效字段 400。
 	api.PUT("/indices/:code", func(c *gin.Context) {
 		code := normalizeCode(c.Param("code"))
-		if !requireFullCode(c, code) {
+		def := resolveIndexDef(s, code)
+		if def == nil {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
 			return
 		}
 		var body map[string]any
 		_ = c.ShouldBindJSON(&body)
-		if s.Indices.GetIndexDef(code) == nil {
-			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
-			return
-		}
 		fields := map[string]any{}
 		for _, k := range []string{"name", "symbol", "legu_code", "pe_source", "pb_source"} {
 			if v, ok := body[k]; ok && v != nil {
@@ -242,11 +244,11 @@ func Setup(r *gin.Engine, s *Services) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "无可更新字段"})
 			return
 		}
-		if err := s.Indices.UpdateIndexDef(code, fields); err != nil {
+		if err := s.Indices.UpdateIndexDef(def.Code, fields); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetIndexDef(code)})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Indices.GetIndexDef(def.Code)})
 	})
 	// POST /api/indices/refresh-all —— 全量刷新所有指数（异步 job，返回 job_id 供前端进度跟踪）。
 	api.POST("/indices/refresh-all", func(c *gin.Context) {
@@ -557,7 +559,8 @@ func Setup(r *gin.Engine, s *Services) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": s.Holdings.ListTrades(code)})
 	})
 	// POST /api/trades —— 录入一笔交易（对齐 app/api/trades.py）：body 需 code/side(买或卖)/price/quantity，
-	// 可选 fee/trade_time/note/name；录毕立即重放持仓并可能触发当日 AI 打分失效。
+	// 可选 fee/trade_time/note/name；code 经双因子仲裁（裸码+名称→fullCode，对不上 400 带原因），
+	// 录毕立即重放持仓并可能触发当日 AI 打分失效。
 	api.POST("/trades", func(c *gin.Context) {
 		var body struct {
 			Code      string  `json:"code"`
@@ -578,10 +581,16 @@ func Setup(r *gin.Engine, s *Services) {
 			return
 		}
 		body.Code = normalizeCode(body.Code)
-		if !requireFullCode(c, body.Code) {
+		name := ""
+		if body.Name != nil {
+			name = *body.Name
+		}
+		fullCode, err := s.Holdings.ResolveFullCode(body.Code, name)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 			return
 		}
-		id, h, err := s.Holdings.RecordTrade(body.Code, body.Side, body.Price, body.Quantity,
+		id, h, err := s.Holdings.RecordTrade(fullCode, body.Side, body.Price, body.Quantity,
 			body.Fee, body.TradeTime, body.Note, body.Name, true)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
@@ -670,4 +679,32 @@ func requireFullCode(c *gin.Context, code string) bool {
 		return false
 	}
 	return true
+}
+
+// resolveIndexDef 指数入口归一：index_defs 主键历史上是裸码，迁移后多为 fullCode，
+// 库里可能混存。裸码直查；fullCode 精确查不到则剥后缀按裸码查；SH/SZ 后缀与
+// def.Symbol 前缀矛盾时拒绝（防 000001.SZ 撞上上证指数）。返回 nil 即 404。
+func resolveIndexDef(s *Services, code string) *db.IndexDef {
+	if d := s.Indices.GetIndexDef(code); d != nil {
+		return d
+	}
+	idx := strings.LastIndex(code, ".")
+	if idx < 0 {
+		return nil
+	}
+	bare, suf := code[:idx], strings.ToUpper(code[idx+1:])
+	d := s.Indices.GetIndexDef(bare)
+	if d == nil {
+		return nil
+	}
+	if d.Symbol != nil && (suf == "SH" || suf == "SZ") {
+		sym := strings.ToLower(*d.Symbol)
+		if strings.HasPrefix(sym, "sh") && suf != "SH" {
+			return nil
+		}
+		if strings.HasPrefix(sym, "sz") && suf != "SZ" {
+			return nil
+		}
+	}
+	return d
 }

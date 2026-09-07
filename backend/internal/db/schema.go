@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS fundflow_15m_cache (
     PRIMARY KEY (code, trade_date, ts)
 );
 
+-- fundflow_amount_hist：单日单笔金额直方图（JSON，近7日滚动 pooled 分档用）
+CREATE TABLE IF NOT EXISTS fundflow_amount_hist (
+    code       TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    bins       TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY (code, trade_date)
+);
+
 CREATE TABLE IF NOT EXISTS index_intraday_cache (
     code       TEXT NOT NULL,
     trade_date TEXT NOT NULL,

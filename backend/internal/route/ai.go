@@ -273,7 +273,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 					}
 					mu.Lock()
 					if err != nil {
-						log.Printf("[ai] analyze %s 失败 code=%s: %v", t, code, err)
+						log.Printf("[AI] analyze %s 失败 code=%s: %v", t, code, err)
 						results[t] = map[string]any{"error": err.Error()}
 					} else {
 						results[t] = r
@@ -400,7 +400,7 @@ func setupAIRoutes(api *gin.RouterGroup, s *Services) {
 					}
 					mu.Lock()
 					if err != nil {
-						log.Printf("[ai] analyze-portfolio %s 失败: %v", t, err)
+						log.Printf("[AI] analyze-portfolio %s 失败: %v", t, err)
 						results[t] = map[string]any{"error": err.Error()}
 					} else {
 						results[t] = r

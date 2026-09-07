@@ -570,7 +570,7 @@ func parseSupplyDemand(raw any) FundflowSupplyDemand {
 func ParseFundflowBatchAnalysis(data any) FundflowBatchAnalysis {
 	m, ok := data.(map[string]any)
 	if !ok {
-		log.Printf("[fundflow] ParseFundflowBatchAnalysis: 输入类型错误 %T", data)
+		log.Printf("[资金流] ParseFundflowBatchAnalysis: 输入类型错误 %T", data)
 		return FundflowBatchAnalysis{}
 	}
 	// 解析 stocks 数组
@@ -608,7 +608,7 @@ func ParseFundflowBatchAnalysis(data any) FundflowBatchAnalysis {
 			Conclusion:   strv(cohRaw["conclusion"]),
 		}
 	}
-	log.Printf("[fundflow] ParseFundflowBatchAnalysis: stocks=%d coherence=%v", len(stocks), coherence.Correlation != "")
+	log.Printf("[资金流] ParseFundflowBatchAnalysis: stocks=%d coherence=%v", len(stocks), coherence.Correlation != "")
 	return FundflowBatchAnalysis{
 		Stocks:    stocks,
 		Coherence: coherence,
@@ -658,7 +658,7 @@ func (s *Service) AnalyzeFundflow(code string, window any, systemPrompt, intensi
 	// 使用 ParseFundflowAnalysis 解析为结构化数据
 	analysis := ParseFundflowAnalysis(raw)
 	modelTag := modelTagOf(modelCfg)
-	log.Printf("[ai] 落库 资金流 code=%s date=%s window=%s source=single %s", code, ctx.Date, ctx.Window, fundflowReportSummary(analysis))
+	log.Printf("[AI] 落库 资金流 code=%s date=%s window=%s source=single %s", code, ctx.Date, ctx.Window, fundflowReportSummary(analysis))
 	_ = s.UpsertFundflowAnalysis(code, ctx.Date, "single", ctx.Window, analysis, modelTag)
 	return map[string]any{
 		"mode": ctx.Mode, "code": code, "name": s.StockDisplayName(code),
@@ -709,7 +709,7 @@ func (s *Service) UpsertFundflowAnalysis(code, tradeDate, source, window string,
 func (s *Service) GetStockFundflowReport(code, window string) *FundflowReportResponse {
 	r := s.FlowR.GetLatest(code, NormFlowWindow(window))
 	if r == nil {
-		log.Printf("[fundflow] GetStockFundflowReport: code=%s window=%s not found", code, window)
+		log.Printf("[资金流] GetStockFundflowReport: code=%s window=%s not found", code, window)
 		return nil
 	}
 	// 解析各字段
@@ -734,7 +734,7 @@ func (s *Service) GetStockFundflowReport(code, window string) *FundflowReportRes
 		json.Unmarshal([]byte(*r.Alerts), &alerts)
 	}
 
-	log.Printf("[fundflow] GetStockFundflowReport: code=%s window=%s source=%s segments=%d", code, window, r.Source, len(segments))
+	log.Printf("[资金流] GetStockFundflowReport: code=%s window=%s source=%s segments=%d", code, window, r.Source, len(segments))
 	return &FundflowReportResponse{
 		Code:      r.Code,
 		TradeDate: r.TradeDate,
@@ -842,7 +842,7 @@ func (s *Service) AnalyzeBatchFundflow(tags, codes []string, weights []float64, 
 			Conclusion:   stockAnalysis.Conclusion,
 			Alerts:       stockAnalysis.Alerts,
 		}
-		log.Printf("[ai] 落库 资金流 code=%s window=%s source=batch %s", code, w, fundflowReportSummary(analysis))
+		log.Printf("[AI] 落库 资金流 code=%s window=%s source=batch %s", code, w, fundflowReportSummary(analysis))
 		_ = s.UpsertFundflowAnalysis(code, ctx.Date, "batch", w, analysis, modelTag)
 	}
 

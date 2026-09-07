@@ -20,7 +20,6 @@ import (
 	"stockanalyzer/internal/raw"
 	ifindRaw "stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service"
-	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/ai"
 	"stockanalyzer/internal/service/calendar"
 	"stockanalyzer/internal/service/datamanage"
@@ -31,6 +30,7 @@ import (
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
 	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/portfolio"
 	"stockanalyzer/internal/service/quote"
 	"stockanalyzer/internal/service/refresh"
@@ -121,7 +121,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	})
 	holdSvc.Codes = codes
 
-	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
+	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) }, codes)
 	fm.Codes = codes
 	leguCode := func(code string) *string {
 		var c string
@@ -142,7 +142,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	quoteSvc.Codes = codes
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
-	techMgr := service.TechManager(rc, isIndex)
+	techMgr := service.TechManager(rc, isIndex, codes)
 	rfSvc := refresh.New(gdb, cacheDAO, holdSvc, fm, vm, liveSvc, fxSvc, jm)
 	rfSvc.Baidu = bd
 	rfSvc.Tech = techMgr

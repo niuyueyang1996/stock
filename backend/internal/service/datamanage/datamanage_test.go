@@ -29,9 +29,11 @@ func openSvc(t *testing.T) (*Service, *gorm.DB) {
 	})
 	h := holdings.New(dao.NewHoldingsDAO(g), nil)
 	// InitHoldings 走双因子仲裁（裸码+名称），需就绪 Registry；与 holdings 单测共用同一份候选集。
+	// 注意：000858/五粮液必须在表里——并集语义下"错位名"靠真货把并集撑到 2 才拦得住，
+	// 生产是全量表天然满足，mock 必须如实补齐（缺了会退化成单信号采纳）。
 	reg := marketcode.New()
 	reg.BuildWithNames(
-		[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
+		[]string{"600519.SH", "000001.SZ", "000858.SZ"}, []string{"贵州茅台", "平安银行", "五粮液"},
 		nil, nil, nil, nil,
 		map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
 	)

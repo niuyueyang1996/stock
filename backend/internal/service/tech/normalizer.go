@@ -141,6 +141,103 @@ func pf(row []string, i int) float64 {
 // bandPoints 自适应分档切分点（数量占比固定：特小15%/小25%/中35%/大20%/特大5%）
 var bandPoints = []float64{0.15, 0.40, 0.75, 0.95}
 
+// 金额直方图：80 格对数分箱，覆盖 1e2~1e9（格宽约 22%）。
+// 单日分笔只保留当天，跨日 pooled 阈值靠它——存分布不存原始笔，
+// 一行小 JSON/天/股，无额外网络。
+const histBins = 80
+const histMin = 100.0
+
+// histRatio 相邻分箱边比（包内变量，读写同构，边可重建）
+var histRatio = math.Pow(1e9/histMin, 1.0/histBins)
+
+func histIndex(amount float64) int {
+	if amount <= histMin {
+		return 0
+	}
+	i := int(math.Floor(math.Log(amount/histMin) / math.Log(histRatio)))
+	if i < 0 {
+		return 0
+	}
+	if i >= histBins {
+		return histBins - 1
+	}
+	return i
+}
+
+func histUpper(i int) float64 {
+	return histMin * math.Pow(histRatio, float64(i+1))
+}
+
+// AmountHist 当日单笔金额直方图（无符号金额；方向由 Sign 另行携带）。
+func AmountHist(ticks []raw.TickRow) []int {
+	out := make([]int, histBins)
+	for _, t := range ticks {
+		if t.Amount > 0 {
+			out[histIndex(t.Amount)]++
+		}
+	}
+	return out
+}
+
+// PooledQuantiles 多日直方图并池分位（P15/P40/P75/P95）；空池返回零值。
+// 口径与 computeQuantiles 对齐（位置 round(p*(n-1))，落格取上边）。
+func PooledQuantiles(hists [][]int) [4]float64 {
+	var out [4]float64
+	total := 0
+	merged := make([]int, histBins)
+	for _, h := range hists {
+		for i, c := range h {
+			if i < histBins && c > 0 {
+				merged[i] += c
+				total += c
+			}
+		}
+	}
+	if total == 0 {
+		return out
+	}
+	for qi, p := range bandPoints {
+		target := int(math.Round(p * float64(total-1)))
+		acc := 0
+		for i, c := range merged {
+			acc += c
+			if acc > target {
+				out[qi] = histUpper(i)
+				break
+			}
+		}
+		if out[qi] == 0 {
+			out[qi] = histUpper(histBins - 1)
+		}
+	}
+	return out
+}
+
+// PooledThresholds 近7日滚动 pooled 刀口：当日分布 + 往前最多 6 个交易日分布。
+// 无历史时退化为单日精确分位（行为与旧版逐字一致）。
+func PooledThresholds(ticks []raw.TickRow, prior [][]int) [4]float64 {
+	pooled := make([][]int, 0, len(prior)+1)
+	pooled = append(pooled, prior...)
+	pooled = append(pooled, AmountHist(ticks))
+	total := 0
+	for _, h := range pooled {
+		for _, c := range h {
+			total += c
+		}
+	}
+	if total == 0 {
+		return computeQuantiles(nil)
+	}
+	if len(prior) == 0 {
+		amounts := make([]float64, 0, len(ticks))
+		for _, t := range ticks {
+			amounts = append(amounts, t.Amount)
+		}
+		return computeQuantiles(amounts)
+	}
+	return PooledQuantiles(pooled)
+}
+
 // computeQuantiles 当日单笔金额百分位 (P15, P40, P75, P95)；无样本返回 0
 func computeQuantiles(amounts []float64) [4]float64 {
 	var out [4]float64
@@ -187,7 +284,14 @@ func AggregateTicks(ticks []raw.TickRow, windowMin int) []model.FundflowPoint {
 	for _, t := range ticks {
 		amounts = append(amounts, t.Amount)
 	}
-	qs := computeQuantiles(amounts)
+	return AggregateTicksWith(ticks, windowMin, computeQuantiles(amounts))
+}
+
+// AggregateTicksWith 同上，刀口外给（近5日 pooled 或单日）。
+func AggregateTicksWith(ticks []raw.TickRow, windowMin int, qs [4]float64) []model.FundflowPoint {
+	if len(ticks) == 0 {
+		return nil
+	}
 	type bucket struct {
 		super, large, medium, small, xs, buy, sell float64
 		price                                      *float64
@@ -267,7 +371,14 @@ func TicksToDay(ticks []raw.TickRow, tradeDate string) *model.FundflowDay {
 	for _, t := range ticks {
 		amounts = append(amounts, t.Amount)
 	}
-	qs := computeQuantiles(amounts)
+	return TicksToDayWith(ticks, tradeDate, computeQuantiles(amounts))
+}
+
+// TicksToDayWith 同上，刀口外给（近5日 pooled 或单日）。
+func TicksToDayWith(ticks []raw.TickRow, tradeDate string, qs [4]float64) *model.FundflowDay {
+	if len(ticks) == 0 {
+		return nil
+	}
 	tot := map[string]float64{"super": 0, "large": 0, "medium": 0, "small": 0, "xs": 0}
 	totalAmount, buy, sell := 0.0, 0.0, 0.0
 	for _, t := range ticks {

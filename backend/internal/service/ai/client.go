@@ -249,10 +249,10 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 		taskTag = " task=" + task[0]
 	}
 	start := time.Now()
-	log.Printf("[ai] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s%s",
+	log.Printf("[AI] 入 host=%s model=%s in=%d字符 max_tokens=%d effort=%s%s",
 		chatLogHost(baseURL), model, len(system)+len(user), maxTokens, effortP, taskTag)
 	defer func() {
-		log.Printf("[ai] 出 host=%s model=%s 耗时=%s%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), taskTag)
+		log.Printf("[AI] 出 host=%s model=%s 耗时=%s%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), taskTag)
 	}()
 	// 若已探测为 response 协议，直接走 responses
 	key := protocolKey(baseURL, model)
@@ -264,7 +264,7 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 		}
 		if err == nil && strings.TrimSpace(content) != "" {
 			if parsed, pe := ParseJSONContent(content); pe == nil {
-				log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content), taskTag)
+				log.Printf("[AI] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content), taskTag)
 				return parsed, nil
 			}
 			if parsed, pe := ParseJSONContent(repairJSON(content)); pe == nil {
@@ -288,15 +288,15 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 		tryResponse := func(eff string) (string, error) {
 			rc, re := c.postResponse(ctx, baseURL, apiKey, model, system, user, maxTokens, eff)
 			if re != nil {
-				log.Printf("[ai] response 尝试 host=%s model=%s effort=%s 失败: %v", chatLogHost(baseURL), model, eff, re)
+				log.Printf("[AI] response 尝试 host=%s model=%s effort=%s 失败: %v", chatLogHost(baseURL), model, eff, re)
 			}
 			return rc, re
 		}
 		if rc, re := tryResponse(effortP); re == nil && strings.TrimSpace(rc) != "" {
 			protocolCache.Store(key, "response")
-			log.Printf("[ai] 探测 host=%s model=%s 协议=response (chat 失败: %v)", chatLogHost(baseURL), model, err)
+			log.Printf("[AI] 探测 host=%s model=%s 协议=response (chat 失败: %v)", chatLogHost(baseURL), model, err)
 			if parsed, pe := ParseJSONContent(rc); pe == nil {
-				log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(rc), taskTag)
+				log.Printf("[AI] 完成 host=%s model=%s 耗时=%s out=%d字符%s", chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(rc), taskTag)
 				return parsed, nil
 			}
 			if parsed, pe := ParseJSONContent(repairJSON(rc)); pe == nil {
@@ -306,7 +306,7 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 		}
 		if rc, re := tryResponse(""); re == nil && strings.TrimSpace(rc) != "" {
 			protocolCache.Store(key, "response")
-			log.Printf("[ai] 探测 host=%s model=%s 协议=response (无effort重试成功)", chatLogHost(baseURL), model)
+			log.Printf("[AI] 探测 host=%s model=%s 协议=response (无effort重试成功)", chatLogHost(baseURL), model)
 			if parsed, pe := ParseJSONContent(rc); pe == nil {
 				return parsed, nil
 			}
@@ -333,7 +333,7 @@ func (c *OpenAICompatClient) ChatJSON(ctx context.Context, baseURL, apiKey, mode
 	}
 	parsed, parseErr := ParseJSONContent(content)
 	if parseErr == nil {
-		log.Printf("[ai] 完成 host=%s model=%s 耗时=%s out=%d字符%s",
+		log.Printf("[AI] 完成 host=%s model=%s 耗时=%s out=%d字符%s",
 			chatLogHost(baseURL), model, time.Since(start).Round(time.Millisecond), len(content), taskTag)
 		return parsed, nil
 	}

@@ -528,3 +528,14 @@ type StockRefreshMeta struct {
 }
 
 func (StockRefreshMeta) TableName() string { return "stock_refresh_meta" }
+
+// AmountHistCache fundflow_amount_hist：单日单笔金额直方图（JSON 数组，80 格）。
+// 近7日滚动 pooled 分档阈值用；存分布不存原始笔，一行小 JSON/天/股。
+type AmountHistCache struct {
+	Code      string  `gorm:"column:code;primaryKey"`
+	TradeDate string  `gorm:"column:trade_date;primaryKey"`
+	Bins      string  `gorm:"column:bins"`
+	UpdatedAt *string `gorm:"column:updated_at"`
+}
+
+func (AmountHistCache) TableName() string { return "fundflow_amount_hist" }

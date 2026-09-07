@@ -581,7 +581,7 @@ func (s *Service) AnalyzeStock(code, systemPrompt, intensity string) (map[string
 	report["snapshot_hash"] = s.StockReportSnapshotHash(code, name)
 
 	name2 := s.StockDisplayName(code)
-	log.Printf("[ai] 落库 诊股 code=%s 模型=%s %s", code, name, aiReportSummary(report))
+	log.Printf("[AI] 落库 诊股 code=%s 模型=%s %s", code, name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	if err := s.Reports.Upsert(code, name2, string(b), name); err != nil {
 		return nil, err

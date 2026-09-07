@@ -117,17 +117,19 @@ func setupIndicesExtraRoutes(api *gin.RouterGroup, s *Services) {
 		}})
 	})
 	// POST /api/indices/:code/refresh —— 单指数刷新（异步，对齐 app/api/index.py）：刷新行情+估值序列并重算分位；指数不存在 404。
+	// 裸码/fullCode 通吃（归一到裸码主键，落库 key 不分裂）。
 	api.POST("/indices/:code/refresh", func(c *gin.Context) {
 		code := normalizeCode(c.Param("code"))
-		if s.Indices.GetIndexDef(code) == nil {
+		def := resolveIndexDef(s, code)
+		if def == nil {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
 			return
 		}
-		jobID := s.Jobs.Start("index.refresh", "刷新指数 "+code, func(p *jobs.Progress) error {
-			s.Indices.RefreshOne(context.Background(), code)
+		jobID := s.Jobs.Start("index.refresh", "刷新指数 "+def.Code, func(p *jobs.Progress) error {
+			s.Indices.RefreshOne(context.Background(), def.Code)
 			return nil
 		})
-		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": code}})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{"job_id": jobID, "async": true, "code": def.Code}})
 	})
 }
 

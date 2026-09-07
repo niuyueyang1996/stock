@@ -116,7 +116,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 		return map[string]any{"code": code, "fetched": 0, "reason": "cached"}
 	}
 	bars, err := s.fetchDailyBars(ctx, code, start, today)
-	log.Printf("[syncDailyBars] code=%s start=%s today=%s fetched_bars=%d err=%v", code, start, today, len(bars), err)
+	log.Printf("[日K同步] code=%s start=%s today=%s fetched_bars=%d err=%v", code, start, today, len(bars), err)
 	if err != nil || len(bars) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "source_fail"}
 	}
@@ -124,7 +124,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 	var filtered []barRow
 	for _, b := range bars {
 		if s.Cal != nil && !s.Cal.IsTradeDay(b.Date) {
-			log.Printf("[syncDailyBars] filter skip %s: not trade day", b.Date)
+			log.Printf("[日K同步] filter skip %s: not trade day", b.Date)
 			continue
 		}
 		if s.Cal != nil && s.Cal.IsBeforeOpen(now) && b.Date >= today {
@@ -132,7 +132,7 @@ func (s *Service) syncDailyBars(ctx context.Context, code string, now time.Time,
 		}
 		filtered = append(filtered, barRow{Date: b.Date, Open: b.Open, High: b.High, Low: b.Low, Close: b.Close, Volume: b.Volume, Amount: b.Amount})
 	}
-	log.Printf("[syncDailyBars] code=%s bars=%d filtered=%d", code, len(bars), len(filtered))
+	log.Printf("[日K同步] code=%s bars=%d filtered=%d", code, len(bars), len(filtered))
 	s.Cache.PurgeWeekend(code)
 	if len(filtered) > 0 {
 		prev := s.Cache.PrevClose(code, filtered[0].Date)
@@ -262,13 +262,17 @@ func (s *Service) syncFundflow(ctx context.Context, code string, now time.Time) 
 	if len(valid) == 0 {
 		return map[string]any{"code": code, "fetched": 0, "reason": "stale_ticks"}
 	}
-	day := tech.TicksToDay(toTickRows(valid), targetDate)
+	tickRows := toTickRows(valid)
+	// 分档阈值 P15/P40/P75/P95：近7日滚动 pooled（含当日），无历史退化单日精确
+	qs := tech.PooledThresholds(tickRows, s.Cache.GetAmountHists(code, 6, targetDate))
+	day := tech.TicksToDayWith(tickRows, targetDate, qs)
 	if day != nil {
-		// 当日自适应分档阈值 P15/P40/P75/P95（前端展示各档组成条件；对齐 Python tick_bands）
-		bands := tech.TickBands(toTickRows(valid))
+		// 存今日金额分布供后续 pooled 用（前端展示各档组成条件）
+		bands := map[string]float64{"p15": qs[0], "p40": qs[1], "p75": qs[2], "p95": qs[3]}
 		_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, targetDate, day, bands))
+		_ = s.Cache.UpsertAmountHist(code, targetDate, tech.AmountHist(tickRows))
 	}
-	points := tech.AggregateTicks(toTickRows(valid), 1)
+	points := tech.AggregateTicksWith(tickRows, 1, qs)
 	rows := make([]dao.FundflowMinuteRow, 0, len(points))
 	for _, p := range points {
 		rows = append(rows, dao.FundflowMinuteRow{
@@ -631,16 +635,19 @@ func (s *Service) syncHKFundflow(ctx context.Context, code string) map[string]an
 		if len(ticks) == 0 {
 			continue
 		}
-		if f := tech.TicksToDay(ticks, day.Date); f != nil {
+		// 阈值一律近7日滚动 pooled（含当日），无历史退化单日
+		qs := tech.PooledThresholds(ticks, s.Cache.GetAmountHists(code, 6, day.Date))
+		if f := tech.TicksToDayWith(ticks, day.Date, qs); f != nil {
 			// bands 只写最新日（对齐 Python：多日窗口 bands=None，避免覆盖当日）
 			var bands map[string]float64
 			if day.Date == today {
-				bands = tech.TickBands(ticks)
+				bands = map[string]float64{"p15": qs[0], "p40": qs[1], "p75": qs[2], "p95": qs[3]}
 			}
 			_ = s.Cache.UpsertDailyFundflow(dbDailyFlowFrom(code, day.Date, f, bands))
+			_ = s.Cache.UpsertAmountHist(code, day.Date, tech.AmountHist(ticks))
 			fetched++
 		}
-		points := tech.AggregateTicks(ticks, 1)
+		points := tech.AggregateTicksWith(ticks, 1, qs)
 		rows := make([]dao.FundflowMinuteRow, 0, len(points))
 		for _, p := range points {
 			rows = append(rows, dao.FundflowMinuteRow{

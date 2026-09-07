@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -685,7 +686,17 @@ func TestTTMFromRows(t *testing.T) {
 // ---- isHKCode / toSymbol ----
 
 func TestIsHKCodeAndToSymbol(t *testing.T) {
-	if !isHKCode("00700.HK") || !isHKCode("06198.HK") || isHKCode("600519.SH") || isHKCode("000001.SZ") || isHKCode("1100abc") {
-		t.Fatal("isHKCode 判定错误")
+	// 小抄已删，此处钉统一实现的行为
+	for _, tc := range []struct {
+		code string
+		want bool
+	}{
+		{"00700.HK", true}, {"06198.HK", true},
+		{"600519.SH", false}, {"000001.SZ", false}, {"1100abc", false},
+		{"00700", true}, // 纯规则兼容裸码
+	} {
+		if got := marketcode.IsHK(tc.code); got != tc.want {
+			t.Errorf("IsHK(%q)=%v want %v", tc.code, got, tc.want)
+		}
 	}
 }

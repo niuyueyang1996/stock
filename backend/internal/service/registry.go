@@ -9,6 +9,7 @@ import (
 	"stockanalyzer/internal/service/forecast"
 	"stockanalyzer/internal/service/fundamental"
 	"stockanalyzer/internal/service/infra"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/tech"
 	"stockanalyzer/internal/service/valuation"
 )
@@ -26,12 +27,13 @@ type RawClients struct {
 }
 
 // TechManager 构造技术面域 Manager（行情/分时/资金流/K线）
-// chain 顺序即降级优先级；同花顺插首位，未配置时内部返回 ErrNotSupported 自动降级
-func TechManager(rc *RawClients, isIndex func(string) bool) *tech.Manager {
+// chain 顺序即降级优先级；同花顺插首位，未配置时内部返回 ErrNotSupported 自动降级。
+// codes 注入各 provider 做统一符号解释（nil 则各 provider 回退老行为）。
+func TechManager(rc *RawClients, isIndex func(string) bool, codes *marketcode.Registry) *tech.Manager {
 	return tech.New(
-		&tech.IFIndTech{Raw: rc.IFind, IsIndex: isIndex},
-		tech.NewTencentTech(rc.Tencent),
-		tech.NewEMTech(rc.EM),
+		&tech.IFIndTech{Raw: rc.IFind, IsIndex: isIndex, Codes: codes},
+		&tech.TencentTech{Raw: rc.Tencent, Codes: codes},
+		&tech.EMTech{Raw: rc.EM, Codes: codes},
 		tech.NewSinaTech(rc.Sina),
 	)
 }
@@ -58,11 +60,14 @@ func FundamentalDividendManager(rc *RawClients) *fundamental.Manager {
 }
 
 // NewFinanceManager 构造财务 Manager（保持现有 finance 包语义，按 ashare/hk 分链）
-func NewFinanceManager(rc *RawClients, fx func() *float64) *finance.FinanceManager {
+// codes 注入港股判定（nil 则纯后缀规则，老行为）。
+func NewFinanceManager(rc *RawClients, fx func() *float64, codes *marketcode.Registry) *finance.FinanceManager {
+	emHK := finance.NewEMHKFinance(rc.EM)
+	emHK.Codes = codes
 	return finance.NewFinanceManager(
 		fx,
 		[]finance.FinanceSource{finance.NewAshareFinanceWithEM(rc.Sina, rc.Tencent, rc.CNInfo, rc.EM)},
-		[]finance.FinanceSource{finance.NewEMHKFinance(rc.EM)},
+		[]finance.FinanceSource{emHK},
 	)
 }
 

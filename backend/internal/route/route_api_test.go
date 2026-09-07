@@ -962,8 +962,10 @@ func TestHoldingImportExcelResolve(t *testing.T) {
 		r, svc := newTestRouter(t, t.TempDir())
 		reg := marketcode.New()
 		reg.BuildWithNames(
-			[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
-			nil, nil, nil, nil,
+			[]string{"600519.SH", "000001.SZ", "000858.SZ"}, []string{"贵州茅台", "平安银行", "五粮液"},
+			// ETF 注册名用生产短名风格（系统性改名回归：Excel 全称必须能进）
+			[]string{"510300.SH"}, []string{"沪深300ETF华泰柏瑞"},
+			nil, nil,
 			map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
 		)
 		svc.Holdings.Codes = reg
@@ -1035,10 +1037,16 @@ func TestHoldingImportExcelResolve(t *testing.T) {
 	if det, ok := d["skipped_detail"].([]any); !ok || len(det) != 1 {
 		t.Errorf("全 skipped 也应返回明细, got %v", d["skipped_detail"])
 	}
+	// ETF 系统性改名端到端：Excel 全称 vs 注册短名 → 导入成功（生产 bug 回归）
+	r, _ = newResolveRouter(t)
+	d = postXlsx(r, [][]string{{"510300", "华泰柏瑞沪深300ETF", "100", "3.5"}})
+	if d["total"].(float64) != 1 || d["skipped"].(float64) != 0 {
+		t.Errorf("ETF 全称应导入, got %v", d)
+	}
 }
 
 // multipartStream 极简 multipart/form-data 构造器（单一 file 字段）。
-type multipartStream struct{}// boundary 写出 multipart body 并返回 boundary。
+type multipartStream struct{} // boundary 写出 multipart body 并返回 boundary。
 func (m *multipartStream) boundary(w *bytes.Buffer, content []byte) string {
 	boundary := "----testboundary1234"
 	w.WriteString("--" + boundary + "\r\n")
@@ -1049,13 +1057,16 @@ func (m *multipartStream) boundary(w *bytes.Buffer, content []byte) string {
 	return boundary
 }
 
-// TestWritePathsRejectIndex 手动录入/成本调整写入口拦截指数（E6 补齐）：
+// TestWritePathsRejectIndex 手动录入/成本调整写入口拦截指数（E6 补齐）+
+// POST /api/trades 双因子收敛：裸码+名可决→200 建仓，不可决→400 带原因。
 // 指数 fullCode → 400；非指数放行。Registry 未注入时不误伤（向后兼容）。
 func TestWritePathsRejectIndex(t *testing.T) {
 	newIndexRouter := func(t *testing.T) (*gin.Engine, *Services) {
 		r, svc := newTestRouter(t, t.TempDir())
 		reg := marketcode.New()
-		reg.BuildWithNames(nil, nil, nil, nil, nil, nil,
+		reg.BuildWithNames(
+			[]string{"600519.SH", "000001.SZ", "000858.SZ"}, []string{"贵州茅台", "平安银行", "五粮液"},
+			nil, nil, nil, nil,
 			map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"})
 		svc.Holdings.Codes = reg
 		return r, svc
@@ -1082,6 +1093,18 @@ func TestWritePathsRejectIndex(t *testing.T) {
 	if w := postJSON(r, "/api/trades", `{"code":"600519.SH","side":"buy","price":10,"quantity":100}`); w.Code != http.StatusOK {
 		t.Errorf("非指数应放行, got code=%d body=%s", w.Code, w.Body.String())
 	}
+	// 裸码+名可决 → 200 建仓（收敛：不再一刀 400）
+	r2, _ := newIndexRouter(t)
+	if w := postJSON(r2, "/api/trades", `{"code":"600519","name":"贵州茅台","side":"buy","price":10,"quantity":100}`); w.Code != http.StatusOK {
+		t.Errorf("裸码可决应 200, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	// 裸码+不可决（重码无名）→ 400 带原因
+	r3, _ := newIndexRouter(t)
+	if w := postJSON(r3, "/api/trades", `{"code":"000001","side":"buy","price":10,"quantity":100}`); w.Code != http.StatusBadRequest {
+		t.Errorf("裸码不可决应 400, got code=%d body=%s", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), "候选") && !strings.Contains(w.Body.String(), "歧义") {
+		t.Errorf("不可决应带仲裁原因, got %s", w.Body.String())
+	}
 }
 
 // TestHoldingImportExcelNonEmptyFirst 非空仓时先报"请先清仓"：即使 Excel 全是坏行，
@@ -1090,7 +1113,7 @@ func TestHoldingImportExcelNonEmptyFirst(t *testing.T) {
 	r, svc := newTestRouter(t, t.TempDir())
 	reg := marketcode.New()
 	reg.BuildWithNames(
-		[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
+		[]string{"600519.SH", "000001.SZ", "000858.SZ"}, []string{"贵州茅台", "平安银行", "五粮液"},
 		nil, nil, nil, nil,
 		map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
 	)
@@ -1136,15 +1159,17 @@ func TestExtra2RoutesRequireFullCode(t *testing.T) {
 		}
 	}
 	// 指数刷新：归一化后查无此指数 → 404（通路正常，非 500）
+	// 注：测试库自带 14 行指数种子，000001.SH 会剥后缀命中裸种子行（归一生效），
+	// 故用真未知码断言 404。
 	w = httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/indices/000001.SH/refresh", nil))
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/indices/999999.SH/refresh", nil))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("未知指数应 404, got code=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
 // TestDefaultTagAndCodeShape defaultTag（fullCode 后缀判定）与 isAStockOrETF
-//（剥后缀验裸码）回归：港股/ETF/债/A股标签正确，裸码与 fullCode 同判。
+// （剥后缀验裸码）回归：港股/ETF/债/A股标签正确，裸码与 fullCode 同判。
 func TestDefaultTagAndCodeShape(t *testing.T) {
 	for _, tc := range []struct{ code, name, want string }{
 		{"00700.HK", "腾讯控股", "港股"},
@@ -1169,5 +1194,79 @@ func TestDefaultTagAndCodeShape(t *testing.T) {
 		if got := isAStockOrETF(tc.code); got != tc.want {
 			t.Errorf("isAStockOrETF(%q)=%v want %v", tc.code, got, tc.want)
 		}
+	}
+}
+
+// TestResolveIndexDef 指数入口归一：裸码直查；fullCode 精确命中；
+// 精确缺失剥后缀按裸码查；SH/SZ 后缀与 symbol 前缀矛盾拒绝。
+func TestResolveIndexDef(t *testing.T) {
+	r, svc := newTestRouter(t, t.TempDir())
+	_ = r
+	if err := svc.Indices.DB.Exec("DELETE FROM index_defs").Error; err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	seeds := []string{
+		"INSERT INTO index_defs(code,name,symbol,legu_code) VALUES('000300','沪深300','sh000300','000300.SH')",
+		"INSERT INTO index_defs(code,name,symbol,legu_code) VALUES('000001.SH','上证指数','sh000001','')",
+		"INSERT INTO index_defs(code,name,symbol,legu_code) VALUES('399001','深证成指','sz399001','')",
+	}
+	for _, sql := range seeds {
+		if err := svc.Indices.DB.Exec(sql).Error; err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		in      string
+		wantNil bool
+		want    string
+	}{
+		{"000300", false, "000300"},       // 裸码直查
+		{"000300.SH", false, "000300"},    // fullCode 剥后缀命中
+		{"000001.SH", false, "000001.SH"}, // 精确命中
+		{"000300.SZ", true, ""},           // 后缀与 symbol 矛盾拒绝
+		{"399001.SZ", false, "399001"},    // sz 一致放行
+		{"999999", true, ""},              // 未知裸码
+		{"999999.SH", true, ""},           // 未知 fullCode
+	} {
+		d := resolveIndexDef(svc, tc.in)
+		if tc.wantNil {
+			if d != nil {
+				t.Errorf("resolveIndexDef(%q) 应 nil, got %q", tc.in, d.Code)
+			}
+			continue
+		}
+		if d == nil || d.Code != tc.want {
+			t.Errorf("resolveIndexDef(%q) 应 %q, got %+v", tc.in, tc.want, d)
+		}
+	}
+}
+
+// TestIndicesPutBothForms PUT 指数定义裸码/fullCode 通吃；冲突与未知 404。
+func TestIndicesPutBothForms(t *testing.T) {
+	r, svc := newTestRouter(t, t.TempDir())
+	if err := svc.Indices.DB.Exec("DELETE FROM index_defs").Error; err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if err := svc.Indices.DB.Exec("INSERT INTO index_defs(code,name,symbol) VALUES('000300','沪深300','sh000300')").Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	put := func(code, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/indices/"+code, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	if w := put("000300.SH", `{"name":"沪深300改"}`); w.Code != http.StatusOK {
+		t.Errorf("fullCode PUT 应 200, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := put("000300", `{"name":"沪深300"}`); w.Code != http.StatusOK {
+		t.Errorf("裸码 PUT 应 200, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := put("000300.SZ", `{"name":"x"}`); w.Code != http.StatusNotFound {
+		t.Errorf("后缀矛盾应 404, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := put("999999.SH", `{"name":"x"}`); w.Code != http.StatusNotFound {
+		t.Errorf("未知应 404, got code=%d body=%s", w.Code, w.Body.String())
 	}
 }

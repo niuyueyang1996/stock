@@ -37,6 +37,7 @@ func TestOpenCreatesAllTables(t *testing.T) {
 		"ai_reports", "ai_tech_coherence_reports", "ai_tech_reports",
 		"config", "daily_fundflow_cache", "daily_price_cache", "daily_valuation_cache",
 		"dividend_adjustments", "etf_index_map", "financial_cache", "fundflow_15m_cache",
+		"fundflow_amount_hist",
 		"fx_rate_cache", "holdings", "index_defs", "index_intraday_cache",
 		"monthly_price_cache", "portfolio_valuation_cache", "stock_expected_growth",
 		"stock_expected_payout", "stock_expected_revenue_growth", "stock_news_cache",

@@ -209,7 +209,7 @@ func (s *Service) AnalyzeNews(code, systemPrompt, intensity string) (map[string]
 	}
 	report := NormalizeNews(raw)
 	modelTag := modelTagOf(modelCfg)
-	log.Printf("[ai] 落库 消息面 code=%s as_of=%s source=single 模型=%s %s", code, asOf, modelTag, aiReportSummary(report))
+	log.Printf("[AI] 落库 消息面 code=%s as_of=%s source=single 模型=%s %s", code, asOf, modelTag, aiReportSummary(report))
 	if err := s.UpsertNewsReport(code, asOf, "single", report, modelTag); err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (s *Service) AnalyzeTechnical(code, systemPrompt, intensity string) (map[st
 	}
 	report := NormalizeTechnical(raw)
 	modelTag := modelTagOf(modelCfg)
-	log.Printf("[ai] 落库 技术面 code=%s as_of=%s source=single 模型=%s %s", code, asOf, modelTag, aiReportSummary(report))
+	log.Printf("[AI] 落库 技术面 code=%s as_of=%s source=single 模型=%s %s", code, asOf, modelTag, aiReportSummary(report))
 	if err := s.UpsertTechReport(code, asOf, "single", report, modelTag); err != nil {
 		return nil, err
 	}
@@ -406,7 +406,7 @@ func (s *Service) AnalyzeBatchNews(tags, codes []string, systemPrompt, intensity
 				continue
 			}
 			report := NormalizeNews(it)
-			log.Printf("[ai] 落库 消息面 code=%s as_of=%s source=batch %s", code, asOf, aiReportSummary(report))
+			log.Printf("[AI] 落库 消息面 code=%s as_of=%s source=batch %s", code, asOf, aiReportSummary(report))
 			if err := s.UpsertNewsReport(code, asOf, "batch", report, modelTag); err != nil {
 				continue
 			}
@@ -469,7 +469,7 @@ func (s *Service) AnalyzeBatchTechnical(tags, codes []string, systemPrompt, inte
 				continue
 			}
 			report := NormalizeTechnical(it)
-			log.Printf("[ai] 落库 技术面 code=%s as_of=%s source=batch %s", code, asOf, aiReportSummary(report))
+			log.Printf("[AI] 落库 技术面 code=%s as_of=%s source=batch %s", code, asOf, aiReportSummary(report))
 			if err := s.UpsertTechReport(code, asOf, "batch", report, modelTag); err != nil {
 				continue
 			}

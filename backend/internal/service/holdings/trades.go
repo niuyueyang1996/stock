@@ -27,53 +27,35 @@ var ErrCodeAmbiguous = errors.New("同码多候选，名称无法唯一确定")
 // ErrNotReady 代码表预热中
 var ErrNotReady = errors.New("代码表预热中，请稍后重试")
 
-// ResolveFullCode 双因子仲裁：裸码圈定候选 + 名称仲裁，返回 fullCode。
-// 已带后缀直接归一化采用（仍拦截指数）；裸码走候选仲裁（指数永远不可作为持仓）。
-// 名称为空视为无法仲裁（严格版）。
+// ResolveFullCode 双因子仲裁：委托 marketcode.Registry.Arbitrate 的并集语义。
+// A=名称精确命中集，B=代码候选集；并集<1→无此代码，=1→命中（指数则拦截），
+// >1→交集唯一才命中。本函数只做 verdict→error 映射（保持五种文案稳定，
+// 前端/skipped 明细无感）与未就绪闸门；判定逻辑全仓唯一在 Arbitrate。
 func (s *Service) ResolveFullCode(code, name string) (string, error) {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	if code == "" {
+	trimmed := strings.ToUpper(strings.TrimSpace(code))
+	if trimmed == "" {
 		return "", ErrCodeNotFound
 	}
-	if strings.Contains(code, ".") {
-		if s.Codes != nil && s.Codes.IsIndex(code) {
-			return "", fmt.Errorf("指数不可交易: %s", code)
-		}
-		return code, nil
-	}
-	if s.Codes == nil || !s.Codes.Ready() {
+	if !strings.Contains(trimmed, ".") && (s.Codes == nil || !s.Codes.Ready()) {
 		return "", ErrNotReady
 	}
-	cands := s.Codes.CandidatesByBare(code)
-	if len(cands) == 0 {
+	if s.Codes == nil {
+		return trimmed, nil // 未注入且带后缀：信任显式表达（同旧行为）
+	}
+	full, vd := s.Codes.Arbitrate(code, name)
+	switch vd {
+	case marketcode.ArbitHit:
+		return full, nil
+	case marketcode.ArbitIndex:
+		return "", fmt.Errorf("指数不可交易: %s", code)
+	case marketcode.ArbitEmpty:
 		return "", fmt.Errorf("%w: %s", ErrCodeNotFound, code)
-	}
-	normName := marketcode.NormalizeName(name)
-	if normName == "" {
-		if len(cands) == 1 {
-			if s.Codes.IsIndex(cands[0]) {
-				return "", fmt.Errorf("指数不可交易: %s", cands[0])
-			}
-			return "", fmt.Errorf("%w: %s 缺少名称无法核对", ErrCodeNameMismatch, code)
+	default: // ArbitAmbiguous：名非空报不符（D1/B4 文案），名空报歧义（B3 文案）
+		if marketcode.NormalizeName(name) != "" {
+			return "", fmt.Errorf("%w: %s（%s）", ErrCodeNameMismatch, code, name)
 		}
-		return "", fmt.Errorf("%w: %s（候选 %s）", ErrCodeAmbiguous, code, strings.Join(cands, "/"))
+		return "", fmt.Errorf("%w: %s", ErrCodeAmbiguous, code)
 	}
-	matched := make([]string, 0, len(cands))
-	for _, full := range cands {
-		if marketcode.NormalizeName(s.Codes.Name(full)) == normName {
-			matched = append(matched, full)
-		}
-	}
-	if len(matched) == 0 {
-		return "", fmt.Errorf("%w: %s（%s）", ErrCodeNameMismatch, code, name)
-	}
-	if len(matched) > 1 {
-		return "", fmt.Errorf("%w: %s（候选 %s）", ErrCodeAmbiguous, code, strings.Join(matched, "/"))
-	}
-	if s.Codes.IsIndex(matched[0]) {
-		return "", fmt.Errorf("指数不可交易: %s", matched[0])
-	}
-	return matched[0], nil
 }
 
 // OnTradeChanged 交易/标签变化后回调（注入 AI 每日重打分；写事务外调用）

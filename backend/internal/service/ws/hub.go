@@ -80,7 +80,7 @@ func (h *Hub) Register(conn *websocket.Conn) *client {
 	h.clients[cl] = struct{}{}
 	n := len(h.clients)
 	h.mu.Unlock()
-	log.Printf("[ws] 连接建立 clients=%d", n)
+	log.Printf("[推送] 连接建立 clients=%d", n)
 	return cl
 }
 
@@ -90,7 +90,7 @@ func (h *Hub) Unregister(cl *client) {
 	delete(h.clients, cl)
 	n := len(h.clients)
 	h.mu.Unlock()
-	log.Printf("[ws] 连接断开 clients=%d", n)
+	log.Printf("[推送] 连接断开 clients=%d", n)
 }
 
 // Broadcast 向所有连接广播消息；发送失败的断连客户端逐出。
@@ -153,7 +153,7 @@ func Handler(hub *Hub, snapshot func() map[string]any) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := Upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Printf("[ws] 升级失败: %v", err)
+			log.Printf("[推送] 升级失败: %v", err)
 			return
 		}
 		if snapshot != nil {

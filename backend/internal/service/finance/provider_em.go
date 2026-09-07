@@ -9,7 +9,11 @@ import (
 )
 
 // EMHKFinance 东财港股财务（主源）。报表货币折算在 NormalizeFinancialsHK。
-type EMHKFinance struct{ raw *raw.EM }
+// Codes 就绪时港股判定走统一实现；nil 时纯后缀规则（老行为）。
+type EMHKFinance struct {
+	raw   *raw.EM
+	Codes *marketcode.Registry
+}
 
 // NewEMHKFinance 构造东财港股财务源
 func NewEMHKFinance(r *raw.EM) *EMHKFinance { return &EMHKFinance{raw: r} }
@@ -21,7 +25,7 @@ func (e *EMHKFinance) Name() string { return "em" }
 // 入参为 fullCode（如 00700.HK），内部 Bare 用于 DB 过滤（SECUCODE），fullCode 用于 API 层面区分重码
 // 兼容裸码 00700
 func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *float64) (*model.Financials, error) {
-	if !isHKCode(code) {
+	if e.Codes.KindOf(code) != marketcode.KindHK {
 		return nil, ErrNotSupported
 	}
 	multi, err := e.raw.FinancialsHKMulti(ctx, code)
@@ -46,7 +50,7 @@ func (e *EMHKFinance) Financials(ctx context.Context, code string, fxHKDCNY *flo
 // DividendPerShare 最近年报每股股息（港元口径，需上层注入汇率折算）
 // 入参为 fullCode，Bare 用于查询；兼容裸码
 func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float64, error) {
-	if !isHKCode(code) {
+	if e.Codes.KindOf(code) != marketcode.KindHK {
 		return nil, ErrNotSupported
 	}
 	max, err := e.raw.FinancialsHKMax(ctx, code)
@@ -63,6 +67,3 @@ func (e *EMHKFinance) DividendPerShare(ctx context.Context, code string) (*float
 	// 港元口径每股股息——需汇率折算，由 Manager 层注入汇率后处理
 	return v, nil
 }
-
-// isHKCode 港股判定（fullCode 纯后缀判定，无需注册表）
-func isHKCode(code string) bool { return marketcode.Suffix(code) == "HK" }

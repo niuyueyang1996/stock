@@ -31,7 +31,7 @@ func (s *Service) SyncGlobalDynamic(ctx context.Context, items []string) map[str
 			entry := s.processStock(ctx, code, false, itemSet)
 			if reason, _ := entry["reason"].(string); reason == "source_fail" {
 				if errMsg, _ := entry["error"].(string); errMsg != "" {
-					log.Printf("[SyncGlobalDynamic] %s source_fail 重试: %v", code, errMsg)
+					log.Printf("[全局动态刷新] %s source_fail 重试: %v", code, errMsg)
 				}
 				time.Sleep(600 * time.Millisecond)
 				entry = s.processStock(ctx, code, false, itemSet)
@@ -40,7 +40,7 @@ func (s *Service) SyncGlobalDynamic(ctx context.Context, items []string) map[str
 				mu.Lock()
 				failed++
 				mu.Unlock()
-				log.Printf("[SyncGlobalDynamic] %s 仍失败: %v", code, entry)
+				log.Printf("[全局动态刷新] %s 仍失败: %v", code, entry)
 			}
 			mu.Lock()
 			perCode[code] = entry

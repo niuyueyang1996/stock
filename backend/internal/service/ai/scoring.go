@@ -5,13 +5,13 @@ package ai
 
 import (
 	"crypto/md5"
-	"stockanalyzer/internal/service/marketcode"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
 	"sort"
+	"stockanalyzer/internal/service/marketcode"
 	"strconv"
 	"strings"
 	"time"
@@ -365,7 +365,7 @@ func (s *Service) ScorePortfolio(tags []string, systemPrompt, intensity string) 
 	report := NormalizePortfolioReport(raw)
 	phash := s.PortfolioProfileHash(tags)
 	tagsJSON, _ := json.Marshal(sortedCopy(tags))
-	log.Printf("[ai] 落库 组合打分 tags=%v 模型=%s %s", tags, modelCfg.Name, aiReportSummary(report))
+	log.Printf("[AI] 落库 组合打分 tags=%v 模型=%s %s", tags, modelCfg.Name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if err := s.PortReports.Upsert(phash, string(tagsJSON), string(b), modelCfg.Name); err != nil {
@@ -466,23 +466,15 @@ func pyFloat(v float64) string {
 }
 
 // autoTag 默认标签：港股标 港股，ETF/基金标 ETF，其余标 个股（对齐 base.py）
+// 类型判定走 marketcode 纯规则（唯一实现）。
 func autoTag(code, name string) string {
-	if isHKCodeL(code) {
+	if marketcode.IsHK(code) {
 		return "港股"
 	}
-	if isETFCodeL(code) || strings.Contains(name, "ETF") || strings.Contains(name, "LOF") || strings.Contains(name, "基金") {
+	if marketcode.IsETF(code) || strings.Contains(name, "ETF") || strings.Contains(name, "LOF") || strings.Contains(name, "基金") {
 		return "ETF"
 	}
 	return "个股"
-}
-
-// isHKCodeL 是否港股代码（fullCode 纯后缀判定）
-func isHKCodeL(code string) bool { return marketcode.Suffix(code) == "HK" }
-
-// isETFCodeL 是否场内基金代码（Bare 前缀判定，无需注册表）
-func isETFCodeL(code string) bool {
-	bare := marketcode.Bare(code)
-	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
 }
 
 // slicesEq 两个字符串切片顺序、逐元素是否相等
@@ -783,7 +775,7 @@ func (s *Service) ScoreDaily(scoreDate, systemPrompt, intensity string) (map[str
 		return nil, err
 	}
 	report := NormalizeDailyReport(raw, trades)
-	log.Printf("[ai] 落库 每日打分 date=%s 笔数=%d 模型=%s %s", scoreDate, len(trades), modelCfg.Name, aiReportSummary(report))
+	log.Printf("[AI] 落库 每日打分 date=%s 笔数=%d 模型=%s %s", scoreDate, len(trades), modelCfg.Name, aiReportSummary(report))
 	b, _ := json.Marshal(report)
 	now := time.Now().Format("2006-01-02T15:04:05")
 	if err := s.Daily.Upsert(scoreDate, string(b), modelCfg.Name, len(trades)); err != nil {

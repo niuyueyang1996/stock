@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"stockanalyzer/internal/raw"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -118,8 +119,8 @@ func TestNormalizeFinancialsHKNoFx(t *testing.T) {
 
 func TestManagerMarketSplit(t *testing.T) {
 	// 港股走 hk 链、A 股走 ashare 链
-	mockHK := &MockFinance{Handle: func(code string) bool { return isHKCode(code) }, F: &model.Financials{ReportDate: "20260630"}}
-	mockA := &MockFinance{Handle: func(code string) bool { return !isHKCode(code) }, F: &model.Financials{ReportDate: "20260331"}}
+	mockHK := &MockFinance{Handle: func(code string) bool { return marketcode.IsHK(code) }, F: &model.Financials{ReportDate: "20260630"}}
+	mockA := &MockFinance{Handle: func(code string) bool { return !marketcode.IsHK(code) }, F: &model.Financials{ReportDate: "20260331"}}
 	m := NewFinanceManager(nil, []FinanceSource{mockA}, []FinanceSource{mockHK})
 	f, err := m.Financials(context.Background(), "00700.HK")
 	if err != nil || f.ReportDate != "20260630" {

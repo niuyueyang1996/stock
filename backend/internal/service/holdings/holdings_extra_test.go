@@ -462,9 +462,14 @@ func openResolveSvc(t *testing.T) *Service {
 	svc, _ := openSvc(t)
 	reg := marketcode.New()
 	reg.BuildWithNames(
-		[]string{"600519.SH", "000001.SZ", "601398.SH"},
-		[]string{"贵州茅台", "平安银行", "工商银行"},
-		[]string{"510300.SH"}, []string{"华泰柏瑞沪深300ETF"},
+		// 000858/五粮液必须在表里：并集语义下"错位名"靠真货把并集撑到 2 才拦得住，
+		// 生产全量表天然满足，mock 如实补齐（缺了会退化成单信号采纳）。
+		[]string{"600519.SH", "000001.SZ", "601398.SH", "000858.SZ"},
+		[]string{"贵州茅台", "平安银行", "工商银行", "五粮液"},
+		// 注意：ETF 注册名用生产短名风格（沪深300ETF华泰柏瑞），Excel/券商侧是全称
+		//（华泰柏瑞沪深300ETF）或昵称（10年地债）——此前 mock 用全称盖住了系统性改名 bug。
+		[]string{"510300.SH", "511270.SH", "159972.SZ"},
+		[]string{"沪深300ETF华泰柏瑞", "10年地方债ETF海", "5年地方债ETF鹏华"},
 		[]string{"00700.HK", "01398.HK"}, []string{"腾讯控股", "工商银行"},
 		map[string]string{"000001.SH": "sh000001", "399001.SZ": "sz399001"},
 		map[string]string{"000001.SH": "上证指数", "399001.SZ": "深证成指"},
@@ -473,16 +478,24 @@ func openResolveSvc(t *testing.T) *Service {
 	return svc
 }
 
-// TestResolveFullCodeNormal A 组：唯一候选 + 名称一致 → 采用。
+// TestResolveFullCodeNormal A 组 + 并集单信号采纳（E1/D2/D4/E3 反转已拍板）：
+// 并集=1 即命中，无需名称精确一致。
 func TestResolveFullCodeNormal(t *testing.T) {
 	svc := openResolveSvc(t)
 	for _, tc := range []struct{ bare, name, want string }{
 		{"600519", "贵州茅台", "600519.SH"},
 		{"00700", "腾讯控股", "00700.HK"},
-		{"510300", "华泰柏瑞沪深300ETF", "510300.SH"},
-		{"600519", "贵州茅台 ", "600519.SH"}, // 名称轻归一
-		{"600519.SH", "随便什么", "600519.SH"}, // 已带后缀不查表
-		{"600519.sh", "贵州茅台", "600519.SH"}, // 小写后缀归一（E5）
+		{"600519", "贵州茅台 ", "600519.SH"},        // 名称轻归一
+		{"600519.SH", "随便什么", "600519.SH"},      // 已带后缀不查表
+		{"600519.sh", "贵州茅台", "600519.SH"},      // 小写后缀归一（E5）
+		{"510300", "华泰柏瑞沪深300ETF", "510300.SH"}, // 并集=1（名信号缺席，码唯一）
+		{"510300", "300ETF", "510300.SH"},       // 同上
+		{"511270", "10年地债", "511270.SH"},        // 同上
+		{"159972", "5年地债", "159972.SZ"},         // 同上
+		{"600519", "", "600519.SH"},             // D4反转：码信号唯一即采纳
+		{"700", "腾讯控股", "00700.HK"},             // E1反转：名信号唯一即采纳
+		{"600519", "贵州茅台股份有限公司", "600519.SH"},   // E3反转：码钉死+同证券
+		{"999999", "贵州茅台", "600519.SH"},         // D2反转：名信号唯一即采纳
 	} {
 		got, err := svc.ResolveFullCode(tc.bare, tc.name)
 		if err != nil || got != tc.want {
@@ -519,20 +532,18 @@ func TestResolveFullCodeCrossMarket(t *testing.T) {
 	}
 }
 
-// TestResolveFullCodeReject D/E 组：错误行全部拒绝。
+// TestResolveFullCodeReject D/E 组：错误行全部拒绝（并集>1交集空→不符，空集→无此码，指数→拦截）。
 func TestResolveFullCodeReject(t *testing.T) {
 	svc := openResolveSvc(t)
 	for _, tc := range []struct {
 		bare, name string
 		wantErr    error
 	}{
-		{"600519", "五粮液", ErrCodeNameMismatch},   // 码名不符
-		{"600519", "", ErrCodeNameMismatch},        // 唯一候选但无名称（严格版）
-		{"999999", "某某股票", ErrCodeNotFound},      // 查无此码
-		{"399001", "深证成指", nil},                 // 指数：非 Err 系列，断言文案
-		{"600519", "贵州茅台股份有限公司", ErrCodeNameMismatch}, // 全称不模糊匹配
-		{"700", "腾讯控股", ErrCodeNotFound},        // 前导零丢失不自动补
-		{"000001.SH", "上证指数", nil},              // 带后缀指数：断言文案
+		{"600519", "五粮液", ErrCodeNameMismatch},     // 码名不符（并集{SH,000858.SZ}交集空）
+		{"999999", "某某股票", ErrCodeNotFound},        // 并集空
+		{"399001", "深证成指", nil},                    // 指数：非 Err 系列，断言文案
+		{"000001.SH", "上证指数", nil},                 // 带后缀指数：断言文案
+		{"000001.SH", "平安银行", ErrCodeNameMismatch}, // 后缀与名冲突：不再盲信后缀
 	} {
 		_, err := svc.ResolveFullCode(tc.bare, tc.name)
 		if err == nil {
@@ -550,6 +561,17 @@ func TestResolveFullCodeNotReady(t *testing.T) {
 	svc, _ := openSvc(t) // Codes 为空 Registry，未 Ready
 	if _, err := svc.ResolveFullCode("600519", "贵州茅台"); !errors.Is(err, ErrNotReady) {
 		t.Errorf("未就绪应报 ErrNotReady, got %v", err)
+	}
+}
+
+// TestResolveFullCodeETF ETF 行错位仍拒绝（并集>1交集空）；空名并集=1则采纳。
+func TestResolveFullCodeETF(t *testing.T) {
+	svc := openResolveSvc(t)
+	if _, err := svc.ResolveFullCode("510300", "五粮液"); !errors.Is(err, ErrCodeNameMismatch) {
+		t.Errorf("ETF 行错位应报不符, got %v", err)
+	}
+	if got, err := svc.ResolveFullCode("510300", ""); err != nil || got != "510300.SH" {
+		t.Errorf("ETF 空名并集=1应采纳, got %q,%v", got, err)
 	}
 }
 
@@ -588,7 +610,7 @@ func TestWritePathsRejectIndex(t *testing.T) {
 }
 
 // TestUpdateTradeIndexRejected UpdateTrade 改 code 到指数 fullCode 应拒绝
-//（此前走全局变量、单测恒为 nil 测不到；现改用注入 Codes 后可测）。
+// （此前走全局变量、单测恒为 nil 测不到；现改用注入 Codes 后可测）。
 func TestUpdateTradeIndexRejected(t *testing.T) {
 	svc := openResolveSvc(t) // 含指数 000001.SH
 	_, _, _ = svc.RecordTrade("600519.SH", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false)

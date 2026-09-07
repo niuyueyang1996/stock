@@ -7,6 +7,7 @@ import (
 
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/raw/ifind"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 )
 
@@ -23,19 +24,30 @@ type HighFreqSource interface {
 }
 
 // IFIndTech iFinD 技术面 Provider（同一 *ifind.Client 实现多小接口）
+// Codes 就绪时 thscode 走统一决议（裸码指数得 000300.SH）；nil 时原样透传。
 type IFIndTech struct {
 	Raw     *ifind.Client
 	IsIndex func(string) bool
+	Codes   *marketcode.Registry
 }
 
 func (p *IFIndTech) Name() string { return "ifind" }
+
+// thscode 同花顺形查数码（票据 ThsCode；决议失败回退原样）。
+func (p *IFIndTech) thscode(code string) string {
+	if p.Codes != nil {
+		if t, err := p.Codes.ResolveTicket(code, ""); err == nil {
+			return t.ThsCode
+		}
+	}
+	return code
+}
 
 func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error) {
 	if p.Raw == nil {
 		return nil, ErrNotSupported
 	}
-	thscode := code
-	m, err := p.Raw.RealTime(ctx, thscode)
+	m, err := p.Raw.RealTime(ctx, p.thscode(code))
 	if err != nil {
 		if ifind.IsNotSupported(err) {
 			return nil, ErrNotSupported

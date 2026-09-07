@@ -199,3 +199,33 @@ func TestStockInfo(t *testing.T) {
 		t.Fatal("不应查到不存在 code")
 	}
 }
+
+// TestAmountHist 金额直方图落库 + 取最近 N 日（坏行跳过）。
+func TestAmountHist(t *testing.T) {
+	d := openCacheDAO(t)
+	code := "600519"
+	bins := make([]int, 80)
+	bins[10] = 5
+	bins[70] = 2
+	if err := d.UpsertAmountHist(code, "2026-08-14", bins); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := d.UpsertAmountHist(code, "2026-08-13", bins); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// 空分布跳过不落库
+	if err := d.UpsertAmountHist(code, "2026-08-12", make([]int, 80)); err != nil {
+		t.Fatalf("upsert empty: %v", err)
+	}
+	got := d.GetAmountHists(code, 4, "2026-08-14")
+	if len(got) != 1 || got[0][10] != 5 || got[0][70] != 2 {
+		t.Fatalf("roundtrip = %v", got)
+	}
+	got = d.GetAmountHists(code, 4, "2026-08-15")
+	if len(got) != 2 {
+		t.Fatalf("expect 2 hists, got %d", len(got))
+	}
+	if len(d.GetAmountHists(code, 0, "2026-08-15")) != 0 {
+		t.Fatal("limit 0 应空")
+	}
+}

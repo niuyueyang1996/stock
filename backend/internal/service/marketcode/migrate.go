@@ -6,6 +6,33 @@ import (
 	"gorm.io/gorm"
 )
 
+// migrateIndexRow 指数裸码行翻为 fullCode + etf_index_map 联动。
+// 顺序是关键：老库 etf_index_map.index_code 带外键指向 index_defs.code（Python 时代
+// 遗留，当前 DDL 已无声明但老表结构还在，删表重建前一直生效），直接 UPDATE 父键
+// 必吃 FOREIGN KEY 787——000300 正是全表唯一有孩子（510300→000300）的行，所以
+// 13 只翻过去唯独它化石了。所以先建 full 行、再翻孩子、最后删裸行，全程记日志。
+func migrateIndexRow(gdb *gorm.DB, bare, full string) {
+	if bare == full || bare == "" || full == "" {
+		return
+	}
+	var n int64
+	gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", full).Scan(&n)
+	if n == 0 {
+		if err := gdb.Exec(`INSERT INTO index_defs(code,name,symbol,legu_code,pe_source,pb_source,sort_order)
+			SELECT ?,name,symbol,legu_code,pe_source,pb_source,sort_order FROM index_defs WHERE code=?`,
+			full, bare).Error; err != nil {
+			log.Printf("[迁移] index_defs 新增 %s（自 %s）失败: %v", full, bare, err)
+			return
+		}
+	}
+	if err := gdb.Exec("UPDATE etf_index_map SET index_code=? WHERE index_code=?", full, bare).Error; err != nil {
+		log.Printf("[迁移] etf_index_map %s→%s 失败: %v", bare, full, err)
+	}
+	if err := gdb.Exec("DELETE FROM index_defs WHERE code=?", bare).Error; err != nil {
+		log.Printf("[迁移] index_defs 删除裸码 %s 失败: %v（可能还有未知外键孩子，入口归一已兼容双形态）", bare, err)
+	}
+}
+
 // MigrateCodesToFullCode 将 holdings/trades/stocks/index_defs 中仍为裸码的行补成 fullCode。
 // 幂等：WHERE code NOT LIKE '%.%' 才处理；stocks/index_defs 先按 market/symbol 直转，holdings/trades 再按 Build 后的表查。
 func MigrateCodesToFullCode(gdb *gorm.DB) {
@@ -32,13 +59,7 @@ func MigrateCodesToFullCode(gdb *gorm.DB) {
 		} else {
 			full = r.Code + ".SH"
 		}
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", full).Scan(&n)
-		if n > 0 {
-			gdb.Exec("DELETE FROM index_defs WHERE code=?", r.Code)
-			continue
-		}
-		gdb.Exec("UPDATE index_defs SET code=? WHERE code=?", full, r.Code)
+		migrateIndexRow(gdb, r.Code, full)
 	}
 	// 2) stocks：按 market/currency 直转
 	var stockRows []struct {
@@ -133,13 +154,7 @@ func preMigrateIndexStocks(gdb *gorm.DB) {
 		} else {
 			full = r.Code + ".SH"
 		}
-		var n int64
-		gdb.Raw("SELECT COUNT(*) FROM index_defs WHERE code=?", full).Scan(&n)
-		if n > 0 {
-			gdb.Exec("DELETE FROM index_defs WHERE code=?", r.Code)
-			continue
-		}
-		gdb.Exec("UPDATE index_defs SET code=? WHERE code=?", full, r.Code)
+		migrateIndexRow(gdb, r.Code, full)
 	}
 	var stockRows []struct {
 		Code     string

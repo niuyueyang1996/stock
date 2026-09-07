@@ -217,13 +217,9 @@ func (s *Service) GetHoldings(activeOnly bool) []map[string]any {
 	return out
 }
 
-// isETFCode 场内 ETF 判定（委托 Codes，兼容全局回退）
+// isETFCode 场内 ETF 判定（统一实现，Codes==nil 时纯规则回退）
 func (s *Service) isETFCode(code string) bool {
-	if s.Codes != nil {
-		return s.Codes.IsETF(code)
-	}
-	bare := marketcode.Bare(code)
-	return len(bare) >= 2 && (bare[:2] == "51" || bare[:2] == "56" || bare[:2] == "58" || bare[:2] == "15" || bare[:2] == "16")
+	return s.Codes.KindOf(code) == marketcode.KindETF
 }
 
 // isHKCode5 港股判定（委托 Codes，兼容全局回退）

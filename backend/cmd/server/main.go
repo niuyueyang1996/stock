@@ -150,7 +150,7 @@ func main() {
 	holdSvc.Codes = codes
 
 	// 数据子包（多态降级链，收口 Registry）
-	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) })
+	fm := service.NewFinanceManager(rc, func() *float64 { return fxSvc.GetFxRateCNY("HKD", time.Now().Format("2006-01-02")) }, codes)
 	fm.Codes = codes
 	// 指数注册表（index_defs 表）
 	leguCode := func(code string) *string {
@@ -176,7 +176,7 @@ func main() {
 	quoteSvc := quote.New(gdb)
 	quoteSvc.Cal = calSvc
 	quoteSvc.Codes = codes
-	techMgr := service.TechManager(rc, isIndex)
+	techMgr := service.TechManager(rc, isIndex, codes)
 	divSvc := dividend.New(em, cn, holdSvc, gdb)
 	divSvc.SetManager(service.FundamentalDividendManager(rc))
 
@@ -255,7 +255,7 @@ func main() {
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
 		Jobs: jm, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
 		Detail: detailSvc, StockMeta: stockMetaSvc, DataManage: dataManageSvc,
-		Ifind: ifindClient,
+		Ifind:   ifindClient,
 		LogFile: logFilePath(),
 	}
 

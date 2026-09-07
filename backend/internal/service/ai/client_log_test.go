@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// TestChatJSONLogs 验证 AI 调用输入/输出日志（[ai] 入 / [ai] 完成：host/model/字符数/耗时）
+// TestChatJSONLogs 验证 AI 调用输入/输出日志（[AI] 入 / [AI] 完成：host/model/字符数/耗时）
 func TestChatJSONLogs(t *testing.T) {
 	var buf bytes.Buffer
 	old := log.Writer()
@@ -29,13 +29,13 @@ func TestChatJSONLogs(t *testing.T) {
 		t.Fatalf("ChatJSON err=%v out=%v", err, out)
 	}
 	s := buf.String()
-	if !strings.Contains(s, "[ai] 入 host=api.deepseek.com model=deepseek-chat") {
+	if !strings.Contains(s, "[AI] 入 host=api.deepseek.com model=deepseek-chat") {
 		t.Fatalf("缺入日志: %s", s)
 	}
 	if !strings.Contains(s, "task=诊股") {
 		t.Fatalf("缺 task 标签: %s", s)
 	}
-	if !strings.Contains(s, "[ai] 完成 host=api.deepseek.com model=deepseek-chat") {
+	if !strings.Contains(s, "[AI] 完成 host=api.deepseek.com model=deepseek-chat") {
 		t.Fatalf("缺完成日志: %s", s)
 	}
 	// 输入字符数（system+user）
@@ -44,7 +44,7 @@ func TestChatJSONLogs(t *testing.T) {
 	}
 }
 
-// TestChatJSONLogOnError 失败时也有 [ai] 出 日志（耗时），便于定位卡住/失败
+// TestChatJSONLogOnError 失败时也有 [AI] 出 日志（耗时），便于定位卡住/失败
 func TestChatJSONLogOnError(t *testing.T) {
 	var buf bytes.Buffer
 	old := log.Writer()
@@ -62,7 +62,7 @@ func TestChatJSONLogOnError(t *testing.T) {
 		t.Fatal("期望错误")
 	}
 	s := buf.String()
-	if !strings.Contains(s, "[ai] 入 host=api.deepseek.com") || !strings.Contains(s, "[ai] 出 host=api.deepseek.com") {
+	if !strings.Contains(s, "[AI] 入 host=api.deepseek.com") || !strings.Contains(s, "[AI] 出 host=api.deepseek.com") {
 		t.Fatalf("失败也应打出入日志: %s", s)
 	}
 }
