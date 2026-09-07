@@ -1,0 +1,93 @@
+backend/cmd/mcp/main.go
+  h_07352c0544a725 33,124,145
+backend/cmd/server/main.go
+  h_07352c0544a725 153,179,258
+backend/internal/db/dao/cache.go
+  h_07352c0544a725 7,167-212
+backend/internal/db/dao/fundflow_test.go
+  h_07352c0544a725 202-231
+backend/internal/db/db.go
+  h_07352c0544a725 61
+backend/internal/db/db_test.go
+  h_07352c0544a725 40
+backend/internal/db/models.go
+  h_07352c0544a725 531-541
+backend/internal/db/schema.go
+  h_07352c0544a725 128-136
+backend/internal/route/ai.go
+  h_07352c0544a725 276,403
+backend/internal/route/route_api_test.go
+  h_07352c0544a725 965-968,1039-1044,1049,1060-1061,1067-1069,1096-1107,1116,1162-1163,1165,1172,1196-1239,1241-1270
+backend/internal/route/router.go
+  h_07352c0544a725 17,213-215,222-223,230-232,247,251,562-563,584-590,593,682-709
+backend/internal/route/stocks_extra2.go
+  h_07352c0544a725 120,123-124,128-129,132
+backend/internal/service/ai/client.go
+  h_07352c0544a725 252,255,267,291,297,299,309,336
+backend/internal/service/ai/client_log_test.go
+  h_07352c0544a725 13,32,38,47,65
+backend/internal/service/ai/fundflow.go
+  h_07352c0544a725 573,611,661,712,737,845
+backend/internal/service/ai/news_tech.go
+  h_07352c0544a725 212,240,409,472
+backend/internal/service/ai/report.go
+  h_07352c0544a725 584
+backend/internal/service/ai/scoring.go
+  h_07352c0544a725 14,368,469,471,474,778
+backend/internal/service/datamanage/datamanage_test.go
+  h_07352c0544a725 32-33,36
+backend/internal/service/detail/detail.go
+  h_07352c0544a725 567,569
+backend/internal/service/finance/finance_extra_test.go
+  h_07352c0544a725 16,689-700
+backend/internal/service/finance/finance_test.go
+  h_07352c0544a725 8,122-123
+backend/internal/service/finance/provider_em.go
+  h_07352c0544a725 12-16,28,53
+backend/internal/service/holdings/holdings.go
+  h_07352c0544a725 220,222
+backend/internal/service/holdings/holdings_extra_test.go
+  h_07352c0544a725 465-472,481-482,488-498,535,542-546,567-577,613
+backend/internal/service/holdings/trades.go
+  h_07352c0544a725 30-33,35-36,39,42-51,53-55,57
+backend/internal/service/marketcode/code.go
+  h_07352c0544a725 13,20,76,89,219,253-339,341-411,413-538,567-657
+backend/internal/service/marketcode/code_test.go
+  h_07352c0544a725 119-323
+backend/internal/service/marketcode/migrate.go
+  h_07352c0544a725 9-35,62,157
+backend/internal/service/marketcode/migrate_test.go
+  h_07352c0544a725 1-111
+backend/internal/service/refresh/refresh.go
+  h_07352c0544a725 119,127,135,265-268,270-271,273,275,638-640,644,647,650
+backend/internal/service/refresh/sync_global.go
+  h_07352c0544a725 34,43
+backend/internal/service/registry.go
+  h_07352c0544a725 12,30-32,34-36,63-66,70
+backend/internal/service/stockmeta/stockmeta.go
+  h_07352c0544a725 49,70,91
+backend/internal/service/tech/normalizer.go
+  h_07352c0544a725 144-240,286-293,373-380
+backend/internal/service/tech/normalizer_hist_test.go
+  h_07352c0544a725 1-103
+backend/internal/service/tech/provider_ifind.go
+  h_07352c0544a725 10,27,31,36-45,50
+backend/internal/service/tech/providers.go
+  h_07352c0544a725 14-19,23-30,35,49,59,62,68,78,88,129-133,141
+backend/internal/service/tech/providers_test.go
+  h_07352c0544a725 8,83-96,98-132
+backend/internal/service/ws/hub.go
+  h_07352c0544a725 83,93,156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0da8ef9610228ab6bb90b3708846d1449dad3e13",
+  "prompts": {},
+  "logical_commit_id": "0da8ef9610228ab6bb90b3708846d1449dad3e13",
+  "humans": {
+    "h_07352c0544a725": {
+      "author": "niuyueyang <niuyueyang@bigo.sg>"
+    }
+  }
+}
