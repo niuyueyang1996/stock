@@ -23,7 +23,7 @@
 
 **约束**
 - 每组只回固定 Schema 的摘要，不回 raw JSON（4MB→20KB，主线程不污染）。
-- 以 `(code, as_of)` 为 key，三源各缓存一份，24h 内不重拉；同一 `code+as_of` 多笔交易只拉一次。
+- 以 `(code, as_of)` 为 key（摘要内 `code` 必带 `name`，渲染统一为 `名称(code)`），三源各缓存一份，24h 内不重拉；同一 `code+as_of` 多笔交易只拉一次。
 - 任一返回 `409 CACHE_MISS` 或 `bars==[]`，记缺失，不重试 `refresh_stock`，在报告中标注覆盖率。
 - 禁止并发批量 `diagnose_stock`；AI 诊断仅用户明确说「诊股/打分」时单只调，默认不走。
 
@@ -37,6 +37,7 @@
 ```json
 {
   "code": "600941",
+  "name": "中国移动",
   "trades": [{"ds":"2025-02-28","side":"买入","price":107.09,"abs_amt":10709,"tech_pct":0.82,"pre5":0.03,"pre20":-0.05,"pe_pct":0.32,"pb_pct":0.45,"dv_pct":0.71}],
   "coverage": {"kline": "33/33","valuation":"30/33","fundflow":"—"}
 }

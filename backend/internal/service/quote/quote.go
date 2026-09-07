@@ -52,18 +52,22 @@ func (s *Service) now() time.Time {
 
 // CachedQuote 行情（对齐 Python _row_to_quote 字段）
 type CachedQuote struct {
-	Code      string
-	Name      string
-	Price     *float64
-	PctChg    *float64
-	PrevClose *float64
-	Open      *float64
-	High      *float64
-	Low       *float64
-	Volume    *float64
-	Amount    *float64
-	Ts        string
-	Stale     bool
+	Code           string
+	Name           string
+	Price          *float64
+	PctChg         *float64
+	PrevClose      *float64
+	Open           *float64
+	High           *float64
+	Low            *float64
+	Volume         *float64
+	Amount         *float64
+	SellVolume     *float64 `json:"sell_volume,omitempty"`
+	BuyVolume      *float64 `json:"buy_volume,omitempty"`
+	Committee      *float64 `json:"committee,omitempty"`
+	CommissionDiff *float64 `json:"commission_diff,omitempty"`
+	Ts             string
+	Stale          bool
 	// 内部：当日行（供 refresh 判定）
 	TradeDate string
 	IsClosed  int
@@ -116,6 +120,7 @@ func (s *Service) rowToQuote(row *db.DailyPriceCache, today string, stale bool) 
 	pc := &CachedQuote{
 		Code: row.Code, Price: row.Close, PctChg: pctChg, PrevClose: prevClose,
 		Open: row.Open, High: row.High, Low: row.Low, Volume: row.Volume, Amount: row.Amount,
+		SellVolume: row.SellVolume, BuyVolume: row.BuyVolume, Committee: row.Committee, CommissionDiff: row.CommissionDiff,
 		Ts: today + " 15:00:00", Stale: stale,
 		TradeDate: row.TradeDate, IsClosed: row.IsClosed,
 	}

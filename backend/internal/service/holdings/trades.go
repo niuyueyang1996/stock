@@ -5,13 +5,76 @@ package holdings
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // ErrNotFound 交易不存在
 var ErrNotFound = errors.New("交易不存在")
+
+// ErrCodeNotFound 代码表无此代码
+var ErrCodeNotFound = errors.New("代码表无此代码")
+
+// ErrCodeNameMismatch 代码与名称不符
+var ErrCodeNameMismatch = errors.New("代码与名称不符")
+
+// ErrCodeAmbiguous 裸码对应多个候选且名称无法唯一仲裁
+var ErrCodeAmbiguous = errors.New("同码多候选，名称无法唯一确定")
+
+// ErrNotReady 代码表预热中
+var ErrNotReady = errors.New("代码表预热中，请稍后重试")
+
+// ResolveFullCode 双因子仲裁：裸码圈定候选 + 名称仲裁，返回 fullCode。
+// 已带后缀直接归一化采用（仍拦截指数）；裸码走候选仲裁（指数永远不可作为持仓）。
+// 名称为空视为无法仲裁（严格版）。
+func (s *Service) ResolveFullCode(code, name string) (string, error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if code == "" {
+		return "", ErrCodeNotFound
+	}
+	if strings.Contains(code, ".") {
+		if s.Codes != nil && s.Codes.IsIndex(code) {
+			return "", fmt.Errorf("指数不可交易: %s", code)
+		}
+		return code, nil
+	}
+	if s.Codes == nil || !s.Codes.Ready() {
+		return "", ErrNotReady
+	}
+	cands := s.Codes.CandidatesByBare(code)
+	if len(cands) == 0 {
+		return "", fmt.Errorf("%w: %s", ErrCodeNotFound, code)
+	}
+	normName := marketcode.NormalizeName(name)
+	if normName == "" {
+		if len(cands) == 1 {
+			if s.Codes.IsIndex(cands[0]) {
+				return "", fmt.Errorf("指数不可交易: %s", cands[0])
+			}
+			return "", fmt.Errorf("%w: %s 缺少名称无法核对", ErrCodeNameMismatch, code)
+		}
+		return "", fmt.Errorf("%w: %s（候选 %s）", ErrCodeAmbiguous, code, strings.Join(cands, "/"))
+	}
+	matched := make([]string, 0, len(cands))
+	for _, full := range cands {
+		if marketcode.NormalizeName(s.Codes.Name(full)) == normName {
+			matched = append(matched, full)
+		}
+	}
+	if len(matched) == 0 {
+		return "", fmt.Errorf("%w: %s（%s）", ErrCodeNameMismatch, code, name)
+	}
+	if len(matched) > 1 {
+		return "", fmt.Errorf("%w: %s（候选 %s）", ErrCodeAmbiguous, code, strings.Join(matched, "/"))
+	}
+	if s.Codes.IsIndex(matched[0]) {
+		return "", fmt.Errorf("指数不可交易: %s", matched[0])
+	}
+	return matched[0], nil
+}
 
 // OnTradeChanged 交易/标签变化后回调（注入 AI 每日重打分；写事务外调用）
 var OnTradeChanged func(date string)
@@ -75,8 +138,16 @@ func (s *Service) UpdateTrade(tradeID int64, fields map[string]any) (map[string]
 		newCode = row.Code
 	}
 	code := newCode.(string)
-	if code != row.Code && !isTradeable(code) {
-		return nil, errors.New("指数不可交易")
+	if code != row.Code {
+		// 改 code 即改身份：无名称可仲裁，裸码直接拒绝，必须带 fullCode 后缀；
+		// 指数由注入的 Codes 判定拦截（与 RecordTrade / AdjustCost 同款 rejectIndex）。
+		if !strings.Contains(strings.ToUpper(strings.TrimSpace(code)), ".") {
+			return nil, fmt.Errorf("修改代码必须带后缀（如 000001.SZ / 00700.HK），不接受裸码: %s", code)
+		}
+		code = strings.ToUpper(strings.TrimSpace(code))
+		if err := s.rejectIndex(code); err != nil {
+			return nil, err
+		}
 	}
 	side := row.Side
 	if v, ok := fields["side"].(string); ok && v != "" {
@@ -194,22 +265,22 @@ func (s *Service) HasActiveHoldings() bool {
 	return n > 0
 }
 
-// isTradeable 可交易标的（指数不可交易，对齐 Python instrument.can_trade）
-func isTradeable(code string) bool {
-	// 指数注册表判定由调用方注入？这里按代码形态：5 位纯数字=港股可交易；6 位=可交易。
-	// 指数代码（000300/399xxx 等 6 位）由 IsIndex 注入判定。
-	if isTradeableFn != nil && isTradeableFn(code) {
-		return false
+// rejectIndex 持仓写入口统一拦截指数（E6：已带后缀但命中指数也不可作为持仓）。
+// 全仓唯一实现：RecordTrade / AdjustCost / UpdateTrade 共用；Excel / InitHoldings 走
+// ResolveFullCode 内置同款拦截。Codes 未注入或未就绪时 IsIndex 恒 false，不误伤。
+func (s *Service) rejectIndex(code string) error {
+	if s.Codes != nil && s.Codes.IsIndex(strings.ToUpper(strings.TrimSpace(code))) {
+		return fmt.Errorf("指数不可交易: %s", code)
 	}
-	return true
+	return nil
 }
 
-// IsIndex 注入的指数判定（main 装配；nil 时不做判定）
-var isTradeableFn func(code string) bool
-
-// SetIndexChecker 注入指数判定（指数不可交易）
-func SetIndexChecker(fn func(code string) bool) {
-	isTradeableFn = fn
+// OpeningTradeTime 期初建仓落盘时间（Excel 导入 / 批量初始化缺省）：昨日 15:00。
+// Excel 没有真实买入日期，时间戳本就合成；若落现在，老持仓会被标成今日买入，
+// 当日盈亏②项按成本价算——导入当天数字变成总盈亏。只依赖自然日：dayPnl 只查
+// today 的流水，昨天是否为交易日不影响结果；午夜前后导入也不跨到今天。
+func OpeningTradeTime(now time.Time) string {
+	return now.AddDate(0, 0, -1).Format("2006-01-02") + " 15:00:00"
 }
 
 // trimSpace 去掉字符串首尾的空格/制表/换行（空白串处理）

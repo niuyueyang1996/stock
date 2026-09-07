@@ -49,19 +49,23 @@ func (Trade) TableName() string { return "trades" }
 
 // DailyPriceCache daily_price_cache
 type DailyPriceCache struct {
-	Code      string   `gorm:"column:code;primaryKey"`
-	TradeDate string   `gorm:"column:trade_date;primaryKey"`
-	Open      *float64 `gorm:"column:open"`
-	High      *float64 `gorm:"column:high"`
-	Low       *float64 `gorm:"column:low"`
-	Close     *float64 `gorm:"column:close"`
-	Volume    *float64 `gorm:"column:volume"`
-	Amount    *float64 `gorm:"column:amount"`
-	PctChange *float64 `gorm:"column:pct_change"`
-	TotalMv   *float64 `gorm:"column:total_mv"`
-	IsClosed  int      `gorm:"column:is_closed"`
-	Source    *string  `gorm:"column:source"`
-	UpdatedAt *string  `gorm:"column:updated_at"`
+	Code           string   `gorm:"column:code;primaryKey"`
+	TradeDate      string   `gorm:"column:trade_date;primaryKey"`
+	Open           *float64 `gorm:"column:open"`
+	High           *float64 `gorm:"column:high"`
+	Low            *float64 `gorm:"column:low"`
+	Close          *float64 `gorm:"column:close"`
+	Volume         *float64 `gorm:"column:volume"`
+	Amount         *float64 `gorm:"column:amount"`
+	PctChange      *float64 `gorm:"column:pct_change"`
+	TotalMv        *float64 `gorm:"column:total_mv"`
+	SellVolume     *float64 `gorm:"column:sell_volume"`
+	BuyVolume      *float64 `gorm:"column:buy_volume"`
+	Committee      *float64 `gorm:"column:committee"`
+	CommissionDiff *float64 `gorm:"column:commission_diff"`
+	IsClosed       int      `gorm:"column:is_closed"`
+	Source         *string  `gorm:"column:source"`
+	UpdatedAt      *string  `gorm:"column:updated_at"`
 }
 
 func (DailyPriceCache) TableName() string { return "daily_price_cache" }

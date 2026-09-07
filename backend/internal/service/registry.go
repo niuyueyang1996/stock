@@ -6,6 +6,7 @@ import (
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service/finance"
+	"stockanalyzer/internal/service/forecast"
 	"stockanalyzer/internal/service/fundamental"
 	"stockanalyzer/internal/service/infra"
 	"stockanalyzer/internal/service/tech"
@@ -71,4 +72,10 @@ func NewValuationManager(rc *RawClients, leguCode func(string) *string) *valuati
 		valuation.NewLeguValuation(rc.Legu, leguCode),
 		valuation.NewBaiduValuation(rc.Baidu),
 	)
+}
+
+// NewForecastManager 构造预期 Manager（FY1/2/3，basic_data_service + ths_fore_*_stock）
+// 未配置 iFinD 时内部 ErrNotSupported，调用方按需降级或提示缺配
+func NewForecastManager(rc *RawClients) *forecast.Manager {
+	return forecast.New(&forecast.IFIndForecast{Raw: rc.IFind})
 }

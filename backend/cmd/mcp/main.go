@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,7 +18,7 @@ import (
 	"stockanalyzer/internal/db"
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
-	"stockanalyzer/internal/raw/ifind"
+	ifindRaw "stockanalyzer/internal/raw/ifind"
 	"stockanalyzer/internal/service"
 	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/ai"
@@ -24,6 +26,7 @@ import (
 	"stockanalyzer/internal/service/datamanage"
 	"stockanalyzer/internal/service/detail"
 	"stockanalyzer/internal/service/dividend"
+	"stockanalyzer/internal/service/forecast"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/indices"
@@ -52,6 +55,7 @@ type services struct {
 	Detail    *detail.Service
 	StockMeta *stockmeta.Service
 	DataMgr   *datamanage.Service
+	Forecast  *forecast.Manager
 }
 
 func main() {
@@ -96,7 +100,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	if ifindToken == "" {
 		ifindToken = strings.TrimSpace(cfgDAO.Get("ifind_refresh_token"))
 	}
-	ifindClient := ifind.NewClient(ifindToken)
+	ifindClient := ifindRaw.NewClient(ifindToken)
 	if ifindToken != "" {
 		log.Printf("[ifind] refresh_token 已加载 %s", ifindClient.RefreshTokenMasked())
 	}
@@ -146,7 +150,6 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	rfSvc.Codes = codes
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = isIndex
-	holdings.SetIndexChecker(rfSvc.IsIndex)
 	idxSvc := indices.New(gdb, tx, lg)
 	idxSvc.Cache = cacheDAO
 	portSvc := portfolio.New(gdb, holdSvc, liveSvc, quoteSvc, fxSvc.GetFxRateCNY, cacheDAO, idxSvc)
@@ -178,6 +181,9 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 	}
 	stockMetaSvc := stockmeta.New(gdb)
 	dataManageSvc := datamanage.New(gdb, holdSvc)
+	forecastSvc := service.NewForecastManager(rc)
+	forecastSvc.Raw = ifindClient
+	forecastSvc.Codes = codes
 	quoteSvc.SyncPeriodKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	aiSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
 	idxSvc.SyncKline = func(code string) { rfSvc.SyncPeriodKline(code, false) }
@@ -196,6 +202,7 @@ func buildServices(gdb *gorm.DB, cfg *config.Config) *services {
 		Quote: quoteSvc, Portfolio: portSvc, Live: liveSvc, Refresh: rfSvc,
 		Jobs: jm, Indices: idxSvc, AI: aiSvc, Dividend: divSvc,
 		Detail: detailSvc, StockMeta: stockMetaSvc, DataMgr: dataManageSvc,
+		Forecast: forecastSvc,
 	}
 }
 
@@ -519,6 +526,98 @@ func registerTools(srv *server.MCPServer, s *services) {
 		out := s.Refresh.SyncGlobalDynamic(tctx, items)
 		return jsonResult(out)
 	})
+
+	srv.AddTool(mcp.NewTool("get_forecast",
+		mcp.WithDescription("预期利润/营收（同花顺一致预期 FY1/FY2/FY3，basic_data_service + ths_fore_*_stock）"),
+		mcp.WithString("codes", mcp.Required(), mcp.Description("股票代码，逗号分隔，如 603596.SH,600519.SH")),
+		mcp.WithString("as_of", mcp.Description("预期基准日 YYYY-MM-DD，默认今天")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		codes := csvArg(req, "codes")
+		if len(codes) == 0 {
+			return errResult("codes 必填")
+		}
+		asOf := strArg(req, "as_of")
+		tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		m, tried, err := s.Forecast.Forecast(tctx, codes, asOf)
+		if err != nil {
+			return jsonResult(map[string]any{"error": err.Error(), "tried": tried, "codes": codes, "as_of": asOf})
+		}
+		// 按输入顺序返回，便于 LLM 对齐
+		list := make([]any, 0, len(codes))
+		for _, c := range codes {
+			if v, ok := m[c]; ok {
+				list = append(list, v)
+				continue
+			}
+			upper := strings.ToUpper(strings.TrimSpace(c))
+			if v, ok := m[upper]; ok {
+				list = append(list, v)
+				continue
+			}
+			bare := strings.ToUpper(marketcode.Bare(c))
+			if v, ok := m[bare]; ok {
+				list = append(list, v)
+				continue
+			}
+			list = append(list, map[string]any{"code": c, "full_code": c, "error": "no_data"})
+		}
+		return jsonResult(map[string]any{"as_of": asOf, "tried": tried, "count": len(list), "data": list, "raw": m})
+	})
+
+	srv.AddTool(mcp.NewTool("get_reports",
+		mcp.WithDescription("财报/公告检索（同花顺 report_query，返回标题与 pdfURL 直链）"),
+		mcp.WithString("codes", mcp.Required(), mcp.Description("股票代码，逗号分隔，如 603596.SH,600519.SH")),
+		mcp.WithString("begin_date", mcp.Description("开始日期 YYYY-MM-DD，默认 90 天前")),
+		mcp.WithString("end_date", mcp.Description("结束日期 YYYY-MM-DD，默认今天")),
+		mcp.WithString("keyword", mcp.Description("标题关键词，如 年度报告/半年度报告/一季度报告，可空")),
+		mcp.WithNumber("limit", mcp.Description("返回条数上限，默认 20，最大 100")),
+	), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		codes := csvArg(req, "codes")
+		if len(codes) == 0 {
+			return errResult("codes 必填")
+		}
+		if err := validateReportCodes(codes); err != nil {
+			return errResult(err.Error())
+		}
+		beginDate := strArg(req, "begin_date")
+		endDate := strArg(req, "end_date")
+		if beginDate == "" {
+			beginDate = time.Now().AddDate(0, -3, 0).Format("2006-01-02")
+		}
+		if endDate == "" {
+			endDate = time.Now().Format("2006-01-02")
+		}
+		if err := validateReportDates(beginDate, endDate); err != nil {
+			return errResult(err.Error())
+		}
+		keyword := strArg(req, "keyword")
+		limit := intArg(req, "limit", 20)
+		if limit <= 0 {
+			limit = 20
+		}
+		if limit > 100 {
+			limit = 100
+		}
+		tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		raw := s.Forecast.Raw
+		if raw == nil {
+			return jsonResult(map[string]any{"error": "ifind 未配置", "codes": codes})
+		}
+		items, err := raw.ReportQueryWithKeyword(tctx, codes, beginDate, endDate, keyword)
+		if err != nil {
+			return jsonResult(map[string]any{"error": err.Error(), "codes": codes, "begin_date": beginDate, "end_date": endDate, "keyword": keyword})
+		}
+		if keyword != "" {
+			items = filterReportByKeyword(items, keyword)
+		}
+		items = sortReportsByTime(items)
+		if len(items) > limit {
+			items = items[:limit]
+		}
+		return jsonResult(map[string]any{"codes": codes, "begin_date": beginDate, "end_date": endDate, "keyword": keyword, "count": len(items), "data": items})
+	})
 }
 
 func jsonResult(v any) (*mcp.CallToolResult, error) {
@@ -594,4 +693,59 @@ func splitCSV(s string) []string {
 		return nil
 	}
 	return out
+}
+
+func validateReportCodes(codes []string) error {
+	if len(codes) > 20 {
+		return fmt.Errorf("codes 最多 20 个，当前 %d", len(codes))
+	}
+	return nil
+}
+
+func validateReportDates(beginDate, endDate string) error {
+	bd, err := time.Parse("2006-01-02", beginDate)
+	if err != nil {
+		return fmt.Errorf("begin_date 需 YYYY-MM-DD，当前 %q", beginDate)
+	}
+	ed, err := time.Parse("2006-01-02", endDate)
+	if err != nil {
+		return fmt.Errorf("end_date 需 YYYY-MM-DD，当前 %q", endDate)
+	}
+	if bd.After(ed) {
+		return fmt.Errorf("begin_date 不能晚于 end_date")
+	}
+	if ed.Sub(bd) > 366*24*time.Hour {
+		return fmt.Errorf("时间跨度不能超过 366 天")
+	}
+	return nil
+}
+
+func filterReportByKeyword(items []ifindRaw.ReportItem, keyword string) []ifindRaw.ReportItem {
+	kw := strings.TrimSpace(keyword)
+	if kw == "" {
+		return items
+	}
+	var out []ifindRaw.ReportItem
+	for _, it := range items {
+		if strings.Contains(it.ReportTitle, kw) {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func sortReportsByTime(items []ifindRaw.ReportItem) []ifindRaw.ReportItem {
+	// ctime/reportDate 降序（最新在前），空值沉底
+	sort.Slice(items, func(i, j int) bool {
+		ci := items[i].Ctime
+		if ci == "" {
+			ci = items[i].ReportDate
+		}
+		cj := items[j].Ctime
+		if cj == "" {
+			cj = items[j].ReportDate
+		}
+		return ci > cj
+	})
+	return items
 }

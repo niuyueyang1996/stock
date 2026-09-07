@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS daily_price_cache (
     open        REAL, high REAL, low REAL, close REAL,
     volume      REAL, amount REAL,
     pct_change  REAL, total_mv REAL,
+    sell_volume REAL, buy_volume REAL,
+    committee   REAL, commission_diff REAL,
     is_closed   INTEGER NOT NULL DEFAULT 0,
     source      TEXT,
     updated_at  TEXT,
@@ -384,7 +386,7 @@ CREATE TABLE IF NOT EXISTS stock_refresh_meta (
 const SchemaVersionKey = "db_schema_version"
 
 // CurrentVersion 与 Python _CURRENT_VERSION 对齐
-const CurrentVersion = 11
+const CurrentVersion = 12
 
 // migrateColumns 各版本迁移的列补充（幂等：已存在则跳过），与 Python _MIGRATE_COLUMNS 对齐
 var migrateColumns = map[int][]string{
@@ -440,6 +442,13 @@ var migrateColumns = map[int][]string{
 		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN rhythm TEXT",
 		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN trend TEXT",
 		"ALTER TABLE ai_fundflow_coherence_reports ADD COLUMN supply_demand TEXT",
+	},
+	12: {
+		// daily_price_cache 新增 iFinD 委比委差透传（仅 iFinD 有值，其他厂商留空）
+		"ALTER TABLE daily_price_cache ADD COLUMN sell_volume REAL",
+		"ALTER TABLE daily_price_cache ADD COLUMN buy_volume REAL",
+		"ALTER TABLE daily_price_cache ADD COLUMN committee REAL",
+		"ALTER TABLE daily_price_cache ADD COLUMN commission_diff REAL",
 	},
 }
 

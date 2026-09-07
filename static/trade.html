@@ -209,6 +209,17 @@
     }
 
     // ============ Excel 导入（安卓走原生桥，浏览器走隐藏 file input） ============
+    // 导入结果提示：总数 + 逐行跳过原因（仲裁拒绝的行靠它修 Excel）。
+    function formatImportResult(total, skipped, detail) {
+      let msg = `已导入 ${total} 只持仓`;
+      if (skipped) {
+        const rows = Array.isArray(detail) ? detail.slice(0, 5) : [];
+        const txt = rows.map((d) => `${d.code || ''} ${d.name || ''}（${d.reason || '跳过'}）`.trim()).join('、');
+        msg += `，跳过 ${skipped} 只` + (txt ? `：${txt}` : '');
+        if (Array.isArray(detail) && detail.length > 5) msg += `…等${detail.length}只`;
+      }
+      return msg;
+    }
     function startExcelImport() {
       if (window.AndroidBridge) {
         const btn = document.getElementById('importBtn');
@@ -228,13 +239,14 @@
         try { json = JSON.parse(body || '{}'); } catch (e) { throw new Error(body || '响应无法解析'); }
         if (status !== 200) throw new Error(json.detail || json.msg || ('HTTP ' + status));
         const data = json.data || json;
-        if (!data.job_id) throw new Error('未返回任务 ID');
-        toast('Excel 导入已开始，进度见顶部');
-        if (typeof window.kickJobBar === 'function') window.kickJobBar();
-        await waitForJob(data.job_id);
+        if (data.total) {
+          toast('Excel 导入已开始，进度见顶部');
+          if (typeof window.kickJobBar === 'function') window.kickJobBar();
+        }
+        if (data.job_id) await waitForJob(data.job_id);
         const skipped = data.skipped || 0;
         const total = data.total || 0;
-        toast(`已导入 ${total} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''), 3500);
+        toast(formatImportResult(total, skipped, data.skipped_detail), skipped ? 8000 : 3500);
         await loadPage();
       } catch (e) {
         toast('导入失败：' + e.message, 4000);
@@ -253,14 +265,18 @@
       const fd = new FormData();
       fd.append('file', file);
       try {
-        const job = await startBackgroundJob('/holdings/import-excel', fd, {
-          toast: 'Excel 导入已开始，进度见顶部',
-        });
-        await waitForJob(job.job_id);
+        // 全跳过时无 job（job_id 为空），直接用 api 以便拿到 skipped_detail；
+        // 有任务时才等 job 跑完。
+        const job = await api('/holdings/import-excel', { method: 'POST', body: fd });
+        if (job.job_id) {
+          toast('Excel 导入已开始，进度见顶部');
+          if (typeof window.kickJobBar === 'function') window.kickJobBar();
+          await waitForJob(job.job_id);
+        }
         input.value = '';
         const skipped = job.skipped || 0;
         const total = job.total || 0;
-        toast(`已导入 ${total} 只持仓` + (skipped ? `，跳过 ${skipped} 只（非A股/无价格）` : ''), 3500);
+        toast(formatImportResult(total, skipped, job.skipped_detail), skipped ? 8000 : 3500);
         await loadPage();
       } catch (e) {
         input.value = '';

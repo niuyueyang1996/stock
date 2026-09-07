@@ -4,17 +4,21 @@ package model
 
 // Quote 单股实时行情
 type Quote struct {
-	Code      string
-	Name      string
-	Price     float64 // 最新价
-	PctChg    float64 // 涨跌幅 %
-	PrevClose float64 // 昨收
-	Open      float64
-	High      float64
-	Low       float64
-	Volume    float64
-	Amount    float64
-	Ts        string // 'YYYY-MM-DD HH:MM:SS'
+	Code           string
+	Name           string
+	Price          float64 // 最新价
+	PctChg         float64 // 涨跌幅 %
+	PrevClose      float64 // 昨收
+	Open           float64
+	High           float64
+	Low            float64
+	Volume         float64
+	Amount         float64
+	Ts             string // 'YYYY-MM-DD HH:MM:SS'
+	SellVolume     *float64 `json:"sellVolume,omitempty"`     // 内盘（iFinD 独有，其他厂商留空）
+	BuyVolume      *float64 `json:"buyVolume,omitempty"`      // 外盘（iFinD 独有，其他厂商留空）
+	Committee      *float64 `json:"committee,omitempty"`      // 委比 %（iFinD 独有，其他厂商留空）
+	CommissionDiff *float64 `json:"commission_diff,omitempty"` // 委差（iFinD 独有，其他厂商留空）
 }
 
 // Bar 单根K线

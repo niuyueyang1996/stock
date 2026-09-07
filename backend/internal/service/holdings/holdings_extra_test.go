@@ -1,10 +1,14 @@
 package holdings
 
 import (
+	"errors"
 	"math"
+	"strings"
 	"testing"
+	"time"
 
 	"stockanalyzer/internal/db/dao"
+	"stockanalyzer/internal/service/marketcode"
 )
 
 // TestMovingWeightedCost 重放法移动加权成本：多次不同单价买入，成本随新买入摊薄；
@@ -185,7 +189,7 @@ func TestSellFIFOTodayPnlOnlyTodayBuy(t *testing.T) {
 // TestUpdateTradeRebuild UpdateTrade 后重放持仓重算；改主键字段 code 时新旧持仓均重放。
 func TestUpdateTradeRebuild(t *testing.T) {
 	svc, g := openSvc(t)
-	_ = g.Exec("INSERT INTO stocks(code,name,market,currency) VALUES('600001','股A','sh','CNY'),('600002','股B','sh','CNY')").Error
+	_ = g.Exec("INSERT INTO stocks(code,name,market,currency) VALUES('600001','股A','sh','CNY'),('600002.SZ','股B','sz','CNY')").Error
 	_, _, _ = svc.RecordTrade("600001", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false)
 	// 把买入价改成 20 → 均价 20
 	rows := svc.DB.TradesByCode("600001")
@@ -197,14 +201,14 @@ func TestUpdateTradeRebuild(t *testing.T) {
 	if h.AvgCost != 20 || h.Quantity != 100 {
 		t.Fatalf("改价后期望 100@20, got %+v", h)
 	}
-	// 改 code 到 600002 → 新旧持仓都被重放
-	res, err = svc.UpdateTrade(rows[0].ID, map[string]any{"code": "600002"})
+	// 改 code 到 600002.SZ → 新旧持仓都被重放（改 code 必须带后缀，裸码拒绝）
+	res, err = svc.UpdateTrade(rows[0].ID, map[string]any{"code": "600002.SZ"})
 	if err != nil {
 		t.Fatalf("改 code: %v", err)
 	}
 	hNew := res["holding"].(*HoldingResult)
-	if hNew.Code != "600002" || hNew.Quantity != 100 {
-		t.Fatalf("new holding 期望 600002, got %+v", hNew)
+	if hNew.Code != "600002.SZ" || hNew.Quantity != 100 {
+		t.Fatalf("new holding 期望 600002.SZ, got %+v", hNew)
 	}
 	hOld := res["holding_old"].(*HoldingResult)
 	if hOld == nil || hOld.Code != "600001" || hOld.Status != "closed" || hOld.Quantity != 0 {
@@ -451,3 +455,164 @@ func TestHKFirstTradeInfersCurrency(t *testing.T) {
 }
 
 func float64ptr(v float64) *float64 { return &v }
+
+// openResolveSvc 构造带就绪 Registry 的仲裁测试服务（含重码 000001、上证指数、同名 A/H）。
+func openResolveSvc(t *testing.T) *Service {
+	t.Helper()
+	svc, _ := openSvc(t)
+	reg := marketcode.New()
+	reg.BuildWithNames(
+		[]string{"600519.SH", "000001.SZ", "601398.SH"},
+		[]string{"贵州茅台", "平安银行", "工商银行"},
+		[]string{"510300.SH"}, []string{"华泰柏瑞沪深300ETF"},
+		[]string{"00700.HK", "01398.HK"}, []string{"腾讯控股", "工商银行"},
+		map[string]string{"000001.SH": "sh000001", "399001.SZ": "sz399001"},
+		map[string]string{"000001.SH": "上证指数", "399001.SZ": "深证成指"},
+	)
+	svc.Codes = reg
+	return svc
+}
+
+// TestResolveFullCodeNormal A 组：唯一候选 + 名称一致 → 采用。
+func TestResolveFullCodeNormal(t *testing.T) {
+	svc := openResolveSvc(t)
+	for _, tc := range []struct{ bare, name, want string }{
+		{"600519", "贵州茅台", "600519.SH"},
+		{"00700", "腾讯控股", "00700.HK"},
+		{"510300", "华泰柏瑞沪深300ETF", "510300.SH"},
+		{"600519", "贵州茅台 ", "600519.SH"}, // 名称轻归一
+		{"600519.SH", "随便什么", "600519.SH"}, // 已带后缀不查表
+		{"600519.sh", "贵州茅台", "600519.SH"}, // 小写后缀归一（E5）
+	} {
+		got, err := svc.ResolveFullCode(tc.bare, tc.name)
+		if err != nil || got != tc.want {
+			t.Errorf("ResolveFullCode(%q,%q)=%q,%v want %q", tc.bare, tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// TestResolveFullCodeRecode B 组：重码 000001 用名称二选一。
+func TestResolveFullCodeRecode(t *testing.T) {
+	svc := openResolveSvc(t)
+	if got, err := svc.ResolveFullCode("000001", "平安银行"); err != nil || got != "000001.SZ" {
+		t.Errorf("平安银行应仲裁为 000001.SZ, got %q,%v", got, err)
+	}
+	if _, err := svc.ResolveFullCode("000001", "上证指数"); err == nil {
+		t.Error("名称命中指数应拦截")
+	}
+	if _, err := svc.ResolveFullCode("000001", ""); !errors.Is(err, ErrCodeAmbiguous) {
+		t.Errorf("多候选无名称应报歧义, got %v", err)
+	}
+	if _, err := svc.ResolveFullCode("000001", "中国平安"); !errors.Is(err, ErrCodeNameMismatch) {
+		t.Errorf("名称无命中应报不符, got %v", err)
+	}
+}
+
+// TestResolveFullCodeCrossMarket C 组：同名 A/H 靠裸码区分，不靠名称猜。
+func TestResolveFullCodeCrossMarket(t *testing.T) {
+	svc := openResolveSvc(t)
+	if got, err := svc.ResolveFullCode("601398", "工商银行"); err != nil || got != "601398.SH" {
+		t.Errorf("601398 应为 A 股, got %q,%v", got, err)
+	}
+	if got, err := svc.ResolveFullCode("01398", "工商银行"); err != nil || got != "01398.HK" {
+		t.Errorf("01398 应为港股, got %q,%v", got, err)
+	}
+}
+
+// TestResolveFullCodeReject D/E 组：错误行全部拒绝。
+func TestResolveFullCodeReject(t *testing.T) {
+	svc := openResolveSvc(t)
+	for _, tc := range []struct {
+		bare, name string
+		wantErr    error
+	}{
+		{"600519", "五粮液", ErrCodeNameMismatch},   // 码名不符
+		{"600519", "", ErrCodeNameMismatch},        // 唯一候选但无名称（严格版）
+		{"999999", "某某股票", ErrCodeNotFound},      // 查无此码
+		{"399001", "深证成指", nil},                 // 指数：非 Err 系列，断言文案
+		{"600519", "贵州茅台股份有限公司", ErrCodeNameMismatch}, // 全称不模糊匹配
+		{"700", "腾讯控股", ErrCodeNotFound},        // 前导零丢失不自动补
+		{"000001.SH", "上证指数", nil},              // 带后缀指数：断言文案
+	} {
+		_, err := svc.ResolveFullCode(tc.bare, tc.name)
+		if err == nil {
+			t.Errorf("ResolveFullCode(%q,%q) 应拒绝", tc.bare, tc.name)
+			continue
+		}
+		if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+			t.Errorf("ResolveFullCode(%q,%q) err=%v want %v", tc.bare, tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+// TestResolveFullCodeNotReady Registry 未就绪直接拒绝，不猜。
+func TestResolveFullCodeNotReady(t *testing.T) {
+	svc, _ := openSvc(t) // Codes 为空 Registry，未 Ready
+	if _, err := svc.ResolveFullCode("600519", "贵州茅台"); !errors.Is(err, ErrNotReady) {
+		t.Errorf("未就绪应报 ErrNotReady, got %v", err)
+	}
+}
+
+// TestUpdateTradeBareCodeRejected UpdateTrade 改 code 时裸码直接拒绝。
+func TestUpdateTradeBareCodeRejected(t *testing.T) {
+	svc := openResolveSvc(t)
+	_, _, _ = svc.RecordTrade("600519.SH", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false)
+	rows := svc.DB.TradesByCode("600519.SH")
+	if _, err := svc.UpdateTrade(rows[0].ID, map[string]any{"code": "600002"}); err == nil {
+		t.Error("裸码改 code 应拒绝")
+	}
+	if _, err := svc.UpdateTrade(rows[0].ID, map[string]any{"code": "600002.SZ"}); err != nil {
+		t.Errorf("fullCode 改 code 应放行（后续重放可能失败属业务范畴）, got %v", err)
+	}
+}
+
+// TestWritePathsRejectIndex 写入口统一拦截指数（E6）：RecordTrade / AdjustCost
+// 带后缀命中指数也拒绝；非指数不受影响；空表时不误伤（向后兼容旧单测）。
+func TestWritePathsRejectIndex(t *testing.T) {
+	svc := openResolveSvc(t) // 含指数 000001.SH
+	if _, _, err := svc.RecordTrade("000001.SH", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false); err == nil {
+		t.Error("RecordTrade 指数应拒绝")
+	}
+	if _, err := svc.AdjustCost("000001.SH", 100, 0, "test", "2026-01-02 10:00:00", false, nil); err == nil {
+		t.Error("AdjustCost 指数应拒绝")
+	}
+	// 非指数正常录入不受影响
+	if _, _, err := svc.RecordTrade("000001.SZ", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false); err != nil {
+		t.Errorf("非指数应放行, got %v", err)
+	}
+	// 空 Registry（未就绪）不误伤旧路径
+	bare, _ := openSvc(t)
+	if _, _, err := bare.RecordTrade("600519", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false); err != nil {
+		t.Errorf("空表时非指数应放行, got %v", err)
+	}
+}
+
+// TestUpdateTradeIndexRejected UpdateTrade 改 code 到指数 fullCode 应拒绝
+//（此前走全局变量、单测恒为 nil 测不到；现改用注入 Codes 后可测）。
+func TestUpdateTradeIndexRejected(t *testing.T) {
+	svc := openResolveSvc(t) // 含指数 000001.SH
+	_, _, _ = svc.RecordTrade("600519.SH", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, false)
+	rows := svc.DB.TradesByCode("600519.SH")
+	if _, err := svc.UpdateTrade(rows[0].ID, map[string]any{"code": "000001.SH"}); err == nil {
+		t.Error("改 code 到指数应拒绝")
+	} else if !strings.Contains(err.Error(), "指数") {
+		t.Errorf("拒绝原因应提及指数, got %v", err)
+	}
+}
+
+// TestOpeningTradeTime 期初落盘时间恒为昨日 15:00（含午夜、跨年边界）。
+func TestOpeningTradeTime(t *testing.T) {
+	for _, tc := range []struct {
+		now  string
+		want string
+	}{
+		{"2026-09-07 11:00:00", "2026-09-06 15:00:00"},
+		{"2026-09-07 00:00:30", "2026-09-06 15:00:00"}, // 午夜刚过也不跨到今天
+		{"2026-01-01 10:00:00", "2025-12-31 15:00:00"}, // 跨年
+	} {
+		now, _ := time.Parse("2006-01-02 15:04:05", tc.now)
+		if got := OpeningTradeTime(now); got != tc.want {
+			t.Errorf("OpeningTradeTime(%q)=%q want %q", tc.now, got, tc.want)
+		}
+	}
+}

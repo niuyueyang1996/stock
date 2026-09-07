@@ -18,19 +18,23 @@ func NewCacheDAO(g *gorm.DB) *CacheDAO { return &CacheDAO{DB: g} }
 
 // DailyPrice 日K行
 type DailyPrice struct {
-	Code      string   `gorm:"column:code;primaryKey"`
-	TradeDate string   `gorm:"column:trade_date;primaryKey"`
-	Open      *float64 `gorm:"column:open"`
-	High      *float64 `gorm:"column:high"`
-	Low       *float64 `gorm:"column:low"`
-	Close     *float64 `gorm:"column:close"`
-	Volume    *float64 `gorm:"column:volume"`
-	Amount    *float64 `gorm:"column:amount"`
-	PctChange *float64 `gorm:"column:pct_change"`
-	TotalMv   *float64 `gorm:"column:total_mv"`
-	IsClosed  int      `gorm:"column:is_closed"`
-	Source    *string  `gorm:"column:source"`
-	UpdatedAt *string  `gorm:"column:updated_at"`
+	Code           string   `gorm:"column:code;primaryKey"`
+	TradeDate      string   `gorm:"column:trade_date;primaryKey"`
+	Open           *float64 `gorm:"column:open"`
+	High           *float64 `gorm:"column:high"`
+	Low            *float64 `gorm:"column:low"`
+	Close          *float64 `gorm:"column:close"`
+	Volume         *float64 `gorm:"column:volume"`
+	Amount         *float64 `gorm:"column:amount"`
+	PctChange      *float64 `gorm:"column:pct_change"`
+	TotalMv        *float64 `gorm:"column:total_mv"`
+	SellVolume     *float64 `gorm:"column:sell_volume"`
+	BuyVolume      *float64 `gorm:"column:buy_volume"`
+	Committee      *float64 `gorm:"column:committee"`
+	CommissionDiff *float64 `gorm:"column:commission_diff"`
+	IsClosed       int      `gorm:"column:is_closed"`
+	Source         *string  `gorm:"column:source"`
+	UpdatedAt      *string  `gorm:"column:updated_at"`
 }
 
 func (DailyPrice) TableName() string { return "daily_price_cache" }
@@ -88,7 +92,7 @@ func (d *CacheDAO) UpsertDailyPrices(rows []DailyPrice) error {
 	}
 	return d.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "code"}, {Name: "trade_date"}},
-		DoUpdates: clause.AssignmentColumns([]string{"open", "high", "low", "close", "volume", "amount", "pct_change", "total_mv", "is_closed", "source", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"open", "high", "low", "close", "volume", "amount", "pct_change", "total_mv", "sell_volume", "buy_volume", "committee", "commission_diff", "is_closed", "source", "updated_at"}),
 	}).Create(&rows).Error
 }
 

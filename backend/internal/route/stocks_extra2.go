@@ -20,7 +20,10 @@ func setupStockExtra2Routes(api *gin.RouterGroup, s *Services) {
 	// GET /api/stocks/:code/dividend —— 查最近除权分红（对齐 app/api/stocks.py /dividend）：东财优先、
 	// 不可用降级巨潮；无数据 404，返回 ex_date/per_10_share/per_share/source 及描述。
 	api.GET("/stocks/:code/dividend", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		div := s.Dividend.FetchLatestDividend(c.Request.Context(), code)
 		if div == nil {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "无分红数据"})
@@ -38,7 +41,10 @@ func setupStockExtra2Routes(api *gin.RouterGroup, s *Services) {
 	// POST /api/stocks/:code/refresh —— 单股动态刷新（异步，对齐 app/api/stocks.py /refresh）：body 可传 items 指定要刷的缓存项；
 	// 返回 job_id + kind=refresh.stock.dynamic。
 	api.POST("/stocks/:code/refresh", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body struct {
 			Items []string `json:"items"`
 			Auto  bool     `json:"auto"`
@@ -58,7 +64,10 @@ func setupStockExtra2Routes(api *gin.RouterGroup, s *Services) {
 	// POST /api/stocks/:code/refresh/full —— 单股全量刷新（异步，对齐 app/api/stocks.py）：拉全量财务/行情/分位等，
 	// 返回 job_id + kind=refresh.stock.full。
 	api.POST("/stocks/:code/refresh/full", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
+		if !requireFullCode(c, code) {
+			return
+		}
 		var body struct {
 			Items []string `json:"items"`
 			Auto  bool     `json:"auto"`
@@ -109,7 +118,7 @@ func setupIndicesExtraRoutes(api *gin.RouterGroup, s *Services) {
 	})
 	// POST /api/indices/:code/refresh —— 单指数刷新（异步，对齐 app/api/index.py）：刷新行情+估值序列并重算分位；指数不存在 404。
 	api.POST("/indices/:code/refresh", func(c *gin.Context) {
-		code := c.Param("code")
+		code := normalizeCode(c.Param("code"))
 		if s.Indices.GetIndexDef(code) == nil {
 			c.JSON(http.StatusNotFound, gin.H{"detail": "指数不存在: " + code})
 			return
@@ -160,19 +169,6 @@ func splitCSV(txt string) []string {
 		}
 	}
 	return out
-}
-
-// isHKCode5 五位纯数字代码为港股（对齐 base.py）
-func isHKCode5(code string) bool {
-	if len(code) != 5 {
-		return false
-	}
-	for _, ch := range code {
-		if ch < '0' || ch > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // autoMapETFIndex ETF 名称子串匹配指数名（多命中取最长名）

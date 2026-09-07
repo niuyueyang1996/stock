@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
 )
 
@@ -45,12 +46,33 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "Excel 解析失败: " + err.Error()})
 			return
 		}
+		// 空仓检查先行：非空仓时直接指引清仓，不浪费一次仲裁，
+		// 也避免全坏 Excel 时报"没有可导入"把用户指错路。
 		if s.Holdings.HasActiveHoldings() {
 			c.JSON(http.StatusBadRequest, gin.H{"detail": "当前非空仓，请先清仓后再一键导入"})
 			return
 		}
+		// 双因子仲裁：裸码+名称 → fullCode；失败进 skipped 明细（不静默写错账）。
+		resolved := make([]map[string]any, 0, len(items))
+		for _, it := range items {
+			code, _ := it["code"].(string)
+			name, _ := it["name"].(string)
+			full, err := s.Holdings.ResolveFullCode(code, name)
+			if err != nil {
+				skipped = append(skipped, map[string]any{"code": code, "name": name, "reason": err.Error()})
+				continue
+			}
+			it["code"] = full
+			resolved = append(resolved, it)
+		}
+		items = resolved
 		if len(items) == 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"detail": "Excel 中没有可导入的 A 股持仓"})
+			// 全被跳过（含仲裁拒绝）也回 200：调用方靠 skipped_detail 展示逐行原因，
+			// 若回 400 则 reason 全丢，用户无法修 Excel（R2）。
+			c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
+				"job_id": "", "async": false, "total": 0,
+				"skipped": len(skipped), "skipped_detail": skipped,
+			}})
 			return
 		}
 		// 对齐 Python start_holdings_import：扇出 batch，每只股票独立子任务（写交易+同步数据），
@@ -72,9 +94,11 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 				name, _ := child.Meta["name"].(string)
 				price, _ := child.Meta["price"].(float64)
 				qty, _ := child.Meta["quantity"].(float64)
-				// 写交易（side_effects=false，避免逐只重放，统一在收尾处理）
+				// 写交易（side_effects=false，避免逐只重放，统一在收尾处理）。
+				// 期初建仓口径落昨日收盘：Excel 无真实买入日期，落现在会把老持仓
+				// 标成今日买入，当日盈亏②项按成本价算，当天数字变总盈亏。
 				_, _, err := s.Holdings.RecordTrade(code, "buy", price, qty, 0,
-					time.Now().Format("2006-01-02T15:04:05"), "Excel 导入", &name, false)
+					holdings.OpeningTradeTime(time.Now()), "Excel 导入", &name, false)
 				if err != nil {
 					log.Printf("[Excel导入] %s %s 写交易失败: %v", code, name, err)
 					return nil // 单股失败不阻断整批
@@ -101,7 +125,8 @@ func setupHoldingsImportRoutes(api *gin.RouterGroup, s *Services) {
 			return nil
 		})
 		c.JSON(http.StatusOK, gin.H{"ok": true, "data": gin.H{
-			"job_id": batchID, "async": true, "total": len(items), "skipped": len(skipped),
+			"job_id": batchID, "async": true, "total": len(items),
+			"skipped": len(skipped), "skipped_detail": skipped,
 		}})
 	})
 }
@@ -283,8 +308,13 @@ func colIndex(ref string) int {
 	return idx - 1
 }
 
-// isAStockOrETF A 股（6 位数字）或场内 ETF（51/56/58/15/16 开头）或港股（5 位数字）
+// isAStockOrETF A 股（6 位数字）或场内 ETF（51/56/58/15/16 开头）或港股（5 位数字）。
+// 已带 fullCode 后缀的先剥后缀验裸码部分。
 func isAStockOrETF(code string) bool {
+	if idx := strings.LastIndex(code, "."); idx >= 0 {
+		code = code[:idx]
+	}
+	code = strings.ToUpper(strings.TrimSpace(code))
 	// 港股：5 位纯数字
 	if len(code) == 5 {
 		for _, ch := range code {
@@ -309,15 +339,18 @@ func isAStockOrETF(code string) bool {
 	return true
 }
 
-// defaultTag 根据代码和名称判定默认标签：港股/ETF/债/A股
+// defaultTag 根据代码和名称判定默认标签：港股/ETF/债/A股（code 已为仲裁后的 fullCode）。
 func defaultTag(code, name string) string {
-	// 5位纯数字 → 港股
-	if len(code) == 5 {
+	if strings.HasSuffix(code, ".HK") {
 		return "港股"
 	}
+	bare := code
+	if idx := strings.LastIndex(code, "."); idx >= 0 {
+		bare = code[:idx]
+	}
 	// 场内基金前缀
-	if strings.HasPrefix(code, "51") || strings.HasPrefix(code, "56") ||
-		strings.HasPrefix(code, "58") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") {
+	if strings.HasPrefix(bare, "51") || strings.HasPrefix(bare, "56") ||
+		strings.HasPrefix(bare, "58") || strings.HasPrefix(bare, "15") || strings.HasPrefix(bare, "16") {
 		if strings.Contains(name, "债") {
 			return "债"
 		}

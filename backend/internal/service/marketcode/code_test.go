@@ -78,3 +78,41 @@ func TestRegistryIsolation(t *testing.T) {
 		t.Fatal("Reset 应清空实例")
 	}
 }
+
+func TestCandidatesByBare(t *testing.T) {
+	reg := New()
+	reg.BuildWithNames(
+		[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
+		nil, nil,
+		[]string{"00700.HK"}, []string{"腾讯控股"},
+		map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
+	)
+	if got := reg.CandidatesByBare("600519"); len(got) != 1 || got[0] != "600519.SH" {
+		t.Fatalf("600519 got %v", got)
+	}
+	got := reg.CandidatesByBare("000001")
+	if len(got) != 2 || got[0] != "000001.SH" || got[1] != "000001.SZ" {
+		t.Fatalf("000001 重码应返回两个有序候选, got %v", got)
+	}
+	if got := reg.CandidatesByBare("999999"); len(got) != 0 {
+		t.Fatalf("未知码应空, got %v", got)
+	}
+	if got := reg.CandidatesByBare("600519.SH"); len(got) != 0 {
+		t.Fatalf("带后缀不反查, got %v", got)
+	}
+	if got := reg.CandidatesByBare(" 600519 "); len(got) != 1 {
+		t.Fatalf("应容忍空白大小写, got %v", got)
+	}
+}
+
+func TestNormalizeName(t *testing.T) {
+	if NormalizeName("贵州茅台 ") != "贵州茅台" {
+		t.Fatal("去首尾空格")
+	}
+	if NormalizeName("贵 州 茅台") != "贵州茅台" {
+		t.Fatal("去内部空格")
+	}
+	if NormalizeName("*ST康美") != "*ST康美" {
+		t.Fatal("特殊前缀不动")
+	}
+}

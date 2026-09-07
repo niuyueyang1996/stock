@@ -253,6 +253,166 @@ type ReportItem struct {
 	Seq         string `json:"seq"`
 }
 
+// flexibleReportItems 兼容同花顺 report_query 的三种形态：行式数组/单对象/列式对象。
+type flexibleReportItems []ReportItem
+
+func (s *flexibleReportItems) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*s = nil
+		return nil
+	}
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var tmp []ReportItem
+		if err := json.Unmarshal(trimmed, &tmp); err != nil {
+			return err
+		}
+		*s = flexibleReportItems(tmp)
+		return nil
+	}
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &m); err != nil {
+			*s = nil
+			return nil
+		}
+		if len(m) == 0 {
+			*s = nil
+			return nil
+		}
+		if items := tryColumnarReportItems(m); items != nil {
+			*s = flexibleReportItems(items)
+			return nil
+		}
+		if _, ok := m["reportTitle"]; ok {
+			var single ReportItem
+			if err := json.Unmarshal(trimmed, &single); err == nil {
+				*s = flexibleReportItems{single}
+				return nil
+			}
+		}
+		if _, ok := m["pdfURL"]; ok {
+			var single ReportItem
+			if err := json.Unmarshal(trimmed, &single); err == nil {
+				*s = flexibleReportItems{single}
+				return nil
+			}
+		}
+		*s = nil
+		return nil
+	}
+	*s = nil
+	return nil
+}
+
+func tryColumnarReportItems(m map[string]json.RawMessage) []ReportItem {
+	var titles []string
+	hasColumn := false
+	for _, k := range []string{"reportTitle", "reportDate", "thscode", "ctime", "pdfURL", "secName", "seq"} {
+		if v, ok := m[k]; ok && len(bytes.TrimSpace(v)) > 0 && bytes.TrimSpace(v)[0] == '[' {
+			hasColumn = true
+			break
+		}
+	}
+	if !hasColumn {
+		return nil
+	}
+	if v, ok := m["reportTitle"]; ok {
+		if err := json.Unmarshal(v, &titles); err != nil {
+			return nil
+		}
+		if len(titles) == 0 {
+			return nil
+		}
+	} else {
+		return nil
+	}
+	n := len(titles)
+	decodeCol := func(key string) []string {
+		v, ok := m[key]
+		if !ok {
+			return nil
+		}
+		var arr []any
+		if err := json.Unmarshal(v, &arr); err != nil {
+			var sarr []string
+			if err2 := json.Unmarshal(v, &sarr); err2 == nil {
+				return sarr
+			}
+			return nil
+		}
+		out := make([]string, len(arr))
+		for i, e := range arr {
+			if e == nil {
+				continue
+			}
+			switch x := e.(type) {
+			case string:
+				out[i] = x
+			case float64:
+				if x == float64(int64(x)) {
+					out[i] = fmt.Sprintf("%.0f", x)
+				} else {
+					out[i] = fmt.Sprint(x)
+				}
+			default:
+				out[i] = fmt.Sprint(x)
+			}
+		}
+		return out
+	}
+	reportDates := decodeCol("reportDate")
+	thscoes := decodeCol("thscode")
+	ctimes := decodeCol("ctime")
+	pdfURLs := decodeCol("pdfURL")
+	secNames := decodeCol("secName")
+	seqs := decodeCol("seq")
+
+	get := func(arr []string, i int) string {
+		if arr == nil || i >= len(arr) {
+			return ""
+		}
+		return arr[i]
+	}
+	items := make([]ReportItem, n)
+	for i := range n {
+		items[i] = ReportItem{
+			ReportTitle: get(titles, i),
+			ReportDate:  get(reportDates, i),
+			Thscode:     get(thscoes, i),
+			Ctime:       get(ctimes, i),
+			PdfURL:      get(pdfURLs, i),
+			SecName:     get(secNames, i),
+			Seq:         get(seqs, i),
+		}
+	}
+	return items
+}
+
+func parseReportTables(raw json.RawMessage) ([]ReportItem, error) {
+	var tables []struct {
+		Table flexibleReportItems `json:"table"`
+	}
+	if err := json.Unmarshal(raw, &tables); err != nil {
+		// 兼容 tables 本身为单对象而非数组的极端形态
+		var single struct {
+			Table flexibleReportItems `json:"table"`
+		}
+		if err2 := json.Unmarshal(raw, &single); err2 == nil {
+			if len(single.Table) == 0 {
+				return nil, nil
+			}
+			return []ReportItem(single.Table), nil
+		}
+		return nil, err
+	}
+	var out []ReportItem
+	for _, t := range tables {
+		out = append(out, []ReportItem(t.Table)...)
+	}
+	return out, nil
+}
+
 // FundamentalData 基础数据 11 指标结构化
 type FundamentalData struct {
 	NetProfit     string `json:"归母净利润"`
@@ -266,6 +426,19 @@ type FundamentalData struct {
 	RevenueGrowth string `json:"营业总收入增长率"`
 	ProfitGrowth  string `json:"归属母公司净利润增长率"`
 	EPS           string `json:"基本每股收益"`
+}
+
+// ForecastData 预测类（FY1/FY2/FY3，对齐超级命令 ths_fore_*_stock）
+// 服务端通过 basic_data_service + indiparams:[asOf] 返回，key 可能是中文“预测净利润(FY1)”或英文“ths_fore_np_fy1_stock”
+type ForecastData struct {
+	EpsFY1 string `json:"eps_fy1"`
+	NpFY1  string `json:"np_fy1"`
+	NpFY2  string `json:"np_fy2"`
+	NpFY3  string `json:"np_fy3"`
+	MbiFY1 string `json:"mbi_fy1"`
+	MbiFY2 string `json:"mbi_fy2"`
+	MbiFY3 string `json:"mbi_fy3"`
+	AsOf   string `json:"as_of"`
 }
 
 func (c *Client) BasicData(ctx context.Context, codes []string, indicators []string) (map[string]*FundamentalData, error) {
@@ -300,6 +473,116 @@ func (c *Client) BasicData(ctx context.Context, codes []string, indicators []str
 	return out, nil
 }
 
+// indicator 英文名 → ForecastData 字段名
+var forecastIndicatorToField = map[string]string{
+	"ths_fore_eps_fy1_stock": "eps_fy1",
+	"ths_fore_np_fy1_stock":  "np_fy1",
+	"ths_fore_np_fy2_stock":  "np_fy2",
+	"ths_fore_np_fy3_stock":  "np_fy3",
+	"ths_fore_mbi_fy1_stock": "mbi_fy1",
+	"ths_fore_mbi_fy2_stock": "mbi_fy2",
+	"ths_fore_mbi_fy3_stock": "mbi_fy3",
+}
+
+// 中文 tag → ForecastData 字段名（兜底：服务端以中文“预测净利润(FY1)”形态返回时）
+var forecastCNTagToField = map[string]string{
+	"预测每股收益(FY1)": "eps_fy1",
+	"预测净利润(FY1)":   "np_fy1",
+	"预测净利润(FY2)":   "np_fy2",
+	"预测净利润(FY3)":   "np_fy3",
+	"预测营业收入(FY1)": "mbi_fy1",
+	"预测营业收入(FY2)": "mbi_fy2",
+	"预测营业收入(FY3)": "mbi_fy3",
+}
+
+// Forecast 预测利润/营收（FY1-FY3），走 basic_data_service + indiparams:[asOf]，asOf 需 YYYY-MM-DD，空则取当天
+func (c *Client) Forecast(ctx context.Context, codes []string, asOf string) (map[string]*ForecastData, error) {
+	if c.refreshToken == "" {
+		return nil, mapIFindError(0, "ifind refresh_token 未配置")
+	}
+	if len(codes) == 0 {
+		return map[string]*ForecastData{}, nil
+	}
+	if asOf == "" {
+		asOf = time.Now().Format("2006-01-02")
+	}
+	indipara := make([]map[string]any, 0, len(ForecastIndicators))
+	for _, ind := range ForecastIndicators {
+		indipara = append(indipara, map[string]any{"indicator": ind, "indiparams": []string{asOf}})
+	}
+	form := map[string]any{"codes": JoinCodes(codes), "indipara": indipara}
+	raw, err := c.postJSON(ctx, basicDataPath, form)
+	if err != nil {
+		return nil, err
+	}
+	var tables []struct {
+		Table   json.RawMessage `json:"table"`
+		Thscode string          `json:"thscode"`
+	}
+	if err := json.Unmarshal(raw, &tables); err != nil {
+		return nil, err
+	}
+	out := map[string]*ForecastData{}
+	for _, t := range tables {
+		if t.Thscode == "" {
+			continue
+		}
+		fd := &ForecastData{AsOf: asOf}
+		var row map[string]any
+		if err := json.Unmarshal(t.Table, &row); err == nil {
+			setForecastFields(fd, row)
+		}
+		if fd.EpsFY1 == "" && fd.NpFY1 == "" && fd.NpFY2 == "" && fd.NpFY3 == "" && fd.MbiFY1 == "" && fd.MbiFY2 == "" && fd.MbiFY3 == "" {
+			continue
+		}
+		out[t.Thscode] = fd
+	}
+	if len(out) == 0 {
+		return nil, mapIFindError(-4001, "no data")
+	}
+	return out, nil
+}
+
+func setForecastFields(dst *ForecastData, row map[string]any) {
+	for k, v := range row {
+		s := fmt.Sprint(v)
+		if s == "" || s == "<nil>" {
+			continue
+		}
+		field := forecastIndicatorToField[k]
+		if field == "" {
+			field = forecastCNTagToField[k]
+		}
+		if field == "" {
+			nk := strings.TrimSpace(k)
+			if f, ok := forecastIndicatorToField[nk]; ok {
+				field = f
+			} else if f, ok := forecastCNTagToField[nk]; ok {
+				field = f
+			}
+		}
+		if field == "" {
+			continue
+		}
+		switch field {
+		case "eps_fy1":
+			dst.EpsFY1 = s
+		case "np_fy1":
+			dst.NpFY1 = s
+		case "np_fy2":
+			dst.NpFY2 = s
+		case "np_fy3":
+			dst.NpFY3 = s
+		case "mbi_fy1":
+			dst.MbiFY1 = s
+		case "mbi_fy2":
+			dst.MbiFY2 = s
+		case "mbi_fy3":
+			dst.MbiFY3 = s
+		}
+	}
+}
+
 func (c *Client) DateSequence(ctx context.Context, codes []string, indicators []string, startdate, enddate string) (map[string]*FundamentalData, error) {
 	if c.refreshToken == "" {
 		return nil, mapIFindError(0, "ifind refresh_token \u672a\u914d\u7f6e")
@@ -332,23 +615,25 @@ func (c *Client) DateSequence(ctx context.Context, codes []string, indicators []
 }
 
 func (c *Client) ReportQuery(ctx context.Context, codes []string, startdate, enddate string) ([]ReportItem, error) {
+	return c.ReportQueryWithKeyword(ctx, codes, startdate, enddate, "")
+}
+
+func (c *Client) ReportQueryWithKeyword(ctx context.Context, codes []string, startdate, enddate, keyword string) ([]ReportItem, error) {
 	if c.refreshToken == "" {
 		return nil, mapIFindError(0, "ifind refresh_token \u672a\u914d\u7f6e")
 	}
-	form := map[string]any{"codes": JoinCodes(codes), "functionpara": map[string]any{}, "outputpara": "reportDate:Y,thscode:Y,secName:Y,ctime:Y,reportTitle:Y,pdfURL:Y,seq:Y", "beginrDate": startdate, "endrDate": enddate}
+	fp := map[string]any{"reportType": "901"}
+	if kw := strings.TrimSpace(keyword); kw != "" {
+		fp["keyWord"] = kw
+	}
+	form := map[string]any{"codes": JoinCodes(codes), "functionpara": fp, "outputpara": "reportDate:Y,thscode:Y,secName:Y,ctime:Y,reportTitle:Y,pdfURL:Y,seq:Y", "beginrDate": startdate, "endrDate": enddate}
 	raw, err := c.postJSON(ctx, reportQueryPath, form)
 	if err != nil {
 		return nil, err
 	}
-	var tables []struct {
-		Table []ReportItem `json:"table"`
-	}
-	if err := json.Unmarshal(raw, &tables); err != nil {
+	out, err := parseReportTables(raw)
+	if err != nil {
 		return nil, err
-	}
-	var out []ReportItem
-	for _, t := range tables {
-		out = append(out, t.Table...)
 	}
 	if len(out) == 0 {
 		return nil, mapIFindError(-4001, "no data")
@@ -426,20 +711,21 @@ func (c *Client) HighFrequency(ctx context.Context, thscode, starttime, endtime 
 	return out, nil
 }
 
-// RealTimeData 实时行情结构化（12 指标，对齐 TechRealTimeIndicators）
+// RealTimeData 实时行情结构化（对齐 TechRealTimeIndicators：必需报价 + 委比委差透传，可选字段缺失留空）
 type RealTimeData struct {
-	TradeDate    string `json:"tradeDate"`
-	TradeTime    string `json:"tradeTime"`
-	PreClose     string `json:"preClose"`
-	Open         string `json:"open"`
-	High         string `json:"high"`
-	Low          string `json:"low"`
-	Latest       string `json:"latest"`
-	AvgPrice     string `json:"avgPrice"`
-	PB           string `json:"pb"`
-	PETTM        string `json:"pe_ttm"`
-	TotalShares  string `json:"totalShares"`
-	TotalCapital string `json:"totalCapital"`
+	TradeDate      string `json:"tradeDate"`
+	TradeTime      string `json:"tradeTime"`
+	PreClose       string `json:"preClose"`
+	Open           string `json:"open"`
+	High           string `json:"high"`
+	Low            string `json:"low"`
+	Latest         string `json:"latest"`
+	TotalShares    string `json:"totalShares"`
+	TotalCapital   string `json:"totalCapital"`
+	SellVolume     string `json:"sellVolume"`
+	BuyVolume      string `json:"buyVolume"`
+	Committee      string `json:"committee"`
+	CommissionDiff string `json:"commission_diff"`
 }
 
 func (c *Client) RealTime(ctx context.Context, thscode string) (*RealTimeData, error) {

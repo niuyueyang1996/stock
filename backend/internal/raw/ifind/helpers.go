@@ -34,8 +34,11 @@ var FundamentalWhitelist = []string{
 }
 
 // TechIndicators 技术面白名单（与现有 Quote/Bar 对齐）
+// 精简：去掉未使用的 avgPrice/pb/pe_ttm，仅保留报价必需 + 总股本/市值 + 委比委差透传
 var TechRealTimeIndicators = []string{
-	"tradeDate", "tradeTime", "preClose", "open", "high", "low", "latest", "avgPrice", "pb", "pe_ttm", "totalShares", "totalCapital",
+	"tradeDate", "tradeTime", "preClose", "open", "high", "low", "latest",
+	"totalShares", "totalCapital",
+	"sellVolume", "buyVolume", "committee", "commission_diff",
 }
 
 var TechHistoryIndicators = []string{
@@ -48,6 +51,18 @@ var SnapShotIndicators = []string{
 
 var HighFreqIndicators = []string{
 	"open", "high", "low", "close", "avgPrice", "volume", "amount", "change", "changeRatio", "turnoverRatio", "sellVolume", "buyVolume", "changeRatio_accumulated",
+}
+
+// ForecastIndicators 预测类白名单（basic_data_service + indiparams: [asOf YYYY-MM-DD]）
+// 协议来自超级命令：basic_data_service + ths_fore_*_stock（FY1/FY2/FY3），asOf 为预期基准日
+var ForecastIndicators = []string{
+	"ths_fore_eps_fy1_stock",
+	"ths_fore_np_fy1_stock",
+	"ths_fore_np_fy2_stock",
+	"ths_fore_np_fy3_stock",
+	"ths_fore_mbi_fy1_stock",
+	"ths_fore_mbi_fy2_stock",
+	"ths_fore_mbi_fy3_stock",
 }
 
 // IndicatorSpec 白名单规格（indicator 英文名 → indiparams 固化，需超级命令导出 otherparams.sys）

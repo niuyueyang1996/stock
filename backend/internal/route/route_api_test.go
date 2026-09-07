@@ -920,7 +920,10 @@ func TestParseHoldingsExcelDirect(t *testing.T) {
 
 // TestHoldingImportExcelUpload 验证 POST /api/holdings/import-excel：无文件 → 400 {"detail":...}。
 func TestHoldingImportExcelUpload(t *testing.T) {
-	r, _ := newTestRouter(t, t.TempDir())
+	r, svc := newTestRouter(t, t.TempDir())
+	reg := marketcode.New()
+	reg.BuildWithNames([]string{"600519.SH"}, []string{"贵州茅台"}, nil, nil, nil, nil, nil, nil)
+	svc.Holdings.Codes = reg
 	// 无 multipart → 400 缺少文件
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/holdings/import-excel", nil))
@@ -952,10 +955,90 @@ func TestHoldingImportExcelUpload(t *testing.T) {
 	}
 }
 
-// multipartStream 极简 multipart/form-data 构造器（单一 file 字段）。
-type multipartStream struct{}
+// TestHoldingImportExcelResolve 验证导入期双因子仲裁：重码用名称二选一，
+// 错码/指数/未知码进 skipped；Registry 未就绪时全部 skipped 不猜。
+func TestHoldingImportExcelResolve(t *testing.T) {
+	newResolveRouter := func(t *testing.T) (*gin.Engine, *Services) {
+		r, svc := newTestRouter(t, t.TempDir())
+		reg := marketcode.New()
+		reg.BuildWithNames(
+			[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
+			nil, nil, nil, nil,
+			map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
+		)
+		svc.Holdings.Codes = reg
+		return r, svc
+	}
+	postXlsx := func(r *gin.Engine, rows [][]string) map[string]any {
+		xlsx := buildMinimalXlsx(t, []string{"代码", "名称", "持有数量", "单位成本"}, rows)
+		var bodyBuf bytes.Buffer
+		mw := multipartStream{}
+		boundary := mw.boundary(&bodyBuf, xlsx)
+		req := httptest.NewRequest(http.MethodPost, "/api/holdings/import-excel", &bodyBuf)
+		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("上传 code=%d body=%s", w.Code, w.Body.String())
+		}
+		return jsonBody(t, w)["data"].(map[string]any)
+	}
+	postXlsxExpectEmpty := func(r *gin.Engine, rows [][]string) map[string]any {
+		xlsx := buildMinimalXlsx(t, []string{"代码", "名称", "持有数量", "单位成本"}, rows)
+		var bodyBuf bytes.Buffer
+		mw := multipartStream{}
+		boundary := mw.boundary(&bodyBuf, xlsx)
+		req := httptest.NewRequest(http.MethodPost, "/api/holdings/import-excel", &bodyBuf)
+		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("全 skipped 应 200 total=0, got code=%d body=%s", w.Code, w.Body.String())
+		}
+		return jsonBody(t, w)["data"].(map[string]any)
+	}
+	// B1 重码+正确名称 → 导入 1 只
+	r, _ := newResolveRouter(t)
+	d := postXlsx(r, [][]string{{"000001", "平安银行", "100", "10"}})
+	if d["total"].(float64) != 1 || d["skipped"].(float64) != 0 {
+		t.Errorf("重码仲裁应导入, got %v", d)
+	}
+	// B2 重码+指数名 → 与正常行混发：正常行导入、指数行 skipped。
+	// 注：全 skipped 时回 200 total=0（见 B4），故此处必须带一行正常行才能断言 skipped 计数。
+	r, _ = newResolveRouter(t)
+	d = postXlsx(r, [][]string{{"600519", "贵州茅台", "100", "10"}, {"000001", "上证指数", "100", "10"}})
+	if d["total"].(float64) != 1 || d["skipped"].(float64) != 1 {
+		t.Errorf("指数行应 skipped, got %v", d)
+	}
+	if det, ok := d["skipped_detail"].([]any); !ok || len(det) != 1 {
+		t.Errorf("应返回 1 行 skipped 明细, got %v", d["skipped_detail"])
+	} else if m := det[0].(map[string]any); m["code"] != "000001" || m["name"] != "上证指数" {
+		t.Errorf("skipped 明细应含码名, got %v", m)
+	} else if reason, _ := m["reason"].(string); !strings.Contains(reason, "指数") {
+		t.Errorf("指数行 reason 应提及指数, got %q", reason)
+	}
+	// D1 码名不符 + D2 未知码 → 与正常行混发：正常行导入、错码两行 skipped
+	r, _ = newResolveRouter(t)
+	d = postXlsx(r, [][]string{{"600519", "贵州茅台", "100", "10"}, {"600519", "五粮液", "100", "10"}, {"999999", "某某", "100", "10"}})
+	if d["total"].(float64) != 1 || d["skipped"].(float64) != 2 {
+		t.Errorf("错码应 skipped, got %v", d)
+	}
+	if det, ok := d["skipped_detail"].([]any); !ok || len(det) != 2 {
+		t.Errorf("应返回 2 行 skipped 明细, got %v", d["skipped_detail"])
+	}
+	// B4 全 skipped → 200 total=0 + skipped 明细（R2：原因必须到用户手里，不丢）
+	r, _ = newResolveRouter(t)
+	d = postXlsxExpectEmpty(r, [][]string{{"000001", "上证指数", "100", "10"}})
+	if d["total"].(float64) != 0 || d["skipped"].(float64) != 1 {
+		t.Errorf("全 skipped 应 total=0, got %v", d)
+	}
+	if det, ok := d["skipped_detail"].([]any); !ok || len(det) != 1 {
+		t.Errorf("全 skipped 也应返回明细, got %v", d["skipped_detail"])
+	}
+}
 
-// boundary 写出 multipart body 并返回 boundary。
+// multipartStream 极简 multipart/form-data 构造器（单一 file 字段）。
+type multipartStream struct{}// boundary 写出 multipart body 并返回 boundary。
 func (m *multipartStream) boundary(w *bytes.Buffer, content []byte) string {
 	boundary := "----testboundary1234"
 	w.WriteString("--" + boundary + "\r\n")
@@ -964,4 +1047,127 @@ func (m *multipartStream) boundary(w *bytes.Buffer, content []byte) string {
 	w.Write(content)
 	w.WriteString("\r\n--" + boundary + "--\r\n")
 	return boundary
+}
+
+// TestWritePathsRejectIndex 手动录入/成本调整写入口拦截指数（E6 补齐）：
+// 指数 fullCode → 400；非指数放行。Registry 未注入时不误伤（向后兼容）。
+func TestWritePathsRejectIndex(t *testing.T) {
+	newIndexRouter := func(t *testing.T) (*gin.Engine, *Services) {
+		r, svc := newTestRouter(t, t.TempDir())
+		reg := marketcode.New()
+		reg.BuildWithNames(nil, nil, nil, nil, nil, nil,
+			map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"})
+		svc.Holdings.Codes = reg
+		return r, svc
+	}
+	postJSON := func(r *gin.Engine, path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	r, _ := newIndexRouter(t)
+	// 指数手动录入 → 400
+	if w := postJSON(r, "/api/trades", `{"code":"000001.SH","side":"buy","price":10,"quantity":100}`); w.Code != http.StatusBadRequest {
+		t.Errorf("指数录入应 400, got code=%d body=%s", w.Code, w.Body.String())
+	} else if !strings.Contains(w.Body.String(), "指数") {
+		t.Errorf("指数拒绝应提及指数, got %s", w.Body.String())
+	}
+	// 指数成本调整 → 400
+	if w := postJSON(r, "/api/holdings/000001.SH/cost-adjust", `{"amount":10}`); w.Code != http.StatusBadRequest {
+		t.Errorf("指数成本调整应 400, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	// 非指数放行（600519.SH 不在指数表 → 建仓成功）
+	if w := postJSON(r, "/api/trades", `{"code":"600519.SH","side":"buy","price":10,"quantity":100}`); w.Code != http.StatusOK {
+		t.Errorf("非指数应放行, got code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestHoldingImportExcelNonEmptyFirst 非空仓时先报"请先清仓"：即使 Excel 全是坏行，
+// 空仓检查也在仲裁之前，不拿"没有可导入"把用户指错路。
+func TestHoldingImportExcelNonEmptyFirst(t *testing.T) {
+	r, svc := newTestRouter(t, t.TempDir())
+	reg := marketcode.New()
+	reg.BuildWithNames(
+		[]string{"600519.SH", "000001.SZ"}, []string{"贵州茅台", "平安银行"},
+		nil, nil, nil, nil,
+		map[string]string{"000001.SH": "sh000001"}, map[string]string{"000001.SH": "上证指数"},
+	)
+	svc.Holdings.Codes = reg
+	if _, _, err := svc.Holdings.RecordTrade("600519.SH", "buy", 10, 100, 0, "2026-01-01 10:00:00", "", nil, true); err != nil {
+		t.Fatalf("seed 持仓: %v", err)
+	}
+	xlsx := buildMinimalXlsx(t, []string{"代码", "名称", "持有数量", "单位成本"},
+		[][]string{{"000001", "上证指数", "100", "10"}}) // 全坏行
+	var bodyBuf bytes.Buffer
+	mw := multipartStream{}
+	boundary := mw.boundary(&bodyBuf, xlsx)
+	req := httptest.NewRequest(http.MethodPost, "/api/holdings/import-excel", &bodyBuf)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("非空仓应 400, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "清仓") {
+		t.Errorf("应指引先清仓, got %s", w.Body.String())
+	}
+}
+
+// TestExtra2RoutesRequireFullCode stocks_extra2 补校验回归：三个个股路由裸码 → 400；
+// 指数刷新归一化通路（未知指数 → 404）。fullCode 真路径需 Dividend/Refresh 服务，测试脚手架未装配，不覆盖。
+func TestExtra2RoutesRequireFullCode(t *testing.T) {
+	r, _ := newTestRouter(t, t.TempDir())
+	// GET dividend 裸码 → 400（未触及 Dividend 服务）
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/stocks/600519/dividend", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("dividend 裸码应 400, got code=%d body=%s", w.Code, w.Body.String())
+	}
+	// POST refresh / refresh/full 裸码 → 400（未触及 Refresh 服务）
+	for _, path := range []string{"/api/stocks/600519/refresh", "/api/stocks/600519/refresh/full"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s 裸码应 400, got code=%d body=%s", path, w.Code, w.Body.String())
+		}
+	}
+	// 指数刷新：归一化后查无此指数 → 404（通路正常，非 500）
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/indices/000001.SH/refresh", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("未知指数应 404, got code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestDefaultTagAndCodeShape defaultTag（fullCode 后缀判定）与 isAStockOrETF
+//（剥后缀验裸码）回归：港股/ETF/债/A股标签正确，裸码与 fullCode 同判。
+func TestDefaultTagAndCodeShape(t *testing.T) {
+	for _, tc := range []struct{ code, name, want string }{
+		{"00700.HK", "腾讯控股", "港股"},
+		{"510300.SH", "华泰柏瑞沪深300ETF", "ETF"},
+		{"511010.SH", "国泰上证5年期国债ETF", "债"},
+		{"600519.SH", "贵州茅台", "A股"},
+		{"000001.SZ", "平安银行", "A股"},
+	} {
+		if got := defaultTag(tc.code, tc.name); got != tc.want {
+			t.Errorf("defaultTag(%q,%q)=%q want %q", tc.code, tc.name, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		code string
+		want bool
+	}{
+		{"600519", true}, {"600519.SH", true}, {"600519.sh", true},
+		{"00700", true}, {"00700.HK", true},
+		{"000001.SH", true}, {"999999", true}, // 格式层放行，仲裁层再拒
+		{"700", false}, {"abc", false}, {"", false}, {"600519.SH.X", false},
+	} {
+		if got := isAStockOrETF(tc.code); got != tc.want {
+			t.Errorf("isAStockOrETF(%q)=%v want %v", tc.code, got, tc.want)
+		}
+	}
 }

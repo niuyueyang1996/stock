@@ -955,7 +955,7 @@ function parseStockChoice(text) {
   const m = String(text || '').trim().match(/^([A-Z0-9.]+)\s*(.*)$/i);
   if (!m) return null;
   let code = m[1].trim();
-  // 去掉后缀点后的 SH/SZ/HK/BJ，存裸码时由后端归一，这里保留 fullCode 供展示
+  // 保留 fullCode 原样提交；写入入口由后端双因子仲裁（裸码+名称→fullCode）
   return { code, name: m[2] || null };
 }
 

@@ -89,17 +89,25 @@ func (s *Service) InitHoldings(items []map[string]any) ([]map[string]any, error)
 			tradeTime = v
 		}
 		if tradeTime == "" {
-			tradeTime = time.Now().Format("2006-01-02 15:04:05")
+			// 缺省=期初建仓口径（昨日收盘）：Excel/初始化没有真实买入日期，
+			// 落现在会把老持仓标成今日买入，污染当日盈亏。
+			tradeTime = holdings.OpeningTradeTime(time.Now())
 		}
 		note := ""
 		if v, ok := it["note"].(string); ok {
 			note = v
 		}
 		var name *string
+		var nameStr string
 		if v, ok := it["name"].(string); ok && v != "" {
 			name = &v
+			nameStr = v
 		}
-		id, holding, err := s.Holdings.RecordTrade(code, "buy", price, quantity, fee, tradeTime, note, name, true)
+		fullCode, err := s.Holdings.ResolveFullCode(code, nameStr)
+		if err != nil {
+			return nil, fmt.Errorf("录入 %s 失败: %w", code, err)
+		}
+		id, holding, err := s.Holdings.RecordTrade(fullCode, "buy", price, quantity, fee, tradeTime, note, name, true)
 		if err != nil {
 			return nil, fmt.Errorf("录入 %s 失败: %w", code, err)
 		}

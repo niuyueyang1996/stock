@@ -129,6 +129,9 @@ func (s *Service) Rebuild(code string) (*HoldingResult, error) {
 
 // RecordTrade 录入交易并重放持仓（side_effects=false 时跳过联动）
 func (s *Service) RecordTrade(code, side string, price, quantity, fee float64, tradeTime, note string, name *string, sideEffects bool) (int64, *HoldingResult, error) {
+	if err := s.rejectIndex(code); err != nil {
+		return 0, nil, err
+	}
 	if side != "buy" && side != "sell" {
 		return 0, nil, ErrInvalid
 	}
@@ -290,6 +293,9 @@ func (s *Service) ensureListedStock(code string, name *string, currency string) 
 // amount：成本变化额（正=加 负=减）；deltaQty：股数变化（拆股/送股）。
 // 插入 adjust 交易并重放；isDividend=1 标记计入累计分红。
 func (s *Service) AdjustCost(code string, amount, deltaQty float64, note string, tradeTime string, isDividend bool, name *string) (*HoldingResult, error) {
+	if err := s.rejectIndex(code); err != nil {
+		return nil, err
+	}
 	if tradeTime == "" {
 		tradeTime = time.Now().Format("2006-01-02 15:04:05")
 	}

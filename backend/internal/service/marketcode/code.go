@@ -4,6 +4,7 @@ package marketcode
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -255,6 +256,34 @@ func Suffix(fullCode string) string {
 		return fullCode[idx+1:]
 	}
 	return ""
+}
+
+// CandidatesByBare 按裸码反查全部候选 fullCode（排序稳定）。
+// 裸码=fullCode 去掉后缀点后部分；大小写不敏感。
+func (r *Registry) CandidatesByBare(bare string) []string {
+	bare = strings.ToUpper(strings.TrimSpace(bare))
+	if bare == "" || strings.Contains(bare, ".") {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for full := range r.m {
+		if Bare(full) == bare {
+			out = append(out, full)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// NormalizeName 名称轻归一：去首尾空白与内部全部空白（半角/全角），不碰其它字符。
+func NormalizeName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, " ", "")
+	name = strings.ReplaceAll(name, "　", "")
+	name = strings.ReplaceAll(name, "\t", "")
+	return name
 }
 
 // Full 已废弃：不再猜后缀。带后缀直接归一化大写，不带后缀原样返回

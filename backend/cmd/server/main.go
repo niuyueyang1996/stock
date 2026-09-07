@@ -187,7 +187,6 @@ func main() {
 	rfSvc.Codes = codes
 	liveSvc.SetDao(cacheDAO)
 	rfSvc.IsIndex = isIndex
-	holdings.SetIndexChecker(rfSvc.IsIndex)
 
 	// 指数服务
 	idxSvc := indices.New(gdb, tx, lg)

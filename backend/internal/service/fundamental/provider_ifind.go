@@ -59,3 +59,14 @@ func (p *IFIndFundamental) ReportQuery(ctx context.Context, codes []string, star
 	}
 	return items, err
 }
+
+func (p *IFIndFundamental) ReportQueryWithKeyword(ctx context.Context, codes []string, startdate, enddate, keyword string) ([]ifind.ReportItem, error) {
+	if p.Raw == nil {
+		return nil, ErrNotSupported
+	}
+	items, err := p.Raw.ReportQueryWithKeyword(ctx, codes, startdate, enddate, keyword)
+	if err != nil && ifind.IsNotSupported(err) {
+		return nil, ErrNotSupported
+	}
+	return items, err
+}

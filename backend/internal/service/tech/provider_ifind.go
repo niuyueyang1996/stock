@@ -50,6 +50,10 @@ func (p *IFIndTech) Quote(ctx context.Context, code string) (*model.Quote, error
 	q.PrevClose = parseFloat(m.PreClose)
 	q.Volume = parseFloat(m.TotalShares)
 	q.Amount = parseFloat(m.TotalCapital)
+	q.SellVolume = parseFloatPtr(m.SellVolume)
+	q.BuyVolume = parseFloatPtr(m.BuyVolume)
+	q.Committee = parseFloatPtr(m.Committee)
+	q.CommissionDiff = parseFloatPtr(m.CommissionDiff)
 	if q.Price == 0 && q.Open == 0 {
 		return nil, ErrNotSupported
 	}
@@ -107,4 +111,16 @@ func (p *IFIndTech) FundflowDailyHistory(ctx context.Context, symbol string, cou
 func parseFloat(s string) float64 {
 	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	return v
+}
+
+func parseFloatPtr(s string) *float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }

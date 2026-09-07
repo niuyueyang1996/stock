@@ -18,11 +18,11 @@ import (
 	"stockanalyzer/internal/db/dao"
 	"stockanalyzer/internal/raw"
 	"stockanalyzer/internal/service/calendar"
-	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/finance"
 	"stockanalyzer/internal/service/fx"
 	"stockanalyzer/internal/service/holdings"
 	"stockanalyzer/internal/service/jobs"
+	"stockanalyzer/internal/service/marketcode"
 	"stockanalyzer/internal/service/model"
 	"stockanalyzer/internal/service/tech"
 	"stockanalyzer/internal/service/valuation"
@@ -205,6 +205,7 @@ func (s *Service) syncRealtimeQuote(ctx context.Context, code string, now time.T
 	_ = s.Cache.UpsertDailyPrices([]dao.DailyPrice{{
 		Code: code, TradeDate: today, Open: &q.Open, High: &q.High, Low: &q.Low,
 		Close: &q.Price, Volume: &q.Volume, Amount: &q.Amount, PctChange: &pctChg,
+		SellVolume: q.SellVolume, BuyVolume: q.BuyVolume, Committee: q.Committee, CommissionDiff: q.CommissionDiff,
 		IsClosed: forceClosed, Source: &src,
 	}})
 	return &map[string]any{"price": q.Price}
@@ -600,7 +601,6 @@ func (s *Service) fetchDailyBars(ctx context.Context, code, start, end string) (
 	}
 	return s.Tech.DailyBars(ctx, code, start, end)
 }
-
 
 // pf2 行内浮点解析
 func pf2(row []string, i int) *float64 {

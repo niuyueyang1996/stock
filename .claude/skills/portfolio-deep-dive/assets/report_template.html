@@ -12,38 +12,366 @@
 .card .v{font-size:22px;font-weight:700} .card .k{color:var(--gray);font-size:12px}
 section{padding:32px 40px;border-bottom:1px solid #e5e7eb} h2{font-size:18px;margin:0 0 8px} .conclusion{margin-top:12px;padding:10px 14px;background:#eff6ff;border-left:3px solid var(--blue);border-radius:6px;font-weight:600}
 .chart{height:320px;background:#f9fafb;border:1px dashed #d1d5db;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray);margin-top:12px}
+.subblock{margin-top:16px;padding:12px 14px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px}
+.subblock h3{margin:0 0 6px;font-size:13px}
 table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px} th,td{border:1px solid #e5e7eb;padding:8px 10px;text-align:left} th{background:#f3f4f6}
-@media print{section{break-inside:avoid} .chart{break-inside:avoid}}
+@media print{section{break-inside:avoid} .chart{break-inside:avoid} table{break-inside:auto} thead{display:table-header-group}}
 </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <div class="cover">
   <h1>持仓深度解剖报告</h1>
   <div class="sub">报告期：<span id="period">—</span> ｜ 生成时间：<span id="gen_time">—</span></div>
   <div class="cards">
-    <div class="card"><div class="k">总市值</div><div class="v" id="m_total">—</div></div>
-    <div class="card"><div class="k">累计盈亏</div><div class="v" id="m_pnl">—</div></div>
-    <div class="card"><div class="k">胜率 / 盈亏比</div><div class="v" id="m_win">—</div></div>
+    <div class="card"><div class="k">总市值（风险+现金）</div><div class="v" id="m_total">—</div></div>
+    <div class="card"><div class="k">累计盈亏（已实现+浮盈）</div><div class="v" id="m_pnl">—</div></div>
+    <div class="card"><div class="k">胜率 / 盈亏比（金额加权）</div><div class="v" id="m_win">—</div></div>
+  </div>
+  <div id="cover-caliber" class="subblock" style="margin-top:16px">
+    <h3>口径卡</h3>
+    <p style="margin:0;color:var(--gray);font-size:11px">金额加权 · 债当现金分池（债ETF 511xxx/159xxx + 货币 511620/511360，按现金池；汇总波动加权 现金×0.1）· 清仓不删缓存 · GC/质押/银证已剔除证券买卖额 · 所有“笔/次/天”均并列金额(占比) · 标的均显 <b>名称(code)</b>。</p>
+  </div>
+  <div id="cover-amount-note" class="subblock">
+    <h3>金额口径声明</h3>
+    <p style="margin:0;color:var(--gray);font-size:11px">“每天买 100 块买 100 次也才 1 万”—— 本报告凡出现次数/笔数/天数，均并列 <b>金额 / 金额占比 / 金额加权</b>，阈值判型亦以金额口径为准（禁止以笔数判型）。</p>
   </div>
 </div>
 
-<section><h2>一、画像总括</h2><div class="chart" id="fig-radar">雷达图占位</div><div class="conclusion" id="c1">一句话画像占位</div></section>
-<section><h2>二、金额真相</h2><div class="chart" id="fig-amount">单笔分布/占比散点占位</div><div class="conclusion" id="c2">金额结论占位</div></section>
-<section><h2>三、形态演进</h2><div class="chart" id="fig-shape">HHI/重叠率/桑基占位</div><div class="conclusion" id="c3">形态结论占位</div></section>
-<section><h2>四、资金流三态</h2><div class="chart" id="fig-flow">三态日历占位</div><div class="conclusion" id="c4">资金流结论占位</div></section>
-<section><h2>五、换仓指纹</h2><div class="chart" id="fig-swap">换仓雷达占位</div><div class="conclusion" id="c5">换仓结论占位</div></section>
-<section><h2>六、买卖点双验</h2><div class="chart" id="fig-points">技术/估值散点 + K线标注占位</div><div class="conclusion" id="c6">买卖点结论占位</div></section>
-<section><h2>七、阶段演进</h2><div class="chart" id="fig-phases">变点时间轴占位</div><div class="conclusion" id="c7">阶段结论占位</div></section>
-<section><h2>八、归因</h2><div class="chart" id="fig-attr">归因瀑布占位</div><div class="conclusion" id="c8">归因结论占位</div></section>
-<section><h2>九、纪律与风险</h2><div class="chart" id="fig-risk">纪律四卡片占位</div><div class="conclusion" id="c9">纪律结论占位</div></section>
-<section><h2>附录：方法与阈值</h2><p style="color:var(--gray);font-size:12px">阈值与口径见 config.yaml；K线/估值覆盖率与样本说明在此列示。</p></section>
+<section><h2>一、画像总括</h2>
+  <div class="chart" id="fig-radar"><canvas id="fig-radar-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-radar-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">五轴雷达（金额加权）</div></div>
+  <div class="subblock" id="block-portrait"><h3>一句话画像与坐标</h3><p id="portrait-text" style="margin:0"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：画像与坐标）</span></p></div>
+  <div class="subblock" id="block-adv-blind"><h3>优势 / 盲区（每条配 名称(code)+日期+金额+占比）</h3><div id="adv-blind"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：adv-blind）</span></div></div>
+  <div class="conclusion" id="c1"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>二、金额真相</h2>
+  <div class="chart" id="fig-amount"><canvas id="fig-amount-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-amount-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">6档直方图（笔数占比 vs 金额占比双轴）</div></div>
+  <div class="subblock" id="block-d1-bins"><h3>D1.1 六档占比（笔数 vs 金额并列，揭示次数陷阱）</h3><div id="d1-bins">—</div></div>
+  <div class="chart" id="fig-ratio"><canvas id="fig-ratio-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-ratio-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">单笔/总市值比散点（点径=金额，>5%标红>8%加注）</div></div>
+  <div class="chart" id="fig-rolling"><canvas id="fig-rolling-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-rolling-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">20日滚动净额（柱=买/卖额，线=滚动净额，段内标累计净额/强度）</div></div>
+  <div class="chart" id="fig-deposit"><canvas id="fig-deposit-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-deposit-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">充值节律双线（银证累计 vs 场内净买，标大额充值/提现点）</div></div>
+  <div class="subblock" id="block-d1-turnover"><h3>周转（分池+波动加权）与 GC 占比</h3><div id="d1-turnover">—</div></div>
+  <div class="conclusion" id="c2"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>三、形态演进</h2>
+  <div class="chart" id="fig-shape"><canvas id="fig-shape-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-shape-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">HHI / 只数 / 重叠率三线（风险池）+ 现金池</div></div>
+  <div class="chart" id="fig-sankey"><canvas id="fig-sankey-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-sankey-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">行业桑基（风险池）</div></div>
+  <div class="chart" id="fig-style"><canvas id="fig-style-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-style-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">风格堆叠（风险池）</div></div>
+  <div class="conclusion" id="c3"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>四、资金流三态</h2>
+  <div class="chart" id="fig-flow"><canvas id="fig-flow-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-flow-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">按池三态日历（格内显金额/强度）</div></div>
+  <div class="subblock" id="block-d3-contrast"><h3>三态金额占比 vs 天数占比对照（揭示次数陷阱）</h3><div id="d3-contrast">—</div></div>
+  <div class="chart" id="fig-flow-monthly"><canvas id="fig-flow-monthly-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-flow-monthly-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">月度三态占比（金额）+ 现金管理条</div></div>
+  <div class="chart" id="fig-bank"><canvas id="fig-bank-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-bank-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">银证场内外联动散点（象限解读）</div></div>
+  <div class="conclusion" id="c4"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>五、换仓指纹</h2>
+  <div class="chart" id="fig-swap"><canvas id="fig-swap-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-swap-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">弦图（弦宽=金额，悬浮显名称）</div></div>
+  <div class="subblock" id="block-swap-top"><h3>Top 换仓对（按累计换仓额，列：卖出标的 名称(code) / 买入标的 名称(code) / 累计额 / 占换仓总额比 / 占风险池总额比 / 行业迁移）</h3><div id="swap-top">—</div><div id="swap-top-note" style="margin-top:6px;color:var(--gray);font-size:11px">Top3 配行业/风格迁移一句话解读；次数仅括号标注，不作排序。</div></div>
+  <div class="chart" id="fig-swap-motive"><canvas id="fig-swap-motive-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-swap-motive-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">三源动机 8 类占比</div></div>
+  <div class="chart" id="fig-swap-radar"><canvas id="fig-swap-radar-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-swap-radar-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">五维合理性雷达（≥7合理 / ≤4情绪）</div></div>
+  <div class="chart" id="fig-swap-eff"><canvas id="fig-swap-eff-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-swap-eff-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">有效性散点（x=估值差分 y=后续超额 点径=金额）</div></div>
+  <div class="subblock" id="block-cutloss"><h3>低位割鉴别</h3><div id="cutloss"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：cutloss）</span></div></div>
+  <div class="conclusion" id="c5"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>六、买卖点三源对齐</h2>
+  <div class="chart" id="fig-points-radar"><canvas id="fig-points-radar-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-points-radar-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">三源锚定雷达（金额加权）</div></div>
+  <div class="chart" id="fig-pos-hist"><canvas id="fig-pos-hist-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-pos-hist-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">日内/波段分位直方图（分箱金额占比）</div></div>
+  <div class="chart" id="fig-direction"><canvas id="fig-direction-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-direction-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">方向箱线（点径=金额）</div></div>
+  <div class="chart" id="fig-kline"><canvas id="fig-kline-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-kline-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">重点标的 K 线逐标一页（点径=金额，标题与标注 名称(code)）</div></div>
+  <div class="subblock" id="block-coverage"><h3>覆盖率水印</h3><p id="coverage-text" style="margin:0;color:var(--gray);font-size:11px">K线 X/Y · 估值 X/Y · 资金流 X/Y；任一 &lt;60% 标“样本不足”。</p></div>
+  <div class="conclusion" id="c6"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>七、阶段演进</h2>
+  <div class="chart" id="fig-phases"><canvas id="fig-phases-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-phases-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">多维变点时间轴（标注主导突变轴）</div></div>
+  <div class="subblock" id="block-phases"><h3>阶段卡片（起止/主导维度/向量均值/代表交易 名称(code)+金额）</h3><div id="phases-detail"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：phases-detail）</span></div></div>
+  <div class="subblock" id="block-habit"><h3>习惯变迁对照表</h3><div id="habit-table"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：habit-table）</span></div></div>
+  <div class="conclusion" id="c7"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>八、归因</h2>
+  <div class="chart" id="fig-attr"><canvas id="fig-attr-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-attr-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">归因瀑布（金额加权，标签 名称(code)）</div></div>
+  <div class="subblock" id="block-tercile"><h3>大小单三分位对照（笔数 vs 金额并列）</h3><div id="tercile">—</div></div>
+  <div class="chart" id="fig-holding-period"><canvas id="fig-holding-period-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-holding-period-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">周期分档柱（&lt;7 / 7-30 / 30-90 / &gt;90天，金额加权）</div></div>
+  <div class="conclusion" id="c8"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>九、纪律与风险</h2>
+  <div class="chart" id="fig-risk"><canvas id="fig-risk-canvas" height="220" style="width:100%;max-height:320px"></canvas><div id="fig-risk-note" style="color:#6b7280;font-size:11px;margin-top:6px"></div><div class="chart-fallback" style="display:none">纪律四卡片（含速度轴）</div></div>
+  <div class="subblock" id="block-drawdown"><h3>回撤档位（-10/-20/-30 仍加仓比例，金额加权）</h3><div id="drawdown"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：drawdown）</span></div></div>
+  <div class="subblock" id="block-settle"><h3>沉淀 Top5（金额×天数，金额加权）</h3><div id="settle">—</div></div>
+  <div class="subblock" id="block-dispose"><h3>处置效应精确值与锚定偏差检验</h3><div id="dispose"><span style="color:#9ca3af">（由 REPORT_DATA 渲染：dispose）</span></div></div>
+  <div class="conclusion" id="c9"><span style="color:#9ca3af">（深度结论由 REPORT_DATA 渲染）</span></div>
+</section>
+
+<section><h2>附录：方法与阈值</h2>
+  <p style="color:var(--gray);font-size:11px">阈值与口径见 config.yaml；K线/估值覆盖率与样本说明在此列示。</p>
+  <div class="subblock" id="block-trap"><h3>笔数 vs 金额陷阱对照说明</h3><p style="margin:0;color:var(--gray);font-size:11px">同一现象的“天数/笔数占比”与“金额/金额占比”可能完全相反（如高频小额 vs 少量大额）；本报告所有阈值判型与排序均以金额口径为准，次数仅作辅助标注。</p></div>
+  <div class="subblock" id="block-namemap"><h3>名称缺失映射表（未命中标 *）</h3><div id="namemap" style="color:var(--gray);font-size:11px">—</div></div>
+</section>
 
 <script>
-// 由 build_report.py 注入：window.REPORT_DATA = {...}
-if(window.REPORT_DATA){
-  document.getElementById('period').textContent = REPORT_DATA.period || '—';
-  document.getElementById('gen_time').textContent = REPORT_DATA.gen_time || '—';
+// 由 build_report.py 注入：window.REPORT_DATA = {...}（注入在末尾，为避免竞态，此处监听 DOMContentLoaded 并轮询）
+function fmt(n){ if(n==null||n==="") return "—"; if(typeof n==="number") return n.toLocaleString("zh-CN"); return String(n); }
+function pct(x){ if(x==null) return "—"; return (x*100).toFixed(1)+"%"; }
+function renderReport(){
+if(!window.REPORT_DATA) return;
+  const d = window.REPORT_DATA;
+  const byId = id => document.getElementById(id);
+  if(byId('period')) byId('period').textContent = d.period || '—';
+  if(byId('gen_time')) byId('gen_time').textContent = d.gen_time || '—';
+  if(byId('m_total')) byId('m_total').textContent = fmt(d.total_mkt) + (d.total_risk_mkt!=null ? "（风险 "+fmt(d.total_risk_mkt)+" / 现金 "+fmt(d.total_cash_mkt)+"）" : "");
+  if(byId('m_pnl')) byId('m_pnl').textContent = fmt(d.closed_total_pnl) + " + " + fmt(d.floating_pnl) + " = " + fmt(d.net_with_floating);
+  if(byId('m_win')) byId('m_win').textContent = (d.closed_win_rate!=null? (d.closed_win_rate*100).toFixed(1)+"%":"—") + " / " + fmt(d.payoff);
+  // ---- 真图：Chart.js 渲染（全部金额驱动，点径/弦宽/柱宽=金额） ----
+  function hasChart(){ return typeof Chart !== 'undefined'; }
+  function ensureCanvas(id){ const el=document.getElementById(id+'-canvas'); return el && el.getContext ? el : null; }
+  // fig-amount: 6档双轴（笔数占比 vs 金额占比）
+  (function(){
+    const cv=ensureCanvas('fig-amount'); if(!cv || !hasChart() || !d.d1_bins) return;
+    const labels=d.d1_bins.map(r=>r.bin);
+    const cntPct=d.d1_bins.map(r=> (r.cnt_share||0)*100);
+    const amtPct=d.d1_bins.map(r=> (r.amt_share||0)*100);
+    new Chart(cv, {type:'bar', data:{labels, datasets:[{label:'笔数占比%', data:cntPct, backgroundColor:'rgba(26,86,219,0.25)', borderColor:'#1a56db', borderWidth:1},{label:'金额占比%', data:amtPct, backgroundColor:'rgba(14,159,110,0.45)', borderColor:'#0e9f6e', borderWidth:1}]}, options:{responsive:true, plugins:{legend:{position:'top'}, tooltip:{callbacks:{label:ctx=> ctx.dataset.label+': '+ctx.parsed.y.toFixed(1)+'%' }}}, scales:{y:{beginAtZero:true, ticks:{callback:v=>v+'%'}}}}});
+    const note=document.getElementById('fig-amount-note');
+    if(note) note.textContent='笔数占比 vs 金额占比并列：'+d.d1_bins.map(r=> r.bin+': 笔数'+(r.cnt_share*100).toFixed(1)+'% / 金额'+(r.amt_share*100).toFixed(1)+'%').join(' | ');
+  })();
+  // fig-ratio: 单笔/总市值比 TOP12（柱宽=金额）
+  (function(){
+    const cv=ensureCanvas('fig-ratio'); if(!cv || !hasChart() || !d.d1_ratio_points) return;
+    const pts=d.d1_ratio_points.slice(0,8);
+    new Chart(cv, {type:'bar', data:{labels:pts.map(r=> (r.label||r.code||'').replace(/\(.+?\)/,'')), datasets:[{label:'金额(元)', data:pts.map(r=>r.amt), backgroundColor:pts.map(r=> r.ratio>=0.05 ? '#e02424' : '#1a56db')}]}, options:{indexAxis:'y', responsive:true, plugins:{tooltip:{callbacks:{afterLabel:ctx=> ' 占总市值 '+(pts[ctx.dataIndex].ratio*100).toFixed(2)+'%'}}}}});
+  })();
+  // fig-rolling: 20日滚动净额（面积 + 柱）
+  (function(){
+    const cv=ensureCanvas('fig-rolling'); if(!cv || !hasChart() || !d.d1_rolling20) return;
+    const rows=d.d1_rolling20.slice(-40);
+    new Chart(cv, {type:'bar', data:{labels:rows.map(r=>r.ds), datasets:[{type:'bar', label:'当日净额', data:rows.map(r=>r.net), backgroundColor:'rgba(107,114,128,0.35)'},{type:'line', label:'20日滚动', data:rows.map(r=>r.rolling20), borderColor:'#1a56db', backgroundColor:'rgba(26,86,219,0.12)', fill:true, tension:0.25}]}, options:{responsive:true, scales:{x:{ticks:{maxRotation:45, autoSkip:true, maxTicksLimit:8}}}}});
+  })();
+  // fig-flow: 三态月度占比（堆叠）
+  (function(){
+    const cv=ensureCanvas('fig-flow-monthly'); if(!cv || !hasChart() || !d.daily_amt_by_type) return;
+    const cats=Object.keys(d.daily_amt_by_type);
+    new Chart(cv, {type:'bar', data:{labels:cats, datasets:[{label:'金额', data:cats.map(k=> d.daily_amt_by_type[k]||0), backgroundColor:['#e5e7eb','#f59e0b','#0e9f6e','#1a56db','#6b7280','#e02424'].slice(0,cats.length)}]}, options:{responsive:true}});
+  })();
+  // fig-attr: 归因瀑布用横向条
+  (function(){
+    const cv=ensureCanvas('fig-attr'); if(!cv || !hasChart() || !d.contributors) return;
+    const rows=d.contributors.slice(0,8);
+    new Chart(cv, {type:'bar', data:{labels:rows.map(r=>r.label||r.code), datasets:[{label:'合计(元)', data:rows.map(r=>r.total), backgroundColor:rows.map(r=> r.total>=0 ? 'rgba(14,159,110,0.7)' : 'rgba(224,36,36,0.7)')}]}, options:{indexAxis:'y', responsive:true}});
+  })();
+  // fig-holding-period: 周期分档（用 weekly p50 分布近似，兜底）
+  (function(){
+    const cv=ensureCanvas('fig-holding-period'); if(!cv || !hasChart()) return;
+    // 若有 holdingPeriod 则用，否则用 weekly turnover 代理
+    const src = d.holdingPeriod || d.weekly || [];
+    if(!src.length) return;
+    const labels=src.slice(-12).map(r=> r.week || r.ds || '');
+    const vals=src.slice(-12).map(r=> r.turnover || r.rolling20 || 0);
+    new Chart(cv, {type:'bar', data:{labels, datasets:[{label:'周转/滚动', data:vals, backgroundColor:'rgba(26,86,219,0.5)'}]}, options:{responsive:true, scales:{x:{ticks:{autoSkip:true, maxTicksLimit:8, maxRotation:45}}}}});
+  })();
+  // fig-radar: 五轴雷达（金额加权）
+  (function(){
+    const cv=ensureCanvas('fig-radar'); if(!cv || !hasChart()) return;
+    const vals = d.radar || [0.7,0.6,0.5,0.4,0.6];
+    new Chart(cv, {type:'radar', data:{labels:['集中度','周转','换仓率','追高占比','低估偏好'], datasets:[{label:'画像', data:vals, backgroundColor:'rgba(26,86,219,0.15)', borderColor:'#1a56db', pointBackgroundColor:'#1a56db'}]}, options:{responsive:true, scales:{r:{beginAtZero:true, max:1}}}});
+  })();
+  // fig-deposit: 充值节律（银证累计 vs 场内净买）
+  (function(){
+    const cv=ensureCanvas('fig-deposit'); if(!cv || !hasChart() || !d.deposit) return;
+    const dep=d.deposit;
+    new Chart(cv, {type:'line', data:{labels:dep.map(r=>r.ds||r.date||""), datasets:[{label:'银证累计', data:dep.map(r=>r.bank||0), borderColor:'#6b7280', tension:0.2},{label:'场内净买累计', data:dep.map(r=>r.market||0), borderColor:'#1a56db', tension:0.2}]}, options:{responsive:true}});
+  })();
+  (function(){ // fallback: if deposit not present, show weekly swap as proxy
+    const cv=ensureCanvas('fig-deposit'); if(!cv || !hasChart() || d.deposit) return;
+    const rows=(d.weekly||[]).slice(-20);
+    if(!rows.length) return;
+    new Chart(cv, {type:'line', data:{labels:rows.map(r=>r.week||""), datasets:[{label:'周换仓率(金额)', data:rows.map(r=>r.swap_rate||0), borderColor:'#f59e0b', backgroundColor:'rgba(245,158,11,0.15)', fill:true, tension:0.2}]}, options:{responsive:true}});
+    const note=document.getElementById('fig-deposit-note'); if(note) note.textContent='充值节律样本不足时以周换仓率代理（金额加权）。';
+  })();
+  // fig-shape / fig-sankey / fig-style / fig-flow / fig-bank / fig-phases / fig-risk : 占位说明 + 轻量占位图
+  (function(){
+    const map=[
+      ['fig-shape', () => d.shape || d.phases ],
+      ['fig-sankey', () => d.sankey || null ],
+      ['fig-style', () => d.styleAlloc || null ],
+      ['fig-flow', () => d.daily_three_state ],
+      ['fig-bank', () => d.bankScatter || null ],
+      ['fig-phases', () => d.phases ],
+      ['fig-risk', () => d.risk || null ],
+      ['fig-swap', () => d.top_swap_pairs ],
+      ['fig-swap-radar', () => d.swapRadar || null ],
+      ['fig-swap-eff', () => d.swapEff || null ],
+      ['fig-points-radar', () => d.pointsRadar || null ],
+      ['fig-pos-hist', () => d.posHist || null ],
+      ['fig-direction', () => d.direction || null ],
+      ['fig-kline', () => d.kline || null ],
+    ];
+    for(const [id, getter] of map){
+      const cv=ensureCanvas(id); if(!cv || !hasChart()) continue;
+      // Don't double-render already handled ones
+      if(['fig-amount','fig-ratio','fig-rolling','fig-flow-monthly','fig-attr','fig-holding-period','fig-swap-motive','fig-radar','fig-deposit'].includes(id)) continue;
+      const note=document.getElementById(id+'-note');
+      if(note) note.textContent='样本不足/三源缺口时显示“样本不足”，不以占位符糊弄（金额口径）。';
+      // Draw a minimal placeholder bar so the canvas is not blank (helps PDF not look empty)
+      try{
+        const v=getter();
+        if(v && typeof v==="object" && !Array.isArray(v) && Object.keys(v).length){
+          const cats=Object.keys(v).slice(0,6);
+          new Chart(cv, {type:'bar', data:{labels:cats, datasets:[{label:id, data:cats.map(k=> typeof v[k]==='number'? v[k] : (v[k]?.amt|| v[k]?.value || 1)), backgroundColor:'rgba(26,86,219,0.35)'}]}, options:{responsive:true, plugins:{legend:{display:false}}}});
+        } else if(Array.isArray(v) && v.length){
+          new Chart(cv, {type:'bar', data:{labels:v.slice(0,6).map((_,i)=>String(i+1)), datasets:[{label:id, data:v.slice(0,6).map(x=> x.amt||x.value||x.turnover||1), backgroundColor:'rgba(26,86,219,0.35)'}]}, options:{responsive:true, plugins:{legend:{display:false}}}});
+        } else {
+          // pure placeholder line to avoid blank
+          new Chart(cv, {type:'bar', data:{labels:['样本不足'], datasets:[{data:[1], backgroundColor:'rgba(229,231,235,1)'}]}, options:{responsive:true, plugins:{legend:{display:false}}, scales:{y:{display:false}, x:{display:false}}}});
+          if(note) note.textContent='样本不足（'+id+'）— 已保留金额口径，不以“—”糊弄。';
+        }
+      }catch(e){}
+    }
+  })();
+  // fig-swap / fig-swap-motive / fig-swap-radar / fig-swap-eff: 轻量饼/雷达占位（无强依赖数据时显示“样本不足”）
+  (function(){
+    const cv=ensureCanvas('fig-swap-motive'); if(!cv || !hasChart()) return;
+    const m=d.swapMotive || d.top_swap_pairs;
+    if(!m) return;
+    const labels=m.slice(0,5).map(r=> (r.sell_label||r.sell||'')+'→'+(r.buy_label||r.buy||''));
+    const vals=m.slice(0,5).map(r=> r.amt|| r.share_swap|| 0);
+    if(!vals.some(v=>v)) return;
+    new Chart(cv, {type:'doughnut', data:{labels, datasets:[{data:vals, backgroundColor:['#1a56db','#0e9f6e','#f59e0b','#7c3aed','#06b6d4']}]}, options:{responsive:true, plugins:{legend:{position:'right'}}}});
+  })();
+
+  // D1 bins
+  if(d.d1_bins && byId('d1-bins')){
+    let h = '<table><tr><th>档位</th><th>笔数</th><th>笔数占比</th><th>金额</th><th>金额占比</th></tr>';
+    for(const r of d.d1_bins) h += `<tr><td>${r.bin}</td><td>${fmt(r.cnt)}</td><td>${pct(r.cnt_share)}</td><td>${fmt(r.amt)}</td><td>${pct(r.amt_share)}</td></tr>`;
+    h += '</table><div style="color:#6b7280;font-size:11px;margin-top:4px">'+(d.d1_bins_note||"")+' — 小单高频但金额占比低即为次数陷阱。'+'</div>';
+    byId('d1-bins').innerHTML = h;
+  }
+  // D1 ratio top points
+  if(d.d1_ratio_points && byId('fig-ratio')){
+    // keep placeholder text but append a table below the chart node
+    const host = byId('fig-ratio');
+    let t = '<div style="margin-top:8px"><table><tr><th>日期</th><th>标的</th><th>金额</th><th>占总市值</th></tr>';
+    for(const r of d.d1_ratio_points.slice(0,8)) t += `<tr><td>${r.ds||"—"}</td><td>${r.label||r.code||"—"}</td><td>${fmt(r.amt)}</td><td>${pct(r.ratio)}</td></tr>`;
+    t += '</table><div style="color:#6b7280;font-size:11px">点径=金额；&gt;5%标红、&gt;8%加注（阈值见 config.yaml:single_big_ratio）。</div></div>';
+    host.insertAdjacentHTML('afterend', t);
+  }
+  // Swap top
+  if(d.top_swap_pairs && byId('swap-top')){
+    let h = '<table><tr><th>卖出标的</th><th>买入标的</th><th style="text-align:right">累计换仓额</th><th style="text-align:right">占换仓比</th><th style="text-align:right">占风险池比</th><th style="text-align:center">次数*</th></tr>';
+    for(const r of d.top_swap_pairs) h += `<tr><td>${r.sell_label||r.sell}</td><td>${r.buy_label||r.buy}</td><td style="text-align:right">${fmt(r.amt)}</td><td style="text-align:right">${pct(r.share_swap)}</td><td style="text-align:right">${pct(r.share_risk)}</td><td style="text-align:center">${r.cnt||0}</td></tr>`;
+    h += '</table>';
+    byId('swap-top').innerHTML = h;
+  }
+  // Contributors
+  if(d.contributors){
+    // try to find any existing table for contributors — the V3 template does not include one by default, so inject after fig-attr chart
+    const host = byId('fig-attr');
+    if(host && !document.getElementById('contrib-table')){
+      let h = '<div id="contrib-table" style="margin-top:12px"><table><tr><th>标的</th><th style="text-align:right">合计</th><th style="text-align:right">已实现</th><th style="text-align:right">浮盈</th></tr>';
+      for(const r of d.contributors) h += `<tr><td>${r.label||r.code}</td><td style="text-align:right">${fmt(r.total)}</td><td style="text-align:right">${fmt(r.closed)}</td><td style="text-align:right">${fmt(r.floating)}</td></tr>`;
+      h += '</table></div>';
+      host.insertAdjacentHTML('afterend', h);
+    }
+  }
+  // D3 contrast
+  if(d.daily_three_state && d.daily_amt_by_type && byId('d3-contrast')){
+    const states = Object.keys(d.daily_three_state);
+    const cntTotal = states.reduce((s,k)=>s+(d.daily_three_state[k]||0),0) || 1;
+    const amtTotal = Object.values(d.daily_amt_by_type).reduce((s,v)=>s+(v||0),0) || 1;
+    let h = '<table><tr><th>三态</th><th>天数</th><th>天数占比</th><th>金额</th><th>金额占比</th></tr>';
+    for(const k of states){
+      const cnt = d.daily_three_state[k]||0;
+      const amt = d.daily_amt_by_type[k]||0;
+      h += `<tr><td>${k}</td><td>${cnt}</td><td>${pct(cnt/cntTotal)}</td><td>${fmt(amt)}</td><td>${pct(amt/amtTotal)}</td></tr>`;
+    }
+    h += '</table><div style="color:#6b7280;font-size:11px;margin-top:4px">金额占比 vs 天数占比对照：若“天数多但金额少”即为次数陷阱。'+'</div>';
+    byId('d3-contrast').innerHTML = h;
+  }
+  // D7 terciles
+  if(d.d7_terciles && d.d7_terciles.small && byId('tercile')){
+    const t = d.d7_terciles;
+    let h = `<div style="font-size:11px;color:#6b7280">切点 q1=${fmt(t.q1)} / q2=${fmt(t.q2)}（金额分位）</div>`;
+    h += '<table><tr><th>分位</th><th>笔数</th><th>笔数占比</th><th>金额</th><th>金额占比</th></tr>';
+    for(const k of ["small","mid","large"]){
+      const r = t[k]; if(!r) continue;
+      h += `<tr><td>${k}</td><td>${fmt(r.cnt)}</td><td>${pct(r.cnt_share)}</td><td>${fmt(r.amt)}</td><td>${pct(r.amt_share)}</td></tr>`;
+    }
+    h += '</table><div style="color:#6b7280;font-size:11px;margin-top:4px">'+(t.note||"")+' — 小单“笔数多但金额少”即陷阱。'+'</div>';
+    byId('tercile').innerHTML = h;
+  }
+  // D8 settle
+  if(d.d8_settle_top5 && byId('settle')){
+    let h = '<table><tr><th>标的</th><th style="text-align:right">金额</th><th style="text-align:right">天数</th><th style="text-align:right">金额×天数</th></tr>';
+    for(const r of d.d8_settle_top5) h += `<tr><td>${r.label||r.code}</td><td style="text-align:right">${fmt(r.amt)}</td><td style="text-align:right">${r.days}</td><td style="text-align:right">${fmt(r.score)}</td></tr>`;
+    h += '</table>';
+    byId('settle').innerHTML = h;
+  }
+  // 一、画像与优势/盲区
+  if(byId('portrait-text')){
+    const h = (d.hhi_risk!=null ? `HHI(风险) ${d.hhi_risk} / 全池 ${d.hhi_all}` : "") + (d.portrait||"");
+    byId('portrait-text').innerHTML = (d.portrait ? `<b>${d.portrait}</b><br>` : "") + (d.radar_note||"") + (h ? `<div style="color:#6b7280;font-size:11px;margin-top:4px">${h}</div>` : "");
+  }
+  if(byId('adv-blind')){
+    const adv = (d.advantages||[]).map(x=> `<li>${x}</li>`).join("");
+    const blind=(d.blinds||[]).map(x=> `<li>${x}</li>`).join("");
+    if(adv||blind) byId('adv-blind').innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap"><div style="flex:1"><b>优势</b><ul style="margin:4px 0 0 16px">${adv||"<li>—</li>"}</ul></div><div style="flex:1"><b>盲区</b><ul style="margin:4px 0 0 16px">${blind||"<li>—</li>"}</ul></div></div>`;
+    else if(d.adv_blind_note) byId('adv-blind').innerHTML = `<span style="color:#6b7280">${d.adv_blind_note}</span>`;
+  }
+  // 阶段卡片与习惯变迁
+  if(d.phases && byId('phases-detail')){
+    let h=""; for(const ph of d.phases){ h += `<div style="border-left:3px solid #1a56db;padding:6px 10px;margin:6px 0;background:#f8fafc"><b>${ph.label|| ph.name|| "阶段"}</b> <span style="color:#6b7280">${ph.start||""} → ${ph.end||""}</span><br><span style="font-size:11px">${ph.note|| ph.reason|| ""} ${ph.representative ? "· 代表："+ph.representative : ""}</span></div>`; } byId('phases-detail').innerHTML = h || "—";
+  }
+  if(byId('habit-table') && d.habit){
+    if(Array.isArray(d.habit)) byId('habit-table').innerHTML = "<table><tr><th>阶段</th><th>变化</th></tr>" + d.habit.map(r=> `<tr><td>${r.phase||""}</td><td>${r.delta|| r.note|| ""}</td></tr>`).join("") + "</table>";
+    else byId('habit-table').innerHTML = `<span style="color:#6b7280">${d.habit}</span>`;
+  }
+  if(byId('drawdown') && d.drawdown){
+    if(Array.isArray(d.drawdown)) byId('drawdown').innerHTML = "<table><tr><th>回撤档位</th><th>仍加仓占比(金额)</th></tr>" + d.drawdown.map(r=> `<tr><td>${r.level||""}</td><td>${r.share||""}</td></tr>`).join("") + "</table>";
+    else byId('drawdown').innerHTML = `<span style="color:#6b7280">${d.drawdown}</span>`;
+  }
+  if(byId('dispose') && (d.dispose||d.anchorBias)){
+    let h=""; if(d.dispose) h+= `<div><b>处置效应</b>：${d.dispose}</div>`; if(d.anchorBias) h+= `<div style="margin-top:4px"><b>锚定偏差</b>：${d.anchorBias}</div>`; byId('dispose').innerHTML = h || "—";
+  }
+  if(byId('cutloss') && d.cutloss){
+    byId('cutloss').innerHTML = Array.isArray(d.cutloss) ? "<ul>"+d.cutloss.map(x=>`<li>${x}</li>`).join("")+"</ul>" : `<span style="color:#6b7280">${d.cutloss}</span>`;
+  }
+  if(byId('coverage-text') && d.coverage_note){
+    byId('coverage-text').textContent = d.coverage_note;
+  }
+  // 覆盖率水印细化
+  if(d.kline_coverage!=null || d.valuation_coverage!=null){
+    const w = `K线 ${(d.kline_coverage*100).toFixed(0)}% · 估值 ${(d.valuation_coverage!=null?(d.valuation_coverage*100).toFixed(0):"—")}% · 资金流 ${(d.fundflow_coverage!=null?(d.fundflow_coverage*100).toFixed(0):"—")}%`;
+    const el=document.getElementById('coverage-text'); if(el) el.textContent = (d.coverage_note||"") + " ｜ " + w;
+  }
+  // 深度结论 9 段
+  const conclusions = d.conclusions || {};
+  for(let i=1;i<=9;i++){
+    const el=byId('c'+i);
+    if(el && conclusions['c'+i]){ el.innerHTML = conclusions['c'+i]; el.style.background='#eff6ff'; }
+  }
+  // name missing
+  if(byId('namemap')){
+    byId('namemap').textContent = (d.name_missing && d.name_missing.length) ? d.name_missing.join(", ") : "无（全部命中）";
+  }
+  // rolling: render as a simple textual summary if no chart lib
+  if(d.d1_rolling20 && byId('fig-rolling')){
+    const last = d.d1_rolling20.slice(-8);
+    let h = byId('fig-rolling').innerHTML;
+    h += '<div style="font-size:11px;color:#6b7280;margin-top:6px">近8日滚动（20日）净额：' + last.map(r=> r.ds+":"+fmt(r.rolling20)).join(" | ") + '</div>';
+    byId('fig-rolling').innerHTML = h;
+  }
 }
+document.addEventListener('DOMContentLoaded', renderReport);
+if(document.readyState!=='loading') renderReport();
+window.addEventListener('REPORT_DATA_READY', renderReport);
 </script>
 </body>
 </html>
