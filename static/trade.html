@@ -125,7 +125,7 @@
         const btn = document.getElementById('aiScoreTodayBtn');
         if (btn) btn.disabled = true;
         try {
-          const body = { date, intensity };
+          const body = { score_date: date, intensity };   // 后端 POST 只绑 score_date（GET 查询参数才是 date）
           if (systemPrompt) body.system_prompt = systemPrompt;
           const job = await startBackgroundJob('/ai-scoring/daily', body, { toast: '每日打分已开始' });
           await waitForJob(job.job_id);
@@ -355,10 +355,10 @@
     // 渲染左侧可滚动的日期目录栏（AI 评分 / 未评分）
     function renderDayDir() {
       const dir = document.getElementById('dayDir');
-      dir.querySelectorAll('.day-tab').forEach((t) => t.remove());
+      dir.querySelectorAll('.day-tab, .day-empty').forEach((t) => t.remove());
       if (!_days.length) {
         dir.insertAdjacentHTML('beforeend',
-          '<div class="muted" style="padding:14px;font-size:12px">暂无交易，先录入交易后 AI 打分</div>');
+          '<div class="muted day-empty" style="padding:14px;font-size:12px">暂无交易，先录入交易后 AI 打分</div>');
         return;
       }
       _days.forEach((h) => {
@@ -448,7 +448,7 @@
           <tbody>${rows.map((d) => {
             const sideText = d.side === 'buy' ? '买入' : '卖出';
             const sideCls = d.side === 'buy' ? 'up' : 'down';
-            const isHk = /^\d{5}$/.test(d.code);           // 港股：价格港币、金额人民币
+            const isHk = String(d.code).endsWith('.HK');   // 港股（fullCode）：价格港币、金额人民币
             const amtCny = d.amount_cny != null ? d.amount_cny : d.amount;
             const ai = byId[d.trade_id];
             return `<tr>
@@ -477,11 +477,12 @@
       trades.forEach((t) => {
         const tr = document.createElement('tr');
         const isAdj = t.side === 'adjust';
-        const isHk = t.currency === 'HKD';
+        const isHk = String(t.code).endsWith('.HK');       // 后端未返回 currency，按 fullCode 判定港股
         const sideLabel = t.side === 'buy' ? '买入' : t.side === 'sell' ? '卖出' : '除权/调成本';
         const sideCls = t.side === 'buy' ? 'up' : t.side === 'sell' ? 'down' : 'muted';
         // 金额统一人民币（港股 amount_cny）
         const amtCny = t.amount_cny != null ? t.amount_cny : t.amount;
+        // 备注为用户输入，必须转义（防 XSS）
         tr.innerHTML = `
           <td>${(t.trade_time || '').split('.')[0]}</td>
           <td><a href="/static/stock.html?code=${esc(t.code)}">${esc(t.name || t.code)}</a>${isHk ? '<span class="muted" style="font-size:10px"> 港</span>' : ''}</td>
@@ -490,7 +491,7 @@
           <td>${isAdj ? '—' : fmtNum(t.quantity)}</td>
           <td class="${isAdj ? (amtCny < 0 ? 'down' : 'up') : ''}">${isAdj ? signed(amtCny) : fmtNum(amtCny)}</td>
           <td>${fmtNum(t.fee)}</td>
-          <td class="muted">${t.note || (isAdj ? '成本调整' : '')}</td>
+          <td class="muted">${esc(t.note || (isAdj ? '成本调整' : ''))}</td>
           <td>
             <button class="btn" onclick="editTrade(${t.id})">改</button>
             <button class="btn danger" onclick="deleteTrade(${t.id},'${esc(t.code).replace(/'/g, "\\'")}')">删</button>
@@ -512,6 +513,9 @@
         `持仓 ${adjustHoldQty || 0} 股 × 每股 ${per} 元 = 总调整 ${total.toFixed(2)} 元`;
     }
     async function openCostAdjust() {
+      // 每次打开重置为「未选股票」，避免复用上一只（否则直接确认会调错股成本）
+      adjustStock = null;
+      adjustHoldQty = 0;
       const mask = document.createElement('div');
       mask.className = 'modal-mask';
       mask.innerHTML = `
@@ -540,7 +544,8 @@
           </div>
         </div>`;
       document.body.appendChild(mask);
-      const close = () => mask.remove();
+      // 关闭（取消/点遮罩/确认成功）同样重置，保证下次打开是干净状态
+      const close = () => { adjustStock = null; adjustHoldQty = 0; mask.remove(); };
       mask.querySelector('#adjustCancel').onclick = close;
       mask.addEventListener('click', (e) => { if (e.target === mask) close(); });
       // 股票搜索
@@ -588,7 +593,7 @@
     async function fillDividend() {
       const perEl = document.getElementById('adjustPerShare');
       const infoEl = document.getElementById('adjustDivInfo');
-      if (!adjustStock) { infoEl.textContent = '请先搜索选择股票'; return; }
+      if (!adjustStock) { infoEl.textContent = '请先搜索选择股票'; return; }   // 未选股票（含新打开的空弹窗）不复用旧股
       try {
         infoEl.textContent = '查询中…';
         const d = await api('/stocks/' + adjustStock + '/dividend');

@@ -283,7 +283,7 @@
         const sec = document.createElement('div');
         sec.className = 'holdings-group';
         sec.innerHTML = `
-          <h3>${tag} <span class="muted">${rows.length} 只 · 市值 ¥${fmtNum(value)} · 权重 ${fmtNum(weight)}%</span></h3>
+          <h3>${esc(tag)} <span class="muted">${rows.length} 只 · 市值 ¥${fmtNum(value)} · 权重 ${fmtNum(weight)}%</span></h3>
           <div style="overflow-x:auto">
             <table>
               <thead><tr>${cols.map(([k, label]) => `<th>${label}</th>`).join('')}</tr></thead>

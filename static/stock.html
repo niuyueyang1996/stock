@@ -178,7 +178,7 @@
     window.addEventListener('app-settings', applyStockMode);
     applyStockMode();
     let currentCode = new URLSearchParams(location.search).get('code') || '';
-    const isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）
+    let isIndexMode = new URLSearchParams(location.search).get('index') === '1';   // 指数模式（不可买卖）：非一次性常量，render 按 payload 的 is_index 回写
     let lastIsIndex = false;    // 当前标的是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定）
     let lastQuote = null;
     let lastName = '';
@@ -304,7 +304,13 @@
     if (currentCode) input.value = currentCode;
     sb.querySelector('input').addEventListener('change', () => {
       const p = parseStockChoice(sb.querySelector('input').value);
-      if (p) { currentCode = p.code; history.replaceState(null, '', '?code=' + p.code); openStock(); }
+      if (p) {
+        // 指数页切换标的时保留 index=1（搜索结果类型未知，render 会按 payload 校正标记与 URL）
+        history.replaceState(null, '', '?code=' + p.code + (isIndexMode ? '&index=1' : ''));
+        currentCode = p.code;
+        isIndexMode = false;   // 类型未知：复位标记，统一走个股接口由 payload 判定（避免指数页搜个股被 openIndex 提前截走）
+        openStock();
+      }
     });
     document.getElementById('searchBox').appendChild(sb);
 
@@ -331,6 +337,7 @@
       clearChart(document.getElementById('flowPrice'));
       clearChart(document.getElementById('flowIntraday'));
       clearChart(document.getElementById('flowBuySell'));
+      clearChart(document.getElementById('flowBandsCum'));   // 五档累积图：切股前一并清掉，避免残留上一只的图
       clearChart(document.getElementById('klineChart'));
       document.getElementById('klineTabs').innerHTML = '';
       const kmEl = document.getElementById('klineMeta');
@@ -372,13 +379,21 @@
     }
 
     // 指数详情：无 409 缓存缺失弹窗，数据不全对应区域显示「暂无」
+    // 返回 true=已处理（渲染成功或已提示失败）；false=该 code 非指数（404），调用方回退走个股分支
     async function openIndex() {
       try {
         const d = await api('/indices/' + currentCode + '?window=1' + asOfQuery(asOfDate), { blocking: true });
         render(d);
+        return true;
       } catch (e) {
+        if (e.status === 404) {
+          // URL 的 index=1 残留但 code 不是指数（手工链接/加载中断后刷新）：复位标记，回退个股详情分支
+          isIndexMode = false;
+          return false;
+        }
+        clearStockView();   // 先清残留再写错误：clearStockView 会把 title 写回「正在加载…」
         document.getElementById('title').textContent = `查询失败：${e.message}`;
-        clearStockView();
+        return true;
       }
     }
 
@@ -401,7 +416,8 @@
       const code = currentCode;
       if (!code) { document.getElementById('title').textContent = '请输入股票代码或名称'; return; }
       clearStockView();
-      if (isIndexMode) return openIndex();
+      // 指数模式先走指数接口；返回 false=该 code 非指数（URL index=1 残留），继续走下方个股分支
+      if (isIndexMode && await openIndex()) return;
       // 先读缓存判定是否指数（搜索打开指数时 URL 无 index=1，靠 payload 判定），指数不走个股自动刷新
       let isIndexDetected = false;
       let d;
@@ -427,14 +443,14 @@
             return;
           }
         } else {
-          // 刷新请求本身失败（后端异常）：提示，不弹窗
-          document.getElementById('title').textContent = `查询失败：${e.message}`;
+          // 刷新请求本身失败（后端异常）：提示，不弹窗（先清残留再写错误，否则 clearStockView 会把 title 覆盖成「正在加载…」）
           clearStockView();
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
           return;
         }
         if (!d) {
-          document.getElementById('title').textContent = `查询失败：${e.message}`;
           clearStockView();
+          document.getElementById('title').textContent = `查询失败：${e.message}`;
           return;
         }
       }
@@ -614,7 +630,7 @@
           ? `<span style="color:#e03131;margin-left:6px">得分下调 ${Math.abs(t.impact_score)}</span>` : '';
         return `<div style="border:1px solid #e03131;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff5f5">
           <div style="font-size:13px;font-weight:700;color:#e03131">⚠ ${AI_TRAP_CN[k]}${impact}</div>
-          <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.7">${t.explanation || '—'}</div>
+          <div style="font-size:12px;color:#666;margin-top:4px;line-height:1.7">${esc(t.explanation || '—')}</div>
         </div>`;
       }).join('');
     }
@@ -626,9 +642,9 @@
       const npTxt = np != null ? signed(np) + '%' : '—';
       const revTxt = rev != null ? signed(rev) + '%' : '—';
       const npRsn = eg.net_profit_reason
-        ? `<div style="font-size:12px;color:#555;margin-top:6px"><span style="color:#666">净利依据：</span>${eg.net_profit_reason}</div>` : '';
+        ? `<div style="font-size:12px;color:#555;margin-top:6px"><span style="color:#666">净利依据：</span>${esc(eg.net_profit_reason)}</div>` : '';
       const revRsn = eg.revenue_reason
-        ? `<div style="font-size:12px;color:#555;margin-top:4px"><span style="color:#666">营收依据：</span>${eg.revenue_reason}</div>` : '';
+        ? `<div style="font-size:12px;color:#555;margin-top:4px"><span style="color:#666">营收依据：</span>${esc(eg.revenue_reason)}</div>` : '';
       const applyBtn = np != null
         ? `<button class="btn primary" style="padding:4px 14px;font-size:12px" onclick="applyAiGrowth(${np}, ${rev})">应用为预期增速</button>` : '';
       return `<div style="border:1px solid var(--primary,#2f6fed);border-radius:8px;padding:10px 12px;margin-bottom:12px;background:var(--primary-weak,#eef3ff)">
@@ -823,7 +839,8 @@
         return;
       }
       try {
-        if (isIndexMode) return openIndex();
+        // 指数模式先走指数接口；返回 false=该 code 非指数（URL index=1 残留），回退走个股详情
+        if (isIndexMode && await openIndex()) return;
         // window=1：始终取 1 分钟基础分时资金流，前端按 1/5/15/30 本地重采样
         const d = await api('/stocks/' + currentCode + stockDetailQS(), noBlocking ? { silent: true } : { blocking: true });
         render(d);
@@ -914,7 +931,10 @@
         : ['实时市值', mvYi];
       const cards = [priceCard, ['昨收', q.prev_close != null ? fmtNum(q.prev_close) : '—'],
         ['今开', fmtNum(q.open)],
-        ['今日盈亏', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
+        // 今日涨跌 = 现价 − 昨收（每股口径，非持仓盈亏，原「今日盈亏」名不副实）；港股为港币，按既有方式补人民币换算
+        isHk && dayPnlPrice != null
+          ? ['今日涨跌', signed(dayPnlPrice) + ' 港币', cls(dayPnlPrice), '≈ ¥' + signed(dayPnlPrice * d.fx_rate)]
+          : ['今日涨跌', dayPnlPrice != null ? signed(dayPnlPrice) + ' 元' : '—', dayPnlPrice != null ? cls(dayPnlPrice) : ''],
         ['涨跌幅', q.pct_chg != null ? signed(q.pct_chg) + '%' : '—', q.pct_chg != null ? cls(q.pct_chg) : ''],
         mvCard];
       document.getElementById('quoteCards').innerHTML = cards.map(([l, v, c, note]) =>
@@ -955,6 +975,9 @@
       // 指数模式：隐藏买卖/个股面板（无五档/财务/诊股/消息面），资金流趋势改量价；AI 入口保留（仅技术面+资金面）
       const idxMode = !!d.is_index;
       lastIsIndex = idxMode;
+      // payload 回写 isIndexMode：URL 的 index=1 可能残留或缺失（指数页搜索切股），标记与 URL 都以实际数据为准
+      isIndexMode = idxMode;
+      history.replaceState(null, '', '?code=' + encodeURIComponent(currentCode || d.code || '') + (isIndexMode ? '&index=1' : ''));
       toggleStockPanels(idxMode);
       setFlowTitle(idxMode);
       document.getElementById('buyBtn').style.display = idxMode ? 'none' : '';
@@ -1208,6 +1231,8 @@
       const intraEmpty = document.getElementById('flowIntradayEmpty');
       if (bsEl) bsEl.style.display = 'none';          // 指数无量价买卖盘二图
       if (bandsEl) bandsEl.style.display = 'none';   // 五档边界不适用
+      const cumEl2 = document.getElementById('flowBandsCum');
+      if (cumEl2) cumEl2.style.display = 'none';     // 五档累积图仅个股天窗口，指数隐藏避免残留上一只的图
       const fpEl2 = document.getElementById('flowPrice');
       if (fpEl2) fpEl2.style.display = 'none';        // 指数用 indexVolumePrice 已带价，隐藏独立股价图
       try {

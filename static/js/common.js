@@ -503,8 +503,10 @@ function setupJobBar(nav) {
     const kind = detail.kind || '';
     const ok = detail.ok !== false && detail.status !== 'cancelled' && !detail.error;
     // 只在整个任务/批次收尾时重载页面（批次子任务逐个完成不触发，否则刷新过程中接口刷屏）
+    // kind 前缀：refresh.*（动态/全量/周月K等）、index.refresh.*（指数）、stock.refresh*（单股手动刷新）
     const isChild = !!(detail.batch_id && detail.job_id !== detail.batch_id);
-    if (ok && !isChild && (kind.startsWith('refresh') || kind.startsWith('index.refresh'))) {
+    if (ok && !isChild && (kind.startsWith('refresh') || kind.startsWith('index.refresh') ||
+      kind.startsWith('stock.refresh'))) {
       schedulePageReload();
     }
   }
@@ -536,10 +538,10 @@ function setupJobBar(nav) {
         const st = j.status === 'running' ? '进行中' : '排队';
         const can = j.cancellable !== false && j.kind !== 'system.prewarm';
         const x = can
-          ? `<button type="button" class="job-cancel-btn" data-id="${j.job_id}" title="取消">×</button>`
+          ? `<button type="button" class="job-cancel-btn" data-id="${esc(j.job_id)}" title="取消">×</button>`
           : `<span class="job-queue-locked" title="启动预热不可取消">—</span>`;
         return `<div class="job-queue-item">
-          <span class="job-queue-label"><span class="job-queue-st">${st}</span>${(j.meta && j.meta.name) || j.label || j.kind}</span>
+          <span class="job-queue-label"><span class="job-queue-st">${st}</span>${esc((j.meta && j.meta.name) || j.label || j.kind)}</span>
           ${x}
         </div>`;
       }).join('');
@@ -652,19 +654,54 @@ function setupJobBar(nav) {
   //  2) ws 假死（连接在但 30s 无任何消息，如 Android WebView 半死连接）：
   //     主动关闭重连并转轮询，避免任务完成事件永久丢失 → 页面一直「正在加载中」
   // 另：waitForJob 在任务等待期间无条件轮询（见下），保证任务终态必达。
+  //
+  // 单链保护：tick() 会被 kickJobBar / ws.onopen / ws.onclose / 取消按钮反复调用，
+  // 旧实现每次都各自 setTimeout 开一条新链，WS 反复断连时链会无限累积（每条都 1s 打一次
+  // /status/jobs）。现在「链」全入口共用一份状态：链正在查询（handshake 中）时直接返回；
+  // 下一次 setTimeout 只有在没有 pending 定时器时才登记（scheduleNextTick 里统一守卫），
+  // 保证稳态永远只有 1 条轮询链。
+  let _tickTimer = null;      // 链的 pending 定时器 id（null = 链未在等定时器）
+  let _tickBusy = false;      // 链正在查询 /status/jobs（handshake 中）
+  let _tickWatchdog = null;   // 看门狗：api 无超时，请求挂起时强制复位并重建链（自愈）
+  let _tickGen = 0;           // 链代号：看门狗重建新链后，老链的迟到回调不再插手
+
+  // 登记下一次轮询：所有入口共用，链标志唯一 → 不会因多次调用而开多条链
+  function scheduleNextTick(ms) {
+    if (_tickTimer !== null) return;   // 已有链在等定时器：绝不开第二条
+    _tickTimer = setTimeout(() => { _tickTimer = null; tick(); }, ms);
+  }
+
   function tick() {
+    // 查询进行中：不叠加并发请求。kick 的「入队后立即查一次」语义由 kickJobBar
+    // 自己的那次 api('/status/jobs') 保证，这里不再额外放行。
+    if (_tickBusy) return;
     if (wsStale()) {
       // 假死：强制断开触发 onclose → 重连 + 转轮询
       try { window._ws.close(); } catch (e) {}
     }
+    _tickBusy = true;
+    const gen = ++_tickGen;
+    // 自愈看门狗：请求挂死时不吞掉整条链（tick 入口会被 busy 挡住），15s 后复位并重建
+    _tickWatchdog = setTimeout(() => {
+      if (gen !== _tickGen) return;
+      _tickWatchdog = null; _tickBusy = false; _tickTimer = null;
+      tick();
+    }, 15000);
+    // 单轮收尾：清看门狗 → 复位 busy → 登记唯一的一条下一轮定时器
+    const done = (ms) => {
+      if (gen !== _tickGen) return;   // 本链已被看门狗废弃：迟到回调不插手新链
+      if (_tickWatchdog) { clearTimeout(_tickWatchdog); _tickWatchdog = null; }
+      _tickBusy = false;
+      scheduleNextTick(ms);
+    };
     if (window.__wsDown !== false || wsStale()) {
       api('/status/jobs', { silent: true })
         .then(renderJobSnapshot)
         .catch(() => {})
-        .finally(() => { setTimeout(tick, _jobBarActive ? 1000 : 2500); });
+        .finally(() => done(_jobBarActive ? 1000 : 2500));
     } else {
       // ws 在线：零轮询；每 10s 检查一次假死
-      setTimeout(tick, 10000);
+      done(10000);
     }
   }
   // 任务入队后调用：确保进度条立即显示新任务。
@@ -2273,7 +2310,9 @@ function setAsOfHint(container, meta) {
     b.textContent = '🛠 日志';
     b.title = '查看后端运行日志（排查问题用）';
     b.style.cssText =
-      'position:fixed;right:14px;bottom:70px;z-index:9999;padding:6px 10px;font-size:12px;' +
+      // z-index 150：< 弹窗遮罩 .modal-mask(200)（弹窗打开时自然被盖住，不再浮在弹窗上），
+      // > 普通页面内容（sticky 头 10 / 下拉 50 / 移动底栏 60），toast(300) 始终最高
+      'position:fixed;right:14px;bottom:70px;z-index:150;padding:6px 10px;font-size:12px;' +
       'border-radius:16px;border:1px solid #33415f;background:rgba(22,32,58,.85);color:#c8d3e0;' +
       'cursor:pointer;opacity:.5;box-shadow:0 2px 6px rgba(0,0,0,.35);';
     b.onmouseenter = () => { b.style.opacity = '1'; };

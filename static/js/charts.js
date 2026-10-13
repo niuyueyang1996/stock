@@ -18,7 +18,7 @@ const CHART_PALETTE = [
   CHART_COLORS.purple, '#0ca678', '#f59f00', CHART_COLORS.mid,
   '#c2255c', '#495057', '#1c7ed6', '#12b886',
 ];
-const _chartResizeWired = new WeakSet();  // 同一 echarts 实例只绑一次 resize，避免 loadPage 累加监听
+const _chartResizeWired = new WeakSet();  // 同一「容器 DOM」只绑一次 resize；实例 dispose 重建后仍复用这一条
 
 function initChart(el) {
   if (!el || !window.echarts) return null;
@@ -55,9 +55,16 @@ function initChart(el) {
       return origSetOption(option, ...rest);
     };
   }
-  if (!_chartResizeWired.has(chart)) {
-    _chartResizeWired.add(chart);
-    window.addEventListener('resize', () => chart.resize());
+  // resize 监听按「容器」绑一次（不能按实例绑：clearChart 会 dispose 实例，initChart 再 init
+  // 出新实例，新实例不在 WeakSet 里 → 每重绘一次就多一条 window 监听，且旧监听闭包一直
+  // 持着已 dispose 的实例，长会话下只增不减）。回调现取现调：跟着容器当前实例走，
+  // 实例已被 clearChart dispose（取不到）就跳过。
+  if (!_chartResizeWired.has(el)) {
+    _chartResizeWired.add(el);
+    window.addEventListener('resize', () => {
+      const cur = echarts.getInstanceByDom(el);
+      if (cur) cur.resize();
+    });
   }
   // 切日期后容器刚恢复显示：下一帧补一次 resize
   requestAnimationFrame(() => { try { chart.resize(); } catch (e) { /* ignore */ } });

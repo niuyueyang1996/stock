@@ -829,7 +829,9 @@ body.page-indices #pfFlowIntraday { height: 340px; }
 #toast {
   position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
   background: rgba(0, 0, 0, .78); color: #fff; padding: 9px 16px; border-radius: 8px;
-  font-size: 13px; z-index: 100; opacity: 0; transition: opacity .2s; pointer-events: none;
+  /* z-index 300：必须高于 .modal-mask(200)，否则弹窗内的报错 toast 被遮罩完全盖住；
+     也高于 #logsFloatBtn(150)，避免小屏压住 toast 右端 */
+  font-size: 13px; z-index: 300; opacity: 0; transition: opacity .2s; pointer-events: none;
   box-shadow: var(--shadow-lg);
   max-width: min(88vw, 360px);
   text-align: center;

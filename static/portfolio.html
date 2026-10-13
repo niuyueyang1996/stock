@@ -146,7 +146,9 @@
     // 标签多选子集：空/全选 → 不传 tags（缓存快路径）；部分勾选 → 传子集
     function currentTags() {
       const t = tagsQS();
-      return t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      // 用 URLSearchParams 取 tags：手写 split('=')在 ?tags=X&as_of=Y 时会混进 &as_of 残段，
+      // 只有 as_of 时还会把日期当标签返回
+      return t ? (new URLSearchParams(t.slice(1)).get('tags') || null) : null;
     }
     let allTags = [];
     let tagCards = [];              // 全持仓按标签聚合（{tag,value_cny,day_pnl,count}，市值降序）
@@ -155,7 +157,7 @@
     let aiPortfolioReport = null;   // 最新组合 AI 报告（GET /ai-scoring/portfolio）
     let aiConfigured = false;
     let flowReports = {};           // 持仓资金面 map：{code:{correlation,summary,trade_date,window,source}}
-    let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（估值+分时）
+    let asOfDate = null;            // null=最新；YYYY-MM-DD=按日期查看（后端仅资金流分时回看，估值恒为当前值）
 
     function tagsQS(extra) {
       const parts = [];
@@ -171,16 +173,28 @@
       return parts.length ? '?' + parts.join('&') : '';
     }
 
+    // 组合页 as_of 提示：后端 GET /portfolio 忽略 as_of（resp 无 hist_view，恒为 false），
+    // 估值/仪表盘/PE-PB 序列固定显示当前值，只有 /portfolio/fundflow 按所选日期回看，
+    // 因此不调用 common.js 的 setAsOfHint（它按 hist_view 判断，会给出「截至 xx」的误导提示）
+    function setAsOfHintPortfolio() {
+      const hint = document.querySelector('#asOfPicker [data-asof-hint]');
+      if (!hint) return;
+      hint.textContent = asOfDate
+        ? '估值/仪表盘/PE-PB 序列为当前值，仅资金流分时按 ' + asOfDate + ' 回看'
+        : '';
+    }
+
     function refreshAsOfPicker() {
       mountAsOfPicker(document.getElementById('asOfPicker'), {
         value: asOfDate,
-        label: '按日期查看（估值 · 资金流分时）',
+        label: '按日期查看（仅资金流分时回看 · 估值为当前值）',
         onChange: (iso) => {
           asOfDate = iso;
           refreshAsOfPicker();
           loadPage();
         },
       });
+      setAsOfHintPortfolio();       // 挂载后立刻提示回看范围（mount 会重建 innerHTML 清空提示）
     }
     refreshAsOfPicker();
 
@@ -243,6 +257,8 @@
       loadPage();
     });
 
+    // 主请求过期守卫：快速切标签会并发多次 loadPage，只认最新一次，防止旧响应覆盖新渲染（仿 pfFlowSeq）
+    let pfSeq = 0;
     async function loadPage() {
       const right = document.getElementById('rightContent');
       const noSel = document.getElementById('noSelection');
@@ -255,11 +271,13 @@
       noSel.style.display = 'none';
       const st = document.getElementById('statusText');
       if (st) st.textContent = '加载组合中…';
+      const seq = ++pfSeq;                           // 发起前取号
       try {
         const [p, aiData] = await Promise.all([
           api('/portfolio' + tagsQS()),
           api('/ai/analyze-portfolio' + tagsQS(), { silent: true }).catch(() => ({ configured: false, score: null })),
         ]);
+        if (seq !== pfSeq) return;                   // 过期响应丢弃（状态文案由最新一次请求负责复位）
         lastPortfolio = p;
         aiConfigured = aiData.configured;
         aiPortfolioReport = aiData.score || null;
@@ -289,6 +307,7 @@
           renderTagPrefList(),
         ]).catch(() => {});
       } catch (e) {
+        if (seq !== pfSeq) return;                   // 过期请求的报错同样丢弃，避免覆盖最新一次的加载态
         if (st) st.textContent = '加载失败';
         document.getElementById('emptyTip').style.display = 'block';
       }
@@ -296,7 +315,7 @@
 
     function renderSummary(p) {
       const pf = p.portfolio;
-      setAsOfHint(document.getElementById('asOfPicker'), pf);
+      setAsOfHintPortfolio();       // 组合页不支持估值回看，提示固定为「仅资金流按日期回看」
       const main = [
         ['AI 组合打分',
           aiPortfolioReport ? `${fmtNum(aiPortfolioReport.report.score)} ${aiPortfolioReport.report.rating}` : (aiConfigured ? '—' : '未配置'),
@@ -341,6 +360,7 @@
         const fmt = (v) => (v == null ? '—' : kind === 'pct' ? fmtPct(v) : fmtNum(v));
         return `<tr><td>${name}</td><td>${fmt(a)}</td><td>${fmt(b)}</td><td>${fmt(c)}</td></tr>`;
       }).join('');
+      // 注：GET /portfolio 暂不支持 as_of 回看，hist_view 恒为 false，此「截至」chip 目前不会出现（保留待后端支持）
       setPanelSummary('pfGrowthPanel',
         (pf.hist_view && pf.as_of ? sumChip('截至 ' + pf.as_of) + sumSep() : '')
         + sumKV('PE', fmtNum(pf.pe)) + sumSep() + sumKV('PB', fmtNum(pf.pb)) + sumSep() + sumKV('ROE', fmtPct(pf.roe_ttm)));
@@ -492,6 +512,7 @@
       const peEl = document.getElementById('peGauge');
       const pbEl = document.getElementById('pbGauge');
       // 无分位时也清空旧图，避免切日期后残留上一天的仪表盘
+      // 注：估值不回看（后端 /portfolio 忽略 as_of，hist_view 恒为 false），下面 hist_view 分支暂为死代码，保留待后端支持
       if (pe == null && pb == null) {
         clearChart(peEl); clearChart(pbEl);
         setPanelSummary('gaugePanel',
@@ -717,7 +738,7 @@
       // 组合相关性块：只精确匹配当前标签组合（空/全选='全部'；tags 排序归一同 key），
       // 必须再次选中该组合才能看到其相关性；没匹配到不显示（不取别的组合）
       const t = tagsQS();
-      const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      const tags = t ? (new URLSearchParams(t.slice(1)).get('tags') || null) : null;
       const key = tags ? tags.split(',').filter(Boolean).sort().join(',') : '全部';
       const coh = await loadCoherence('portfolio', key, reports[0].window);
       renderFundflowBatchPanel(panel, {
@@ -742,7 +763,7 @@
       const nameMap = {};
       (lastPortfolio.stocks || []).forEach((s) => { nameMap[s.code] = s.name; });
       const t = tagsQS();
-      const tags = t ? decodeURIComponent(t.slice(1).split('=')[1] || '') : null;
+      const tags = t ? (new URLSearchParams(t.slice(1)).get('tags') || null) : null;
       // 一次拉取消息面/技术面 coherence + 个股报告
       const [allCoh, newsReports] = await Promise.all([
         api('/ai/analyze-portfolio?tags=' + encodeURIComponent(tags || '') + '&window=' + encodeURIComponent(pfFlowWindow), { silent: true }).catch(() => ({})),
