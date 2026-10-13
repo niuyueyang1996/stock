@@ -78,6 +78,10 @@ func newTestRouter(t *testing.T, quoteDir string) (*gin.Engine, *Services) {
 	}
 
 	r := gin.New()
+	// 与生产 main.setupRouter 保持一致：RawPath 匹配 + :param 解码，
+	// 覆盖标签含 '/'（%2F）的路由通路（否则只在生产配置下才暴露 404）。
+	r.UseRawPath = true
+	r.UnescapePathValues = true
 	// 启用 gin 的 405 处理（对已注册路径但方法不符返回 405；生产 main 用 gin.New() 默认关闭，
 	// 此处开启以覆盖 405 错误通路，避免与 404 混淆）。
 	r.HandleMethodNotAllowed = true
@@ -780,6 +784,32 @@ func TestAIScoringPrefs(t *testing.T) {
 	r.ServeHTTP(w5, httptest.NewRequest(http.MethodDelete, "/api/ai-scoring/prefs/红利", nil))
 	if w5.Code != http.StatusOK {
 		t.Fatalf("prefs DELETE code=%d body=%s", w5.Code, w5.Body.String())
+	}
+
+	// 标签含 '/'（%2F 编码）：UI placeholder 示范「红利/科技」，路由必须原样捕获并解码为整段标签
+	wSl1 := httptest.NewRecorder()
+	r.ServeHTTP(wSl1, httptest.NewRequest(http.MethodPut, "/api/ai-scoring/prefs/红利%2F科技",
+		strings.NewReader(`{"raw_pref":"攻守兼备","prompt":"低估+分红且景气向上"}`)))
+	if wSl1.Code != http.StatusOK {
+		t.Fatalf("prefs PUT(含斜杠) code=%d body=%s", wSl1.Code, wSl1.Body.String())
+	}
+	wSl2 := httptest.NewRecorder()
+	r.ServeHTTP(wSl2, httptest.NewRequest(http.MethodGet, "/api/ai-scoring/prefs/红利%2F科技", nil))
+	if wSl2.Code != http.StatusOK {
+		t.Fatalf("prefs GET(含斜杠) code=%d body=%s", wSl2.Code, wSl2.Body.String())
+	}
+	if got := jsonBody(t, wSl2)["data"].(map[string]any); got["tag"] != "红利/科技" {
+		t.Errorf("含斜杠标签应解码为整段 tag, got %v", got["tag"])
+	}
+	wSl3 := httptest.NewRecorder()
+	r.ServeHTTP(wSl3, httptest.NewRequest(http.MethodPost, "/api/ai-scoring/prefs/红利%2F科技/confirm", nil))
+	if wSl3.Code != http.StatusOK {
+		t.Fatalf("prefs confirm(含斜杠) code=%d body=%s", wSl3.Code, wSl3.Body.String())
+	}
+	wSl4 := httptest.NewRecorder()
+	r.ServeHTTP(wSl4, httptest.NewRequest(http.MethodDelete, "/api/ai-scoring/prefs/红利%2F科技", nil))
+	if wSl4.Code != http.StatusOK {
+		t.Fatalf("prefs DELETE(含斜杠) code=%d body=%s", wSl4.Code, wSl4.Body.String())
 	}
 
 	// GET 组合分析报告（空 → null）

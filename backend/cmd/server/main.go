@@ -354,6 +354,10 @@ func maxI(a, b int) int {
 func setupRouter(cfg *config.Config, svcs *route.Services) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// 路由匹配走 RawPath（保留 %2F 等编码），:param 捕获后再解码：
+	// 否则标签含 '/' 时（/ai-scoring/prefs/红利%2F科技）gin 按已解码 Path 匹配 → 404。
+	r.UseRawPath = true
+	r.UnescapePathValues = true
 	r.Use(gin.Recovery())
 
 	route.Setup(r, svcs)
