@@ -22,7 +22,20 @@ const (
 	MaxTokens      = 81920
 	MaxTokensSafe  = 16384
 	RequestTimeout = 300 * time.Second
+	// aiSessionID 会话标识：OpenCode Go 要求每个请求带稳定的 x-opencode-session（会话路由/提示词缓存），
+	// 其余 OpenAI 兼容 provider 忽略未知 header；值取全项目固定常量即满足「稳定」要求。
+	aiSessionID = "stockanalyzer"
+	// aiUserAgent 客户端自报身份（OpenCode Go 接入要求之一），替代 Go 默认 UA。
+	aiUserAgent = "stockanalyzer/0.2"
 )
+
+// applyAIHeaders 统一附加 AI 请求头（鉴权 + UA + 会话标识），三处请求入口共用，避免各处漏配。
+func applyAIHeaders(req *http.Request, apiKey string) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	req.Header.Set("User-Agent", aiUserAgent)
+	req.Header.Set("x-opencode-session", aiSessionID)
+}
 
 // protocolCache 按 host+model 缓存探测到的协议 chat/response，避免每次都试错
 var protocolCache sync.Map // key: host|model -> "chat" or "response"
@@ -82,8 +95,7 @@ func (c *OpenAICompatClient) postChatCompletion(ctx context.Context, baseURL, ap
 	if err != nil {
 		return "", "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	applyAIHeaders(req, apiKey)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return "", "", err
@@ -128,8 +140,7 @@ func (c *OpenAICompatClient) postResponse(ctx context.Context, baseURL, apiKey, 
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	applyAIHeaders(req, apiKey)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return "", err
@@ -371,7 +382,7 @@ func (c *OpenAICompatClient) ListModels(ctx context.Context, baseURL, apiKey str
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiKey))
+	applyAIHeaders(req, apiKey)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return nil, err
