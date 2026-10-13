@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 项目级 OpenCode 配置。
+  // 注意：.mcp.json 是 Claude Code 专用格式，OpenCode 只认这里的 mcp.servers，两者可并存。
+  "mcp": {
+    "servers": {
+      "stockanalyzer": {
+        "type": "local",
+        // 直接跑编译好的 stdio MCP（16 个全同步 tool，直连 data/etf.db，不依赖 HTTP server）
+        "command": ["./backend/stockanalyzer-mcp"],
+        // 必须在项目根启动：二进制里 STOCK_APP_HOME 是相对路径（data/etf.db）
+        "cwd": ".",
+        "environment": {
+          "STOCK_APP_HOME": ".",
+          "STOCK_PROJECT_ROOT": "."
+        },
+        // AI 诊断类 tool 同步等待 90~180s，放宽执行超时（默认 12h 其实已够，这里显式声明）
+        "timeout": {
+          "execution": 300000
+        }
+      }
+    }
+  }
+}
