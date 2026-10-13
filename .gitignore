@@ -26,4 +26,5 @@ backend/server
 backend/mcp
 backend/serviceprobe
 *.pdf
-iFinD*.pdf
+# 例外：iFinD HTTP API 用户手册随仓库分发（edb_service 等接入参考）
+!iFinD HTTP API 用户手册.pdf
